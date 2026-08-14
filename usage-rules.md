@@ -1,8 +1,10 @@
 # Rules for working with AshStrangler
 
 AshStrangler maps an Ash resource onto a legacy Postgres relation for a
-strangler-fig migration. Version 0.1 **verifies mappings; it does not generate
-SQL.**
+strangler-fig migration. Version 0.1 verifies mappings and generates the
+compatibility view for `:read_from_legacy`. It does not yet generate
+`INSTEAD OF` triggers, the reversed `:read_from_new` view, backfill, or
+notifications.
 
 ## The phase model
 
@@ -23,7 +25,8 @@ incomplete backfill produces missing rows, not an error.
 
 1. **Never hand-edit a generated migration statement.** Edit the mapping and
    regenerate. A hand-edited statement is invisible to the diffing generator and
-   is reverted on the next codegen.
+   is reverted on the next codegen. This applies now: `:read_from_legacy`
+   already generates the compatibility view via `custom_statements`.
 
 2. **`writable? false` requires `because:`, and the text is user-facing.** It
    appears in the runtime error raised when something tries to write the

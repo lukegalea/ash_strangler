@@ -3,8 +3,9 @@
 Strangler-fig migrations for Ash: map an Ash resource onto a legacy Postgres
 schema and move it through the migration phases without hand-writing SQL.
 
-> **Alpha (0.1.0).** This version does **verification only** — it checks
-> mappings and phase declarations. It does not generate SQL yet. See
+> **Alpha (0.1.0).** This version verifies mappings and phase declarations, and
+> generates the compatibility view for `:read_from_legacy`. It does not yet
+> generate `INSTEAD OF` triggers, backfill, or notifications. See
 > [Scope](#scope).
 
 ## The problem
@@ -24,13 +25,17 @@ package makes the mapping declarative, and checks the parts that bite.
 |---|---|
 | Verify mappings and phases at compile time | ✅ |
 | `mix ash_strangler.check` pre-flight report | ✅ |
-| Generate views | planned |
-| Generate `INSTEAD OF` triggers | planned |
+| Generate views (`:read_from_legacy`) | ✅ |
+| Generate `INSTEAD OF` triggers (`:dual_write`) | planned |
+| The reversed view (`:read_from_new`) | planned |
 | Backfill, reconciler, notifications | planned |
 
-Verification ships first on purpose. It is useful on its own against a
-hand-written strangler migration, and it means the generator gets built against
-an oracle rather than alongside one.
+Verification shipped first on purpose. It was useful on its own against a
+hand-written strangler migration, and it meant the generator got built against
+an oracle rather than alongside one. View generation is deliberately narrower
+than a full "expand" step: no triggers, no writes, no notifications yet — a
+`:read_from_legacy` resource is read-only, and the verifiers already reject an
+attempt to write to one.
 
 ## Usage
 
@@ -73,11 +78,43 @@ defmodule MyApp.Accounts.User do
 end
 ```
 
-Then:
+Add `postgres do table "users" ... end` as usual, then:
 
 ```bash
 mix ash_strangler.check
+mix ash.codegen add_users_view
 ```
+
+`ash.codegen` finds the view and its expression index through the ordinary
+`custom_statements` mechanism — no separate task, no separate migration
+folder:
+
+```sql
+-- statement :strangler_users_view
+CREATE OR REPLACE VIEW "public"."users" AS
+SELECT
+  uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid, 'legacy.users:' || id::text) AS id,
+  id AS __legacy_id,
+  (email)::citext AS email,
+  coalesce(first_name,'') || ' ' || coalesce(last_name,'') AS full_name,
+  (deleted_at)::timestamptz AS archived_at
+FROM legacy.users;
+
+-- statement :strangler_users_key_index
+CREATE INDEX IF NOT EXISTS strangler_users_key_idx ON legacy.users
+  (uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid, 'legacy.users:' || id::text));
+```
+
+`__legacy_id` is unused in this phase — `:read_from_legacy` is read-only, and
+the verifiers reject a write to it at compile time — but it costs nothing to
+expose now: every later phase's `INSTEAD OF` triggers key off it rather than
+inverting the derived uuid.
+
+Every attribute must appear in that `SELECT`, mapped, constant, or
+`unmapped`, with no exception for attributes the resource keeps private — a
+view cannot leave a column out the way `VerifyCompleteMapping` lets a private
+attribute go unmentioned, so generating one is a strictly stronger check than
+compiling one.
 
 ## What the verifiers catch
 

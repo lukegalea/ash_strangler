@@ -6,19 +6,26 @@ defmodule AshStrangler.Resource do
         data_layer: AshPostgres.DataLayer,
         extensions: [AshStrangler.Resource]
 
-  Adds the `strangler` section (see `AshStrangler.Dsl`) and the verifiers that
-  decide whether a mapping is legal.
+  Adds the `strangler` section (see `AshStrangler.Dsl`), the verifiers that
+  decide whether a mapping is legal, and -- for `:read_from_legacy` on
+  `AshPostgres.DataLayer` -- the transformer that derives the compatibility
+  view.
 
   ## What this version does
 
-  **Verification only.** It checks mappings and phase transitions; it does not
-  yet generate SQL. That is deliberate — the checks are useful on their own
-  against a hand-written strangler migration, and shipping them first means the
-  generator is built against an oracle rather than alongside one.
+  Verification, plus view generation for `:read_from_legacy` only. `:dual_write`
+  `INSTEAD OF` triggers, the reversed `:read_from_new` view, backfill, the
+  reconciler and the listener are later steps — see the plan's §11 step table.
+  The checks were shipped first and stayed useful on their own against a
+  hand-written strangler migration; the generator is built against that oracle
+  rather than alongside it.
   """
 
   use Spark.Dsl.Extension,
     sections: AshStrangler.Dsl.sections(),
+    transformers: [
+      AshStrangler.Transformers.DeriveStatements
+    ],
     verifiers: [
       AshStrangler.Verifiers.VerifyCompleteMapping,
       AshStrangler.Verifiers.VerifyWritableMappingsReversible,
