@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule Mix.Tasks.AshStrangler.Check do
   @shortdoc "Pre-flight checks for strangler-mapped resources"
 

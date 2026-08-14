@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.MixProject do
   use Mix.Project
 
@@ -67,7 +71,8 @@ defmodule AshStrangler.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE usage-rules.md)
+      files:
+        ~w(lib .formatter.exs mix.exs README.md LICENSE LICENSE.license LICENSES usage-rules.md)
     ]
   end
 

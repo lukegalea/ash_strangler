@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Verifiers.VerifyWritableMappingsReversible do
   @moduledoc """
   A writable mapping must be reversible, and a non-writable one must say why.

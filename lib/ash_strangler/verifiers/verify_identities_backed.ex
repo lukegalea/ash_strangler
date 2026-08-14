@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Verifiers.VerifyIdentitiesBacked do
   @moduledoc """
   Every Ash identity must be backed by a real uniqueness constraint on the

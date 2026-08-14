@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Verifiers.VerifyNoUpserts do
   @moduledoc """
   Upserts and `INSTEAD OF` triggers are mutually exclusive. This catches it at

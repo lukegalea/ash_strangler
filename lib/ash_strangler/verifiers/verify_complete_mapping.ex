@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Verifiers.VerifyCompleteMapping do
   @moduledoc """
   Every attribute must be mapped, constant, unmapped, or the key.

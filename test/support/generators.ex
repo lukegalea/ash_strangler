@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Test.Generators do
   @moduledoc """
   StreamData generators for legacy rows, biased hard toward the values that

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 import Config
 
 # This config exists for AshStrangler's OWN dev and test runs. It is not

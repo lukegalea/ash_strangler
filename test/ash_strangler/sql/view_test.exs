@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Sql.ViewTestRepo do
   @moduledoc """
   Compile-only Ecto repo for `AshStrangler.Sql.ViewTest`.

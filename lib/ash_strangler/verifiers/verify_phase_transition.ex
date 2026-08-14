@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Verifiers.VerifyPhaseTransition do
   @moduledoc """
   Checks the phase declaration is internally consistent with the mapping.

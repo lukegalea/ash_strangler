@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.KeyDerivation do
   @moduledoc """
   Derives a resource's modern primary key from a legacy key, in Elixir.

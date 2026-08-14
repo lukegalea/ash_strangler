@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 alias AshStrangler.Test.LegacySchema
 alias AshStrangler.TestRepo
 

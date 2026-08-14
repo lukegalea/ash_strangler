@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.KeyDerivationTest do
   @moduledoc """
   The claim under test: **SQL and Elixir derive the same modern id, always.**

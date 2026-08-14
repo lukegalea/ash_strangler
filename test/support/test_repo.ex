@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.TestRepo do
   @moduledoc """
   The repo the round-trip tests run against. Test-env only.

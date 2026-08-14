@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.DataCase do
   @moduledoc """
   Case template for tests that talk to a real PostgreSQL server.
