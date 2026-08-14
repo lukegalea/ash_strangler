@@ -1,12 +1,19 @@
+<!--
+SPDX-FileCopyrightText: 2026 Luke Galea
+
+SPDX-License-Identifier: MIT
+-->
+
 # AshStrangler
 
 Strangler-fig migrations for Ash: map an Ash resource onto a legacy Postgres
 schema and move it through the migration phases without hand-writing SQL.
 
 > **Alpha (0.1.0).** This version verifies mappings and phase declarations, and
-> generates the compatibility view for `:read_from_legacy`. It does not yet
-> generate `INSTEAD OF` triggers, backfill, or notifications. See
-> [Scope](#scope).
+> generates both the compatibility view (`:read_from_legacy`) and the
+> `INSTEAD OF` triggers that carry writes back to legacy (`:dual_write`). It
+> does not yet do the `:read_from_new` reversal, backfill, or notifications.
+> See [Scope](#scope).
 
 ## The problem
 
@@ -27,16 +34,20 @@ package makes the mapping declarative, and checks the parts that bite.
 | `mix ash_strangler.check` pre-flight report | ✅ |
 | Generate views (`:read_from_legacy`) | ✅ |
 | Derive the modern key in Elixir, without a round trip | ✅ |
-| Generate `INSTEAD OF` triggers (`:dual_write`) | planned |
+| Generate `INSTEAD OF` triggers (`:dual_write`) | ✅ |
 | The reversed view (`:read_from_new`) | planned |
 | Backfill, reconciler, notifications | planned |
 
 Verification shipped first on purpose. It was useful on its own against a
-hand-written strangler migration, and it meant the generator got built against
-an oracle rather than alongside one. View generation is deliberately narrower
-than a full "expand" step: no triggers, no writes, no notifications yet — a
-`:read_from_legacy` resource is read-only, and the verifiers already reject an
-attempt to write to one.
+hand-written strangler migration, and it meant the generators got built against
+an oracle rather than alongside one — a real-Postgres round-trip suite that
+installs the compatibility layer by *executing the generator's own output*,
+never a transcribed copy.
+
+That order paid for itself. Building the write path found four things wrong
+with the read path that had already been written, reviewed and committed —
+including a timestamp cast that silently produced different instants on
+different connections.
 
 ## Usage
 
@@ -65,7 +76,9 @@ defmodule MyApp.Accounts.User do
       key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
 
       map :email, "email", cast: :citext
-      map :archived_at, "deleted_at", cast: :timestamptz
+
+      # `from_zone:` is required with `cast: :timestamptz` -- see below.
+      map :archived_at, "deleted_at", cast: :timestamptz, from_zone: "UTC"
 
       map :full_name do
         from "coalesce(first_name,'') || ' ' || coalesce(last_name,'')"
@@ -98,7 +111,7 @@ SELECT
   id AS __legacy_id,
   (email)::citext AS email,
   coalesce(first_name,'') || ' ' || coalesce(last_name,'') AS full_name,
-  (deleted_at)::timestamptz AS archived_at
+  (deleted_at AT TIME ZONE 'UTC') AS archived_at
 FROM legacy.users;
 
 -- statement :strangler_users_key_index
@@ -137,20 +150,38 @@ where hashing codepoints instead of UTF-8 bytes would produce a stable,
 plausible, permanently wrong answer. Both sides build the hashed name through
 the same function so the format cannot drift.
 
-## A hazard this does not yet solve
+## Why `cast: :timestamptz` makes you name a zone
 
-`cast: :timestamptz` over a legacy `timestamp` **without** time zone generates
-`(deleted_at)::timestamptz`, and that cast reads the naive value as wall-clock
-time in the *session's* `TimeZone`. Verified on PostgreSQL 17.10: the same row,
-through the same view, is `12:00Z` on a UTC connection and `01:30Z` on an
-`Australia/Lord_Howe` one. No error, no warning — just a timestamp wrong by a
-fixed offset on some connections.
+Because the obvious thing is wrong in a way nothing reports.
 
-Deciding the right answer means knowing what timezone the legacy column is
-*in*, which is a fact about the old application rather than about its schema,
-so the DSL will grow a way to state it (`from_zone:`) rather than guessing.
-Until then: prefer a legacy column that is already `timestamptz`, or map it
-with an explicit `from` expression that pins the zone yourself.
+`(deleted_at)::timestamptz` on a legacy `timestamp` **without** time zone reads
+the naive value as wall-clock time in the *session's* `TimeZone`. Verified on
+PostgreSQL 17.10: the same row, through the same view, is `12:00Z` on a UTC
+connection and `01:30Z` on an `Australia/Lord_Howe` one. No error, no warning —
+a timestamp wrong by a fixed offset, on some connections, depending on a
+setting the view does not control.
+
+So `from_zone:` is mandatory with that cast, and generates
+`deleted_at AT TIME ZONE 'UTC'`, which says the zone in the view itself. Omit
+it and the resource does not compile:
+
+```
+These mappings cast to `:timestamptz` without saying which time zone the
+legacy column is in:
+
+  :archived_at
+```
+
+Which zone a naive column is in is a fact about the *old application*, not
+about its schema, so it cannot be inferred and is not guessed — defaulting to
+UTC would be right for most legacy databases and silently wrong for the rest,
+which is the worst available outcome. If the column is already `timestamptz`,
+drop the `cast:` instead: `AT TIME ZONE` on an already-aware value converts it
+back to naive.
+
+The write path reverses this exactly, and has to: assigning a `timestamptz`
+into a naive column uses an assignment cast with the same session dependence,
+mirrored.
 
 ## What the verifiers catch
 
@@ -181,14 +212,25 @@ pick silently when you declare one:
 | | `:auto` (view auto-updatability) | `:triggers` (`INSTEAD OF`) |
 |---|---|---|
 | `INSERT … ON CONFLICT` | works | **broken** |
-| `RETURNING` | correct | correct only if the trigger returns the row |
+| `RETURNING` | correct | correct — the generated triggers re-read |
 | `WITH CHECK OPTION` | enforced | **not enforced** |
 | Governs every write | no — `MERGE` bypasses the mapping | yes |
-| Usage counter ("is legacy dead?") | unavailable | available |
+| Rejects writes to read-only mappings | no | yes, quoting `because:` |
 
 The upsert row is the one that surprises people. Against a view with an
 `INSTEAD OF` trigger, `ON CONFLICT DO NOTHING` is **accepted and then does
 nothing** — no error, no row. `DO UPDATE` at least fails loudly.
+
+Which is why triggers are **derived rather than always generated**: a
+single-table projection of plain columns stays auto-updatable and keeps its
+upserts. A computed writable mapping (`to:`/`into:`) is what forces them.
+
+The `RETURNING` row is the one that would have bitten hardest. On a view with
+an `INSTEAD OF INSERT` trigger, `RETURNING` reports whatever the trigger
+function returned — so the obvious body (insert, then `RETURN NEW`) hands back
+NULL for every derived column including the primary key, **raising nothing**.
+The generated functions re-read the stored row through the view and return
+that.
 
 ### This collides with `ash_authentication`
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Test.LegacySchema do
   @moduledoc """
   Creates the `legacy` fixture schema and installs the **generated**
@@ -15,7 +19,9 @@ defmodule AshStrangler.Test.LegacySchema do
   and read rows, inside a sandbox transaction that rolls back.
   """
 
+  alias AshStrangler.Sql.Triggers
   alias AshStrangler.Sql.View
+  alias AshStrangler.Test.DualWriteUser
   alias AshStrangler.Test.LegacyUser
   alias AshStrangler.TestRepo
 
@@ -61,11 +67,25 @@ defmodule AshStrangler.Test.LegacySchema do
     execute!(@users_table)
     execute!("CREATE UNIQUE INDEX index_users_on_login ON legacy.users (login)")
 
-    %{view: view, key_index: key_index} = View.build(LegacyUser)
-    execute!(view.up)
-    execute!(key_index.up)
+    install_resource!(LegacyUser)
+    install_resource!(DualWriteUser)
 
     :ok
+  end
+
+  # Executes the generator's output verbatim -- view, key index, and (for
+  # `:dual_write` mappings that require them) the INSTEAD OF triggers. Nothing
+  # here transcribes SQL: if the generator emits something Postgres rejects,
+  # the whole suite fails to start, which is the intended blast radius.
+  defp install_resource!(resource) do
+    %{view: view, key_index: key_index} = View.build(resource)
+
+    execute!(view.up)
+    if key_index, do: execute!(key_index.up)
+
+    resource
+    |> Triggers.build()
+    |> Enum.each(&execute!(&1.up))
   end
 
   @doc "Deletes every fixture row. Cheaper than reinstalling the schema."

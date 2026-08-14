@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 # Target structs for the `strangler` DSL entities.
 #
 # Spark builds these from the DSL, so their field names are the option names in
@@ -13,6 +17,7 @@ defmodule AshStrangler.Map do
     :to,
     :into,
     :cast,
+    :from_zone,
     :because,
     # Required by Spark >= 2.7 so it can attach source annotations to the entity.
     :__spark_metadata__,

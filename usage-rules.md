@@ -1,10 +1,16 @@
+<!--
+SPDX-FileCopyrightText: 2026 Luke Galea
+
+SPDX-License-Identifier: MIT
+-->
+
 # Rules for working with AshStrangler
 
 AshStrangler maps an Ash resource onto a legacy Postgres relation for a
-strangler-fig migration. Version 0.1 verifies mappings and generates the
-compatibility view for `:read_from_legacy`. It does not yet generate
-`INSTEAD OF` triggers, the reversed `:read_from_new` view, backfill, or
-notifications.
+strangler-fig migration. Version 0.1 verifies mappings, generates the
+compatibility view (`:read_from_legacy`), and generates the `INSTEAD OF`
+triggers that carry writes back to legacy (`:dual_write`). It does not yet do
+the reversed `:read_from_new` view, backfill, or notifications.
 
 ## The phase model
 
@@ -60,13 +66,27 @@ incomplete backfill produces missing rows, not an error.
    they cannot drift, and a drift produces `Ash.get/2` returning nothing for
    rows that exist.
 
-9. **`cast: :timestamptz` on a naive legacy `timestamp` column is
-   session-dependent.** It reads the value as wall-clock time in the
-   connection's `TimeZone`, so different connections see different instants
-   with no error. Prefer a legacy column that is already `timestamptz`, or pin
-   the zone in an explicit `from` expression. Do not assume the cast is UTC.
+9. **`cast: :timestamptz` requires `from_zone:`, and the compiler enforces it.**
+   A bare cast on a naive legacy `timestamp` reads the value as wall-clock time
+   in the *connection's* `TimeZone`, so different connections see different
+   instants with no error. State the zone the legacy column is recorded in
+   (`from_zone: "UTC"`). If the column is already `timestamptz`, drop the
+   `cast:` instead — do not supply a zone, because `AT TIME ZONE` on an
+   already-aware value converts it back to naive.
 
-10. **Run `mix ash_strangler.check` before every phase change.** No exceptions.
+10. **The mapped primary key must not be declared with a default, and does not
+    need `generated? true` written by hand** — the extension sets it, because
+    the view computes the id and Ash would otherwise reject every create with
+    `attribute id is required`. Declare it plainly:
+    `attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false`.
+
+11. **Expect Ash's own casting to differ from what the legacy app writes.**
+    `Ash.Type.CiString` trims by default, so during `:dual_write` a value
+    written through Ash may not be byte-identical to the same value written
+    directly by the old application. This is not a bug to fix in the mapping;
+    it is a real divergence to account for when comparing the two paths.
+
+12. **Run `mix ash_strangler.check` before every phase change.** No exceptions.
    It reports what compile-time verification cannot know: whether the backfill is
    complete, whether the legacy write path is dead, whether the reconciler is
    clean.

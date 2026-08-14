@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Sql.View do
   @moduledoc """
   Builds the compatibility view SQL for a strangler-mapped resource.
@@ -129,12 +133,12 @@ defmodule AshStrangler.Sql.View do
     end)
   end
 
-  defp mapped_expression(%MapEntry{column: column, cast: cast}) when is_binary(column) do
-    with_cast(column, cast)
+  defp mapped_expression(%MapEntry{column: column} = entry) when is_binary(column) do
+    with_cast(column, entry)
   end
 
-  defp mapped_expression(%MapEntry{from: from, cast: cast}) when is_binary(from) do
-    with_cast(from, cast)
+  defp mapped_expression(%MapEntry{from: from} = entry) when is_binary(from) do
+    with_cast(from, entry)
   end
 
   defp mapped_expression(%Constant{expression: expression}), do: expression
@@ -152,8 +156,21 @@ defmodule AshStrangler.Sql.View do
     """
   end
 
-  defp with_cast(expr, nil), do: expr
-  defp with_cast(expr, cast), do: "(#{expr})::#{cast}"
+  # `AT TIME ZONE` rather than `::timestamptz`, and the difference is the whole
+  # of §10.12: casting a naive `timestamp` reads it as wall-clock time in the
+  # SESSION's TimeZone, so the instant depends on a per-connection setting the
+  # view cannot control. `AT TIME ZONE '<zone>'` states the zone in the view
+  # itself and is therefore the same on every connection.
+  #
+  # The result is already `timestamptz`, so no further cast is applied -- adding
+  # one would be a no-op at best, and `AT TIME ZONE` applied twice reverses
+  # itself.
+  defp with_cast(expr, %MapEntry{cast: :timestamptz, from_zone: zone}) when is_binary(zone) do
+    "(#{expr} AT TIME ZONE '#{zone}')"
+  end
+
+  defp with_cast(expr, %MapEntry{cast: nil}), do: expr
+  defp with_cast(expr, %MapEntry{cast: cast}), do: "(#{expr})::#{cast}"
 
   # --- the key ---------------------------------------------------------------
 

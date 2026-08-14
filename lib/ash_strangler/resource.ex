@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Resource do
   @moduledoc """
   Ash resource extension for strangler-fig migrations.
@@ -24,10 +28,12 @@ defmodule AshStrangler.Resource do
   use Spark.Dsl.Extension,
     sections: AshStrangler.Dsl.sections(),
     transformers: [
+      AshStrangler.Transformers.MarkKeyGenerated,
       AshStrangler.Transformers.DeriveStatements
     ],
     verifiers: [
       AshStrangler.Verifiers.VerifyCompleteMapping,
+      AshStrangler.Verifiers.VerifyTimestampZones,
       AshStrangler.Verifiers.VerifyWritableMappingsReversible,
       AshStrangler.Verifiers.VerifyNoUpserts,
       AshStrangler.Verifiers.VerifyIdentitiesBacked,

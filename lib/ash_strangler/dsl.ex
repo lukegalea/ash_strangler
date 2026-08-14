@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Dsl do
   @moduledoc """
   The `strangler` DSL section: how an Ash resource maps onto a legacy table.
@@ -62,6 +66,26 @@ defmodule AshStrangler.Dsl do
       cast: [
         type: :atom,
         doc: "Postgres type to cast to, e.g. `:citext`, `:timestamptz`."
+      ],
+      from_zone: [
+        type: :string,
+        doc: """
+        The time zone a naive legacy `timestamp` column is recorded in, e.g.
+        `"UTC"`. **Required with `cast: :timestamptz`**, and rejected without it.
+
+        A bare `(col)::timestamptz` on a `timestamp without time zone` column
+        reads the value as wall-clock time in the *session's* `TimeZone`, so the
+        instant it produces depends on a per-connection setting the view does
+        not control — verified as 10.5 hours of drift between two connections
+        reading the same row. `from_zone` generates `col AT TIME ZONE '<zone>'`
+        instead, which is deterministic.
+
+        Which zone a legacy column is in is a fact about the old application,
+        not about its schema, so it cannot be inferred and is not guessed. If
+        the column is *already* `timestamptz`, drop the `cast:` rather than
+        supplying a zone: `AT TIME ZONE` on an aware value converts it back to a
+        naive one, which is the opposite of what you want.
+        """
       ],
       writable?: [
         type: :boolean,

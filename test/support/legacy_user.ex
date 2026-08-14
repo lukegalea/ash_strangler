@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Test.Domain do
   @moduledoc "Domain for the round-trip test resources. Test-env only."
 
@@ -5,6 +9,7 @@ defmodule AshStrangler.Test.Domain do
 
   resources do
     resource AshStrangler.Test.LegacyUser
+    resource AshStrangler.Test.DualWriteUser
   end
 end
 
@@ -74,7 +79,10 @@ defmodule AshStrangler.Test.LegacyUser do
 
       map :login, "login"
       map :email, "email", cast: :citext
-      map :archived_at, "deleted_at", cast: :timestamptz
+      # `from_zone:` is mandatory with `cast: :timestamptz` -- see
+      # AshStrangler.Verifiers.VerifyTimestampZones. The fixture's `deleted_at`
+      # is a naive `timestamp` recorded in UTC.
+      map :archived_at, "deleted_at", cast: :timestamptz, from_zone: "UTC"
 
       map :full_name do
         from "coalesce(first_name,'') || ' ' || coalesce(last_name,'')"

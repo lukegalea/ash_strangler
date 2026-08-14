@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.RoundTripTest do
   @moduledoc """
   The core of the suite (plan §8.3): insert an arbitrary legacy row with raw
@@ -113,32 +117,25 @@ defmodule AshStrangler.RoundTripTest do
     end
   end
 
-  describe "the timestamp -> timestamptz cast is session-dependent" do
-    @tag :hazard
-    test "the same stored value projects to different instants under different session TimeZones" do
-      # NOT a bug in this test -- a hazard in the generated SQL, pinned here so
-      # it cannot change silently. `(deleted_at)::timestamptz` interprets a naive
-      # `timestamp` as wall-clock time in the SESSION's TimeZone, so the instant
-      # it yields depends on a connection-level setting the view does not
-      # control. Verified against PostgreSQL 17.10: the same row read under UTC
-      # and under Australia/Lord_Howe is 10.5 hours apart.
+  describe "from_zone makes the timestamp projection connection-independent" do
+    test "the same stored value projects to one instant under every session TimeZone" do
+      # The regression test for §10.12. With a bare `(deleted_at)::timestamptz`
+      # this same assertion showed 10.5 hours of drift between two connections
+      # -- silently, with no error anywhere -- because the cast read the naive
+      # value as wall-clock time in the SESSION's TimeZone. `from_zone: "UTC"`
+      # generates `AT TIME ZONE 'UTC'`, stating the zone in the view itself.
       #
-      # See docs/plans/ash-strangler.md §10.12 in the reference application for
-      # the design options. The mapping asks for `cast: :timestamptz` and the
-      # generator emits exactly that; making it deterministic means deciding
-      # what timezone a naive legacy column is *in*, which the corpus cannot
-      # know and the DSL does not yet ask.
+      # Lord Howe is in the list deliberately: its offset is a half hour, so an
+      # implementation that still depended on the session in some partial way
+      # would show a fractional-hour difference that a whole-hour zone could
+      # mask.
       legacy_id = insert_legacy_user!(%{deleted_at: ~N[2024-06-15 12:00:00]})
 
-      utc = archived_at_under_timezone(legacy_id, "UTC")
-      lord_howe = archived_at_under_timezone(legacy_id, "Australia/Lord_Howe")
+      instants =
+        for zone <- ["UTC", "America/New_York", "Australia/Lord_Howe"],
+            do: archived_at_under_timezone(legacy_id, zone)
 
-      refute utc == lord_howe
-
-      # 630 minutes = 10h30m, Lord Howe's offset. Reading noon as UTC gives a
-      # LATER instant than reading it as Lord Howe local time, because +10:30
-      # means local noon is 01:30 UTC.
-      assert DateTime.diff(utc, lord_howe, :minute) == 630
+      assert Enum.uniq(instants) == [~U[2024-06-15 12:00:00.000000Z]]
     end
   end
 

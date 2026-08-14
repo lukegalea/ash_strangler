@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.VerifiersTest do
   @moduledoc """
   The verifiers are the whole of version 0.1, so these tests are the product
@@ -28,6 +32,7 @@ defmodule AshStrangler.VerifiersTest do
 
   @verifiers [
     AshStrangler.Verifiers.VerifyCompleteMapping,
+    AshStrangler.Verifiers.VerifyTimestampZones,
     AshStrangler.Verifiers.VerifyWritableMappingsReversible,
     AshStrangler.Verifiers.VerifyNoUpserts,
     AshStrangler.Verifiers.VerifyIdentitiesBacked,
@@ -453,6 +458,73 @@ defmodule AshStrangler.VerifiersTest do
         """,
         "read-only without a stated reason"
       )
+    end
+  end
+
+  describe "VerifyTimestampZones" do
+    test "rejects cast: :timestamptz that does not say which zone the column is in" do
+      message =
+        assert_rejected_by(
+          AshStrangler.Verifiers.VerifyTimestampZones,
+          """
+          attributes do
+            uuid_primary_key :id
+            attribute :archived_at, :utc_datetime_usec, public?: true
+          end
+
+          strangler do
+            phase :read_from_legacy
+            source "legacy.users" do
+              #{@key}
+              map :archived_at, "deleted_at", cast: :timestamptz
+            end
+          end
+          """,
+          ":archived_at"
+        )
+
+      # The error has to explain the failure mode, because the generated SQL
+      # looks correct and the wrong value it produces looks plausible. It also
+      # has to give BOTH fixes -- adding a zone, and dropping the cast when the
+      # column is already timestamptz -- since applying the wrong one moves
+      # every timestamp in the system by a fixed offset.
+      assert message =~ "from_zone"
+      assert message =~ "TimeZone"
+      assert message =~ "drop the cast"
+    end
+
+    test "accepts cast: :timestamptz with from_zone" do
+      assert_accepted("""
+      attributes do
+        uuid_primary_key :id
+        attribute :archived_at, :utc_datetime_usec, public?: true
+      end
+
+      strangler do
+        phase :read_from_legacy
+        source "legacy.users" do
+          #{@key}
+          map :archived_at, "deleted_at", cast: :timestamptz, from_zone: "UTC"
+        end
+      end
+      """)
+    end
+
+    test "leaves other casts alone -- only timestamptz is ambiguous" do
+      assert_accepted("""
+      attributes do
+        uuid_primary_key :id
+        attribute :email, :ci_string, public?: true
+      end
+
+      strangler do
+        phase :read_from_legacy
+        source "legacy.users" do
+          #{@key}
+          map :email, "email", cast: :citext
+        end
+      end
+      """)
     end
   end
 end

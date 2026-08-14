@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
 defmodule AshStrangler.Transformers.DeriveStatements do
   @moduledoc """
   Derives the compatibility view (and expression index, where the key strategy
@@ -45,16 +49,26 @@ defmodule AshStrangler.Transformers.DeriveStatements do
 
   defp applies?(dsl) do
     AshStrangler.Info.strangled?(dsl) and
-      AshStrangler.Info.strangler_phase!(dsl) == :read_from_legacy and
+      AshStrangler.Info.strangler_phase!(dsl) in [:read_from_legacy, :dual_write] and
       Transformer.get_persisted(dsl, :data_layer) == AshPostgres.DataLayer
   end
 
   defp derive(dsl) do
     %{view: view, key_index: key_index} = AshStrangler.Sql.View.build(dsl)
 
-    dsl
-    |> add_statement(view)
-    |> add_statement(key_index)
+    # The view is identical in both phases -- `:dual_write` differs only by
+    # gaining a write path. Triggers are generated ONLY where the mapping
+    # requires them (see `AshStrangler.Sql.Triggers`), so a single-table
+    # projection of plain columns stays auto-updatable and keeps upserts.
+    triggers =
+      if AshStrangler.Info.strangler_phase!(dsl) == :dual_write do
+        AshStrangler.Sql.Triggers.build(dsl)
+      else
+        []
+      end
+
+    [view, key_index | triggers]
+    |> Enum.reduce(dsl, &add_statement(&2, &1))
     |> then(&{:ok, &1})
   rescue
     e in ArgumentError ->
@@ -79,6 +93,10 @@ defmodule AshStrangler.Transformers.DeriveStatements do
         down: down
       )
 
-    Transformer.add_entity(dsl, [:postgres, :custom_statements], statement)
+    # `type: :append`, because `add_entity/4` PREPENDS by default and these
+    # statements are order-dependent: a trigger cannot be created before the
+    # function it executes, and neither can exist before the view. Prepending
+    # reverses the list and the migration fails on the first run.
+    Transformer.add_entity(dsl, [:postgres, :custom_statements], statement, type: :append)
   end
 end
