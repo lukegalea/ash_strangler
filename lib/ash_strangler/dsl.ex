@@ -7,8 +7,8 @@ defmodule AshStrangler.Dsl do
   The `strangler` DSL section: how an Ash resource maps onto a legacy table.
 
   This module defines the vocabulary only. The verifiers in
-  `AshStrangler.Verifiers.*` decide what is *legal*, and SQL generation (not yet
-  implemented) decides what is *emitted*.
+  `AshStrangler.Verifiers.*` decide what is *legal*, and `AshStrangler.Sql.*`
+  decides what is *emitted*.
 
   See the README for the whole shape at once.
   """
@@ -246,7 +246,8 @@ defmodule AshStrangler.Dsl do
           correct `RETURNING`, and `WITH CHECK OPTION`.** Requires a mapping
           Postgres considers auto-updatable.
         - `:triggers` — generate `INSTEAD OF` triggers. Governs every write and
-          enables the usage counter, and **destroys all three of the above**.
+          nothing can reach the base table by an undescribed path, and
+          **destroys all three of the above**.
 
         This is a trade, not an addition. See the README.
         """

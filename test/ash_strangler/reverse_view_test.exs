@@ -21,31 +21,31 @@ defmodule AshStrangler.ReverseViewTest do
 
   import ExUnit.CaptureIO
 
-  describe "the reverse view" do
-    setup do
-      # A real Ash-owned table standing in for the post-cutover shape, plus the
-      # generated view over it wearing the legacy name.
-      TestRepo.query!("DROP VIEW IF EXISTS reverse_legacy.widgets", [])
-      TestRepo.query!("DROP SCHEMA IF EXISTS reverse_legacy CASCADE", [])
-      TestRepo.query!("DROP TABLE IF EXISTS strangler.widgets", [])
-      TestRepo.query!("CREATE SCHEMA reverse_legacy", [])
+  setup do
+    # A real Ash-owned table standing in for the post-cutover shape, plus the
+    # generated view over it wearing the legacy name.
+    TestRepo.query!("DROP VIEW IF EXISTS reverse_legacy.widgets", [])
+    TestRepo.query!("DROP SCHEMA IF EXISTS reverse_legacy CASCADE", [])
+    TestRepo.query!("DROP TABLE IF EXISTS strangler.widgets", [])
+    TestRepo.query!("CREATE SCHEMA reverse_legacy", [])
 
-      TestRepo.query!(
-        """
-        CREATE TABLE strangler.widgets (
-          id uuid PRIMARY KEY,
-          legacy_id bigint NOT NULL,
-          label text,
-          state_code integer,
-          archived_at timestamptz
-        )
-        """,
-        []
+    TestRepo.query!(
+      """
+      CREATE TABLE strangler.widgets (
+        id uuid PRIMARY KEY,
+        legacy_id bigint NOT NULL,
+        label text,
+        state_code integer,
+        archived_at timestamptz
       )
+      """,
+      []
+    )
 
-      :ok
-    end
+    :ok
+  end
 
+  describe "the reverse view" do
     test "projects the legacy column names, running each mapping backwards" do
       resource = reverse_resource()
 
@@ -108,6 +108,51 @@ defmodule AshStrangler.ReverseViewTest do
     end
   end
 
+  describe "notify triggers in :read_from_new" do
+    test "are not emitted, because the relation is a view by then" do
+      # Regression. `Sql.Notify` attaches an `AFTER ... FOR EACH ROW` trigger to
+      # `source.relation`, and in this phase that name is the reverse VIEW.
+      # Postgres rejects row-level AFTER triggers on a view outright, so
+      # emitting one produced a migration that could not run -- and nothing
+      # would have caught it until `mix ecto.migrate`, because the generator
+      # itself is happy to build the string.
+      resource = reverse_resource(notify?: true)
+
+      names = resource |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
+
+      assert names == [:strangler_widgets_reverse_view]
+
+      refute Enum.any?(names, &(&1 |> to_string() |> String.contains?("notify")))
+    end
+
+    test "the SQL that would have been emitted is indeed rejected by Postgres" do
+      # Proves the guard is protecting against something real rather than a
+      # theory: build the notify DDL by hand against the reverse view and watch
+      # Postgres refuse it.
+      resource = reverse_resource()
+      [%{up: view_up}] = AshStrangler.Sql.ReverseView.build(resource)
+      TestRepo.query!(view_up, [])
+
+      assert_raise Postgrex.Error, ~r/view|trigger/i, fn ->
+        TestRepo.query!(
+          """
+          CREATE OR REPLACE FUNCTION pg_temp.probe() RETURNS trigger AS $$
+          BEGIN RETURN NULL; END $$ LANGUAGE plpgsql
+          """,
+          []
+        )
+
+        TestRepo.query!(
+          """
+          CREATE TRIGGER probe AFTER INSERT ON reverse_legacy.widgets
+            FOR EACH ROW EXECUTE FUNCTION pg_temp.probe()
+          """,
+          []
+        )
+      end
+    end
+  end
+
   describe "VerifyReverseMappable" do
     test "refuses :read_from_new when a mapping declared it cannot be reversed" do
       resource = reverse_resource(irreversible?: true)
@@ -161,6 +206,8 @@ defmodule AshStrangler.ReverseViewTest do
         ""
       end
 
+    notify = if Keyword.get(opts, :notify?, false), do: "notify? true", else: ""
+
     unmapped_legacy_id =
       if Keyword.get(opts, :legacy_id?, true),
         do:
@@ -196,6 +243,7 @@ defmodule AshStrangler.ReverseViewTest do
             phase :read_from_new
 
             source "reverse_legacy.widgets" do
+              #{notify}
               key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
 
               map :label, "name"

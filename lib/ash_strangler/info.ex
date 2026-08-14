@@ -61,7 +61,8 @@ defmodule AshStrangler.Info do
 
   This matters because the two are not equivalent. Auto-updatable views keep
   upserts, correct `RETURNING` and `WITH CHECK OPTION`; `INSTEAD OF` triggers
-  destroy all three and gain a usage counter. Choosing by accident is how a
+  destroy all three and gain governance of every write. Choosing by accident is
+  how a
   migration loses `ON CONFLICT` support without anyone deciding to.
   """
   @spec writes(Spark.Dsl.t() | Ash.Resource.t()) :: :auto | :triggers | nil

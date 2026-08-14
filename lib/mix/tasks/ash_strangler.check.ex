@@ -138,9 +138,11 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
       2. Is the legacy write path dead?  Before `:decommissioned`, confirm
          nothing outside this application still writes to the legacy table.
-         Trigger-based mappings can count writes; `writes: :auto` mappings
-         cannot — statement-level triggers on an auto-updatable view never fire,
-         so the usage counter does not exist on that path.
+         This package does not answer that for you: `pg_notify` collapses
+         duplicate notifications within a transaction, so notifications cannot
+         count writes, and there is no usage counter. Use Postgres's own
+         `pg_stat_user_tables` (`n_tup_ins`/`n_tup_upd`/`n_tup_del`) or an audit
+         trigger you install yourself.
 
       3. Does the reconciler report drift?  Run it, and read the output rather
          than the exit code.

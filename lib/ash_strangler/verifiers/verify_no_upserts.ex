@@ -15,7 +15,7 @@ defmodule AshStrangler.Verifiers.VerifyNoUpserts do
   Postgres does not warn about the first case.
 
   So an `INSTEAD OF` trigger is a **trade, not an addition**. It buys governed
-  writes and the usage counter; it costs upserts, correct `RETURNING`, and
+  writes; it costs upserts, correct `RETURNING`, and
   `WITH CHECK OPTION`. This verifier makes the cost visible at the point where
   the trade is made.
 

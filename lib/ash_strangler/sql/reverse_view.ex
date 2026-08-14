@@ -36,20 +36,19 @@ defmodule AshStrangler.Sql.ReverseView do
   requires that `legacy.users` stop being a table first, which means renaming or
   dropping real data. That is a one-way, downtime-shaped operation whose timing
   depends on facts no generator has — whether the backfill finished, whether the
-  reconciler is clean, whether anyone is still writing. `mix
-  ash_strangler.gen.migration` emits the view and a commented-out rename beside
-  it, so the dangerous half is a deliberate edit rather than something that ran
-  because a phase word changed.
+  reconciler is clean, whether anyone is still writing. So the generator emits the
+  view and **nothing else**: retiring the old table is a step you write yourself,
+  deliberately, rather than something that ran because a phase word changed.
   """
 
   alias AshStrangler.{Constant, Source, Unmapped}
   alias AshStrangler.Map, as: MapEntry
 
   @doc """
-  Builds the reverse view for `resource`, plus the commented-out retirement
-  statement that must precede it.
+  Builds the reverse view for `resource`.
 
-  Returns `[]` unless the resource is in `:read_from_new`.
+  Returns `[]` unless the resource is in `:read_from_new`. Does **not** emit the
+  retirement of the old table -- see the moduledoc.
   """
   def build(resource) do
     with true <- AshStrangler.Info.strangled?(resource),

@@ -12,8 +12,9 @@ defmodule AshStrangler.Sql.Triggers do
   Adding an `INSTEAD OF` trigger to an auto-updatable view **silently removes**
   upsert support (`ON CONFLICT DO UPDATE` errors; `DO NOTHING` is accepted and
   then inert), correct `RETURNING`, and `WITH CHECK OPTION` enforcement. It
-  gains governance of every write and somewhere to put a usage counter. Neither
-  side is free, which is why `AshStrangler.Info.writes/1` *derives* whether
+  gains governance of every write -- nothing can reach the base table by a path
+  the mapping did not describe, which `MERGE` otherwise can. Neither side is
+  free, which is why `AshStrangler.Info.writes/1` *derives* whether
   triggers are needed rather than always emitting them, and why
   `AshStrangler.Verifiers.VerifyNoUpserts` rejects `upsert?: true` only on the
   resources whose mapping forced one.

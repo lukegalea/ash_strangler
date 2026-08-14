@@ -36,7 +36,16 @@ defmodule AshStrangler.Migration do
           []
 
         :read_from_new ->
-          Sql.ReverseView.build(resource) ++ Sql.Notify.build(resource)
+          # No notify trigger here, deliberately. `Sql.Notify` attaches an
+          # `AFTER ... FOR EACH ROW` trigger to `source.relation`, and in this
+          # phase that name is the reverse *view* -- which Postgres rejects
+          # outright ("Views cannot have row-level BEFORE or AFTER triggers"),
+          # so emitting it would produce a migration that cannot run.
+          #
+          # Nothing is lost: past cutover the new table is Ash-owned, so Ash's
+          # own notifiers cover writes to it, and the bridge exists precisely
+          # for writes this application does not make.
+          Sql.ReverseView.build(resource)
 
         phase ->
           %{view: view, key_index: key_index} = Sql.View.build(resource)
