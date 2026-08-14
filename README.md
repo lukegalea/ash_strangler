@@ -26,6 +26,7 @@ package makes the mapping declarative, and checks the parts that bite.
 | Verify mappings and phases at compile time | ✅ |
 | `mix ash_strangler.check` pre-flight report | ✅ |
 | Generate views (`:read_from_legacy`) | ✅ |
+| Derive the modern key in Elixir, without a round trip | ✅ |
 | Generate `INSTEAD OF` triggers (`:dual_write`) | planned |
 | The reversed view (`:read_from_new`) | planned |
 | Backfill, reconciler, notifications | planned |
@@ -115,6 +116,41 @@ Every attribute must appear in that `SELECT`, mapped, constant, or
 view cannot leave a column out the way `VerifyCompleteMapping` lets a private
 attribute go unmentioned, so generating one is a strictly stronger check than
 compiling one.
+
+## Deriving the id without asking the database
+
+`{:uuid_v5, ...}` keys are derived by a pure function, so code that has a
+legacy id — a webhook payload, an import file, a URL — can compute the modern
+id without a query:
+
+```elixir
+AshStrangler.KeyDerivation.uuid_v5(
+  "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71",
+  AshStrangler.KeyDerivation.name("legacy.users", 1)
+)
+#=> "5ecf8b7b-8241-5b27-a03c-4411a476359f"
+```
+
+That is the same value the generated view produces for row 1, and the test
+suite asserts the agreement over generated inputs — including non-ASCII names,
+where hashing codepoints instead of UTF-8 bytes would produce a stable,
+plausible, permanently wrong answer. Both sides build the hashed name through
+the same function so the format cannot drift.
+
+## A hazard this does not yet solve
+
+`cast: :timestamptz` over a legacy `timestamp` **without** time zone generates
+`(deleted_at)::timestamptz`, and that cast reads the naive value as wall-clock
+time in the *session's* `TimeZone`. Verified on PostgreSQL 17.10: the same row,
+through the same view, is `12:00Z` on a UTC connection and `01:30Z` on an
+`Australia/Lord_Howe` one. No error, no warning — just a timestamp wrong by a
+fixed offset on some connections.
+
+Deciding the right answer means knowing what timezone the legacy column is
+*in*, which is a fact about the old application rather than about its schema,
+so the DSL will grow a way to state it (`from_zone:`) rather than guessing.
+Until then: prefer a legacy column that is already `timestamptz`, or map it
+with an explicit `from` expression that pins the zone yourself.
 
 ## What the verifiers catch
 

@@ -1,0 +1,22 @@
+import Config
+
+# Host and port come from the environment because the development Postgres is
+# started by devenv, which shifts the port when 5432 is already taken. Never
+# hardcode it.
+config :ash_strangler, AshStrangler.TestRepo,
+  username: System.get_env("DB_USER", "postgres"),
+  password: System.get_env("DB_PASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: "ash_strangler_test#{System.get_env("MIX_TEST_PARTITION")}",
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: 10
+
+# Ash loads relationships and calculations in spawned Tasks by default. Those
+# are separate processes, so they are not owners of the sandbox connection and
+# hit `DBConnection.OwnershipError` intermittently -- the failure is a flake,
+# not a consistent error, which is the worst kind. Disabling async in test is
+# the standard fix and is what `mix igniter.install ash_postgres` writes.
+config :ash, disable_async?: true
+
+config :logger, level: :warning

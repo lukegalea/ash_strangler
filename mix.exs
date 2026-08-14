@@ -10,6 +10,7 @@ defmodule AshStrangler.MixProject do
       version: @version,
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
       description:
         "Strangler-fig migrations for Ash: map an Ash resource onto a legacy Postgres schema " <>
@@ -30,6 +31,11 @@ defmodule AshStrangler.MixProject do
     [extra_applications: [:logger]]
   end
 
+  # test/support carries the real-Postgres harness: the test repo, the legacy
+  # fixture schema, and the mapped resources the round-trip tests read through.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   defp deps do
     [
       {:ash, "~> 3.0"},
@@ -39,6 +45,16 @@ defmodule AshStrangler.MixProject do
       # pre-flight tooling without this extension dragging a data layer into
       # their dependency tree. SQL generation (step 2) will need it.
       {:ash_postgres, "~> 2.0", optional: true},
+      # Rides in transitively via `ash`, but the round-trip property tests
+      # depend on it directly -- so it is declared directly. A transitive
+      # dependency that a test suite leans on is one `mix deps.update` away
+      # from disappearing.
+      #
+      # It cannot carry `only: [:dev, :test]`, tempting as that is: `ash`
+      # requires it unconditionally (non-optional, all environments), and mix
+      # rejects a narrower `:only` than a dependency's own dependents declare
+      # with "dependencies have diverged".
+      {:stream_data, "~> 1.0"},
       # Required by Spark.Formatter, which formats the DSL blocks.
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

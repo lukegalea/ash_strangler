@@ -158,7 +158,12 @@ defmodule AshStrangler.Sql.View do
   # --- the key ---------------------------------------------------------------
 
   defp key_expression(%Key{from: from, strategy: {:uuid_v5, namespace: namespace}}, relation) do
-    "uuid_generate_v5('#{namespace}'::uuid, '#{relation}:' || #{from}::text)"
+    # The name prefix comes from `AshStrangler.KeyDerivation` rather than being
+    # spelled out here, so the Elixir and SQL sides cannot disagree about it.
+    # They must produce byte-identical uuids -- see that module.
+    prefix = AshStrangler.KeyDerivation.name_prefix(relation)
+
+    "uuid_generate_v5('#{namespace}'::uuid, '#{prefix}' || #{from}::text)"
   end
 
   defp key_expression(%Key{from: from, strategy: :identity}, _relation) do
@@ -184,12 +189,16 @@ defmodule AshStrangler.Sql.View do
   # already serves `Ash.get`.
   defp key_index_statement(_table, _source, %Key{strategy: :identity}), do: nil
 
-  defp key_index_statement(table, source, %Key{from: from, strategy: {:uuid_v5, namespace: ns}}) do
+  defp key_index_statement(table, source, %Key{strategy: {:uuid_v5, namespace: _}} = key) do
     name = "strangler_#{table}_key_idx"
 
+    # Built from `key_expression/2` rather than restated. The index only serves
+    # a lookup if its expression matches the view's *exactly* -- a difference as
+    # small as whitespace makes Postgres decline to use it, silently, and the
+    # only symptom is a sequential scan at production data volumes.
     up = """
     CREATE INDEX IF NOT EXISTS #{name} ON #{source.relation}
-      (uuid_generate_v5('#{ns}'::uuid, '#{source.relation}:' || #{from}::text));
+      (#{key_expression(key, source.relation)});
     """
 
     down = "DROP INDEX IF EXISTS #{qualify_index(source.relation, name)};"

@@ -52,7 +52,21 @@ incomplete backfill produces missing rows, not an error.
    Ash reports "has already been taken" for a constraint Postgres does not
    enforce, and duplicates are accepted with no error.
 
-8. **Run `mix ash_strangler.check` before every phase change.** No exceptions.
+8. **Never compute a modern id by querying for it.** Use
+   `AshStrangler.KeyDerivation.derive/3` (or `uuid_v5/2` + `name/2`), which is a
+   pure function and is asserted to agree byte-for-byte with the SQL the view
+   uses. Do not reimplement the hashing or re-spell the `"<relation>:<id>"`
+   name format anywhere — both sides go through `name_prefix/1` precisely so
+   they cannot drift, and a drift produces `Ash.get/2` returning nothing for
+   rows that exist.
+
+9. **`cast: :timestamptz` on a naive legacy `timestamp` column is
+   session-dependent.** It reads the value as wall-clock time in the
+   connection's `TimeZone`, so different connections see different instants
+   with no error. Prefer a legacy column that is already `timestamptz`, or pin
+   the zone in an explicit `from` expression. Do not assume the cast is UTC.
+
+10. **Run `mix ash_strangler.check` before every phase change.** No exceptions.
    It reports what compile-time verification cannot know: whether the backfill is
    complete, whether the legacy write path is dead, whether the reconciler is
    clean.
