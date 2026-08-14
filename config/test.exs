@@ -4,13 +4,19 @@
 
 import Config
 
-# Host and port come from the environment because the development Postgres is
-# started by devenv, which shifts the port when 5432 is already taken. Never
-# hardcode it.
+# Port comes from the environment because the development Postgres is started
+# by devenv, which shifts it when 5432 is already taken. Never hardcode it.
+#
+# The host override is deliberately NOT named `PGHOST`. That is libpq's own
+# variable, and CI sets it to the service-container name `postgres` -- a
+# hostname that only resolves for jobs running inside a container, which these
+# do not. Reading it made every CI test fail with
+# `tcp connect (postgres:5432): non-existing domain`. `DB_HOST` matches the
+# `DB_USER`/`DB_PASSWORD` pair below and collides with nothing.
 config :ash_strangler, AshStrangler.TestRepo,
   username: System.get_env("DB_USER", "postgres"),
   password: System.get_env("DB_PASSWORD", "postgres"),
-  hostname: System.get_env("PGHOST", "localhost"),
+  hostname: System.get_env("DB_HOST", "localhost"),
   port: String.to_integer(System.get_env("PGPORT", "5432")),
   database: "ash_strangler_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
