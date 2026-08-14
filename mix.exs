@@ -103,6 +103,11 @@ defmodule AshStrangler.MixProject do
       extra_section: "GUIDES",
       extras: [
         {"README.md", title: "Home"},
+        "documentation/topics/how-it-works.md",
+        "documentation/topics/phases.md",
+        "documentation/topics/what-it-refuses.md",
+        "documentation/topics/backfill-and-reconciliation.md",
+        "documentation/topics/notifications.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},
