@@ -7,10 +7,8 @@ SPDX-License-Identifier: MIT
 # Rules for working with AshStrangler
 
 AshStrangler maps an Ash resource onto a legacy Postgres relation for a
-strangler-fig migration. Version 0.1 verifies mappings, generates the
-compatibility view (`:read_from_legacy`), and generates the `INSTEAD OF`
-triggers that carry writes back to legacy (`:dual_write`). It does not yet do
-the reversed `:read_from_new` view, backfill, or notifications.
+strangler-fig migration. All four phases generate SQL; backfill, reconciliation
+and a notification bridge to `Ash.Notifier` exist.
 
 ## The phase model
 
@@ -29,10 +27,14 @@ incomplete backfill produces missing rows, not an error.
 
 ## Rules
 
-1. **Never hand-edit a generated migration statement.** Edit the mapping and
-   regenerate. A hand-edited statement is invisible to the diffing generator and
-   is reverted on the next codegen. This applies now: `:read_from_legacy`
-   already generates the compatibility view via `custom_statements`.
+1. **The DDL comes from `mix ash_strangler.gen.migration`, NOT `mix
+   ash.codegen`.** A strangler resource must declare `migrate? false`, and the
+   compiler enforces it: left at the default, codegen emits a `create table` for
+   the view's own name and the view DDL then fails against it. But `migrate?
+   false` also stops the resource producing a snapshot, and `custom_statements`
+   are only read from snapshots — so there is no configuration in which codegen
+   can carry this. Never hand-edit a generated migration; edit the mapping and
+   regenerate.
 
 2. **`writable? false` requires `because:`, and the text is user-facing.** It
    appears in the runtime error raised when something tries to write the
@@ -90,6 +92,22 @@ incomplete backfill produces missing rows, not an error.
    It reports what compile-time verification cannot know: whether the backfill is
    complete, whether the legacy write path is dead, whether the reconciler is
    clean.
+
+13. **Backfill with the flag column, never `WHERE new_col IS NULL`.** Use
+    `AshStrangler.Backfill`. An `IS NULL` predicate cannot terminate once a
+    target column's correct value may legitimately be null, which
+    `unmapped ..., as: :null` guarantees.
+
+14. **`:read_from_new` is a one-way door and the compiler treats it as one.**
+    Every mapping must be reversible, because the legacy name becomes a view
+    over the new table and the old application still reads those columns. A
+    `writable? false` mapping blocks the phase by design — do not work around
+    `VerifyReverseMappable`, carry the legacy columns across instead.
+
+15. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
+    a `pg_notify` payload from row data: the ceiling is 7999 bytes and
+    exceeding it aborts the *legacy application's* transaction. Never use them
+    to count writes — Postgres collapses duplicates within a transaction.
 
 ## What the verifiers cannot check
 

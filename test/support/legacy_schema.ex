@@ -19,8 +19,6 @@ defmodule AshStrangler.Test.LegacySchema do
   and read rows, inside a sandbox transaction that rolls back.
   """
 
-  alias AshStrangler.Sql.Triggers
-  alias AshStrangler.Sql.View
   alias AshStrangler.Test.DualWriteUser
   alias AshStrangler.Test.LegacyUser
   alias AshStrangler.TestRepo
@@ -73,24 +71,14 @@ defmodule AshStrangler.Test.LegacySchema do
     :ok
   end
 
-  # Executes the generator's output verbatim -- view, key index, and (for
-  # `:dual_write` mappings that require them) the INSTEAD OF triggers. Nothing
-  # here transcribes SQL: if the generator emits something Postgres rejects,
-  # the whole suite fails to start, which is the intended blast radius.
+  # Runs the SAME ordered statement list a generated migration would run, via
+  # AshStrangler.Migration, executing it verbatim. Nothing here transcribes
+  # SQL: if the generator emits something Postgres rejects, the whole suite
+  # fails to start, which is the intended blast radius.
   defp install_resource!(resource) do
-    %{view: view, key_index: key_index} = View.build(resource)
-
-    execute!(view.up)
-    if key_index, do: execute!(key_index.up)
-
     resource
-    |> Triggers.build()
+    |> AshStrangler.Migration.statements()
     |> Enum.each(&execute!(&1.up))
-  end
-
-  @doc "Deletes every fixture row. Cheaper than reinstalling the schema."
-  def truncate! do
-    execute!("TRUNCATE legacy.users RESTART IDENTITY CASCADE")
   end
 
   defp execute!(sql), do: TestRepo.query!(sql, [])

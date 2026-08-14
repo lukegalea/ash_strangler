@@ -55,6 +55,7 @@ defmodule AshStrangler.Test.LegacyUser do
     table "users"
     schema "strangler"
     repo AshStrangler.TestRepo
+    migrate? false
   end
 
   attributes do

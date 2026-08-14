@@ -208,6 +208,34 @@ defmodule AshStrangler.Dsl do
         required: true,
         doc: ~S|The legacy relation, schema-qualified: "legacy.users".|
       ],
+      notify?: [
+        type: :boolean,
+        default: false,
+        doc: """
+        Emit an `AFTER` trigger on the legacy table that announces writes over
+        `pg_notify`, for `AshStrangler.Listener` to turn into
+        `Ash.Notifier.Notification`s.
+
+        Off by default, because it is not free to the *old* system: every legacy
+        write pays a `pg_notify`, and a full notify queue fails the transaction
+        that issued it — which is the legacy application's transaction, not
+        yours.
+
+        Delivery is at-most-once and in-memory. Suitable for cache invalidation
+        and LiveView reactivity; not suitable for an audit trail.
+        """
+      ],
+      notify_channel: [
+        type: :string,
+        doc: """
+        The `pg_notify` channel, defaulting to `"ash_strangler"`. One channel
+        for every resource, with the resource named in the payload.
+
+        Deliberately not interpolated from anything user-supplied at runtime:
+        Postgrex has had channel-name escaping CVEs, and a channel name derived
+        from a compile-time DSL literal cannot carry an injection.
+        """
+      ],
       writes: [
         type: {:one_of, [:auto, :triggers]},
         doc: """

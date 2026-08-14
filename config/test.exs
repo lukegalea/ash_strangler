@@ -24,3 +24,7 @@ config :ash_strangler, AshStrangler.TestRepo,
 config :ash, disable_async?: true
 
 config :logger, level: :warning
+
+# Lets `mix ash.codegen` run against the fixture resources in the test
+# environment, so the generated migration itself can be inspected.
+config :ash_strangler, ash_domains: [AshStrangler.Test.Domain]

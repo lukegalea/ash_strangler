@@ -28,14 +28,15 @@ defmodule AshStrangler.Resource do
   use Spark.Dsl.Extension,
     sections: AshStrangler.Dsl.sections(),
     transformers: [
-      AshStrangler.Transformers.MarkKeyGenerated,
-      AshStrangler.Transformers.DeriveStatements
+      AshStrangler.Transformers.MarkKeyGenerated
     ],
     verifiers: [
       AshStrangler.Verifiers.VerifyCompleteMapping,
+      AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyTimestampZones,
       AshStrangler.Verifiers.VerifyWritableMappingsReversible,
       AshStrangler.Verifiers.VerifyNoUpserts,
+      AshStrangler.Verifiers.VerifyReverseMappable,
       AshStrangler.Verifiers.VerifyIdentitiesBacked,
       AshStrangler.Verifiers.VerifyPhaseTransition
     ]

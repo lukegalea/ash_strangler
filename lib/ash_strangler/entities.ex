@@ -53,6 +53,16 @@ end
 
 defmodule AshStrangler.Source do
   @moduledoc "The legacy relation a resource is mapped onto."
-  defstruct [:relation, :writes, :__spark_metadata__, mappings: [], indexes: [], keys: []]
+  defstruct [
+    :relation,
+    :writes,
+    :notify_channel,
+    :__spark_metadata__,
+    notify?: false,
+    mappings: [],
+    indexes: [],
+    keys: []
+  ]
+
   @type t :: %__MODULE__{}
 end

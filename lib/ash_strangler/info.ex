@@ -73,6 +73,32 @@ defmodule AshStrangler.Info do
     end
   end
 
+  @default_notify_channel "ash_strangler"
+
+  @doc """
+  The `pg_notify` channel this resource announces on.
+
+  One channel serves every resource by default, with the resource named in the
+  payload, because Postgres caps a channel name at 63 bytes and a
+  channel-per-resource would make a listener's `LISTEN` set grow with the
+  schema.
+  """
+  @spec notify_channel(Spark.Dsl.t() | Ash.Resource.t()) :: String.t()
+  def notify_channel(resource) do
+    case source(resource) do
+      %{notify_channel: channel} when is_binary(channel) -> channel
+      _ -> @default_notify_channel
+    end
+  end
+
+  @doc "The default channel, for a listener with no resource in hand yet."
+  @spec default_notify_channel() :: String.t()
+  def default_notify_channel, do: @default_notify_channel
+
+  @doc "True when the resource opted into `pg_notify` announcements."
+  @spec notify?(Spark.Dsl.t() | Ash.Resource.t()) :: boolean()
+  def notify?(resource), do: match?(%{notify?: true}, source(resource))
+
   defp derive_writes(source) do
     needs_triggers? =
       Enum.any?(source.mappings, fn

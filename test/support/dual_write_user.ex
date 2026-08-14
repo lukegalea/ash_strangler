@@ -31,6 +31,7 @@ defmodule AshStrangler.Test.DualWriteUser do
     table "dual_users"
     schema "strangler"
     repo AshStrangler.TestRepo
+    migrate? false
   end
 
   attributes do
@@ -59,6 +60,11 @@ defmodule AshStrangler.Test.DualWriteUser do
     phase :dual_write
 
     source "legacy.users" do
+      # Opted in so the notify trigger is generated and the listener has
+      # something real to receive. Off by default, because it costs the legacy
+      # application a pg_notify on every write.
+      notify? true
+
       key :id, from: "id", strategy: {:uuid_v5, namespace: @namespace}
 
       map :login, "login"

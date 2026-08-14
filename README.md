@@ -9,11 +9,8 @@ SPDX-License-Identifier: MIT
 Strangler-fig migrations for Ash: map an Ash resource onto a legacy Postgres
 schema and move it through the migration phases without hand-writing SQL.
 
-> **Alpha (0.1.0).** This version verifies mappings and phase declarations, and
-> generates both the compatibility view (`:read_from_legacy`) and the
-> `INSTEAD OF` triggers that carry writes back to legacy (`:dual_write`). It
-> does not yet do the `:read_from_new` reversal, backfill, or notifications.
-> See [Scope](#scope).
+> **Alpha (0.1.0).** All four phases generate SQL, and backfill, reconciliation
+> and notification bridging exist. The DSL will change. See [Scope](#scope).
 
 ## The problem
 
@@ -35,8 +32,10 @@ package makes the mapping declarative, and checks the parts that bite.
 | Generate views (`:read_from_legacy`) | ✅ |
 | Derive the modern key in Elixir, without a round trip | ✅ |
 | Generate `INSTEAD OF` triggers (`:dual_write`) | ✅ |
-| The reversed view (`:read_from_new`) | planned |
-| Backfill, reconciler, notifications | planned |
+| The reversed view (`:read_from_new`) | ✅ |
+| Resumable backfill | ✅ |
+| Reconciler (drift detection) | ✅ |
+| Notification bridge to `Ash.Notifier` | ✅ |
 
 Verification shipped first on purpose. It was useful on its own against a
 hand-written strangler migration, and it meant the generators got built against
@@ -92,20 +91,20 @@ defmodule MyApp.Accounts.User do
 end
 ```
 
-Add `postgres do table "users" ... end` as usual, then:
+Add `postgres do table "users"; schema "strangler"; repo MyApp.Repo;
+migrate? false end` — `migrate? false` is required and the compiler enforces it,
+for a reason worth reading below. Then:
 
 ```bash
 mix ash_strangler.check
-mix ash.codegen add_users_view
+mix ash_strangler.gen.migration
+mix ecto.migrate
 ```
 
-`ash.codegen` finds the view and its expression index through the ordinary
-`custom_statements` mechanism — no separate task, no separate migration
-folder:
+which generates:
 
 ```sql
--- statement :strangler_users_view
-CREATE OR REPLACE VIEW "public"."users" AS
+CREATE OR REPLACE VIEW "strangler"."users" AS
 SELECT
   uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid, 'legacy.users:' || id::text) AS id,
   id AS __legacy_id,
@@ -114,10 +113,29 @@ SELECT
   (deleted_at AT TIME ZONE 'UTC') AS archived_at
 FROM legacy.users;
 
--- statement :strangler_users_key_index
 CREATE INDEX IF NOT EXISTS strangler_users_key_idx ON legacy.users
   (uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid, 'legacy.users:' || id::text));
 ```
+
+## Why a separate task instead of `mix ash.codegen`
+
+Because there is no setting in which codegen can carry it. Both were tried
+against a real generated migration:
+
+| `migrate?` | What happens |
+|---|---|
+| `true` (the default) | codegen emits `create table` for the **view's own name**, then the view DDL fails against it. The migration cannot run. |
+| `false` | the resource produces no snapshot, and `custom_statements` are read only from snapshots — so the view, index and triggers are silently dropped. |
+
+So `migrate? false` is mandatory (`VerifyNotMigrated` enforces it, with that
+explanation in the error) and the DDL gets its own generator. This is the same
+position AshPostgres itself takes: `mix ash_postgres.gen.resources
+--include-views` writes `migrate? false` beside a comment saying migrations for
+views are handled manually. This package automates the manual part.
+
+Every generated statement is idempotent, so regenerating after a mapping change
+and running the new migration is the workflow. Never hand-edit a generated
+migration — the next regeneration will contradict it.
 
 `__legacy_id` is unused in this phase — `:read_from_legacy` is read-only, and
 the verifiers reject a write to it at compile time — but it costs nothing to
@@ -182,6 +200,98 @@ back to naive.
 The write path reverses this exactly, and has to: assigning a `timestamptz`
 into a naive column uses an assignment cast with the same session dependence,
 mirrored.
+
+## Moving through the phases
+
+`phase` is the one control knob; everything generated follows from it.
+
+| | `:read_from_legacy` | `:dual_write` | `:read_from_new` | `:decommissioned` |
+|---|---|---|---|---|
+| Source of truth | legacy | legacy | the new table | the new table |
+| The view is named for | the modern shape | the modern shape | the **legacy** shape | — |
+| `INSTEAD OF` triggers | none | only if the mapping needs them | on the legacy-named view | none |
+| `migrate?` | `false` | `false` | `true` | `true` |
+| Ash writes | rejected | through the view | direct to the table | direct |
+
+The view **flips direction, and its name flips with it**. In the last phase the
+old application still runs `SELECT * FROM users` unchanged — `users` is simply
+no longer a table. That is what makes cutover a migration rather than a
+coordinated deploy of two systems, and it is the single most valuable thing
+here.
+
+`:read_from_new` is the one-way door, so it is locked: a mapping that declared
+`writable? false` cannot be run backwards, which means the legacy columns behind
+it would read `NULL` for the old application from the moment of cutover.
+`VerifyReverseMappable` refuses the phase and names them.
+
+## Backfill
+
+Batched, resumable, and designed not to take the database down while it runs:
+
+```elixir
+AshStrangler.Backfill.add_flag_column!(MyApp.Repo, "legacy.users")
+AshStrangler.Backfill.run(MyApp.Repo,
+  relation: "legacy.users",
+  batch_size: 1_000,
+  progress: fn done, total -> IO.puts("#{done}/#{total}") end
+)
+```
+
+Two choices worth explaining, both borrowed from `pgroll` after reading its
+source:
+
+**A dedicated `_needs_backfill` flag column, not `WHERE new_col IS NULL`.** The
+`IS NULL` predicate is wrong the moment a target column's *correct* value can
+legitimately be null — which `unmapped ..., as: :null` guarantees — because then
+a finished row is indistinguishable from a pending one and the loop never
+terminates.
+
+**`FOR NO KEY UPDATE`, not `FOR UPDATE`**, so a batch does not block concurrent
+foreign-key checks against the rows it holds.
+
+Plus keyset pagination with one committed transaction per batch: a single large
+`UPDATE` holds row locks for the whole run, pins the global xmin so `VACUUM`
+reclaims nothing cluster-wide, and cannot be resumed.
+
+## Reconciler
+
+The drift detector, and the correctness oracle the tests use — deliberately the
+same code in both, because a reconciler that is only exercised by production is
+one nobody has proven can detect anything.
+
+```elixir
+AshStrangler.Reconciler.diff(MyApp.Repo, relation: "legacy.users", view: "strangler.users")
+```
+
+It takes per-column normalization, and that is not a nicety. Ash's own types
+transform values on write — `Ash.Type.CiString` trims by default — so a value
+written through Ash legitimately differs from the same value written by the old
+application. A reconciler that does not know this reports a wall of false
+positives on its first production run, which is how a drift detector gets
+switched off.
+
+## Notifications
+
+Opt in with `notify? true` on the source, then run the bridge:
+
+```elixir
+{AshStrangler.Listener, repo: MyApp.Repo, resources: [MyApp.Accounts.User]}
+```
+
+A legacy write becomes a real `Ash.Notifier.Notification`, re-read through Ash
+so calculations, policies and tenancy apply — which is the part no generic
+watcher can do, and the reason this is not simply `ecto_watch`. If you already
+run `ecto_watch`, prefer it for the transport and hand its key to
+`AshStrangler.Listener.notify/2`.
+
+The payload carries the key and nothing else. `pg_notify` has a 7999-**byte**
+ceiling and exceeding it is a hard error that aborts the transaction that issued
+it — which is the *legacy application's* transaction. A payload built from row
+data is a latent outage in the old system.
+
+Delivery is at-most-once and in-memory: fine for cache invalidation and LiveView
+reactivity, unacceptable as an audit trail. `LISTEN` is also session-scoped, so
+it does not work under pgbouncer transaction pooling.
 
 ## What the verifiers catch
 

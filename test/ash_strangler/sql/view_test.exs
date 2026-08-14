@@ -167,15 +167,39 @@ defmodule AshStrangler.Sql.ViewTest do
     end
   end
 
-  describe "the DeriveStatements transformer, incomplete mappings" do
-    test "fails the resource's own compilation, naming the unmapped attribute" do
-      # Unlike AshStrangler's verifiers (which run in a separate process after
-      # compilation and only fail a build under --warnings-as-errors -- see
-      # AshStrangler.VerifiersTest's moduledoc), a *transformer* returning
-      # `{:error, ...}` raises synchronously as part of compiling the
-      # `defmodule` itself. There is no partial view to emit, so this fails
-      # loudly and immediately rather than deferring to VerifyCompleteMapping.
-      assert_raise Spark.Error.DslError, ~r/:mystery/, fn ->
+  describe "incomplete mappings" do
+    test "building the view raises, naming every attribute with no legacy source" do
+      # Where this surfaces changed when the custom_statements path was
+      # removed. It used to raise while compiling the `defmodule`, because a
+      # transformer returning `{:error, ...}` does that. Now generation happens
+      # in `mix ash_strangler.gen.migration`, so the failure lands there --
+      # still before any SQL reaches a database, which is what matters.
+      #
+      # This is deliberately STRICTER than VerifyCompleteMapping, which exempts
+      # private attributes: a view's SELECT list has no such exemption.
+      resource =
+        define_resource!("""
+        attributes do
+          attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+          attribute :mystery, :string, public?: false
+        end
+
+        strangler do
+          phase :read_from_legacy
+
+          source "legacy.widgets" do
+            key :id, from: "id", strategy: :identity
+          end
+        end
+        """)
+
+      assert_raise ArgumentError, ~r/:mystery/, fn ->
+        AshStrangler.Migration.statements(resource)
+      end
+    end
+
+    test "a PUBLIC unmapped attribute is still caught at compile time by the verifier" do
+      resource =
         define_resource!("""
         attributes do
           attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
@@ -190,22 +214,22 @@ defmodule AshStrangler.Sql.ViewTest do
           end
         end
         """)
-      end
+
+      assert {:error, error} =
+               AshStrangler.Verifiers.VerifyCompleteMapping.verify(resource.spark_dsl_config())
+
+      assert Exception.message(error) =~ ":mystery"
     end
   end
 
-  describe "the DeriveStatements transformer" do
-    test "lands the view and index in [:postgres, :custom_statements]" do
-      names =
-        UuidV5User
-        |> AshPostgres.DataLayer.Info.custom_statements()
-        |> Enum.map(& &1.name)
+  describe "AshStrangler.Migration.statements/1" do
+    test "orders the view before its key index, so a migration runs top to bottom" do
+      names = UuidV5User |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
-      assert :strangler_users_view in names
-      assert :strangler_users_key_index in names
+      assert names == [:strangler_users_view, :strangler_users_key_index]
     end
 
-    test "does not touch custom_statements for a resource with the extension but no strangler mapping" do
+    test "returns nothing for a resource with the extension but no strangler mapping" do
       resource =
         define_resource!("""
         attributes do
@@ -213,7 +237,28 @@ defmodule AshStrangler.Sql.ViewTest do
         end
         """)
 
-      assert AshPostgres.DataLayer.Info.custom_statements(resource) == []
+      assert AshStrangler.Migration.statements(resource) == []
+    end
+
+    test "emits no custom_statements at all -- that path provably cannot work" do
+      # Recorded as a test because it was tried and shipped before being
+      # disproved. `migrate? true` makes ash.codegen emit a `create table` for
+      # the view's own name, so the view DDL then fails against it; `migrate?
+      # false` stops the resource producing a snapshot, and custom_statements
+      # are only read from snapshots. There is no setting in between, so the
+      # DDL goes through mix ash_strangler.gen.migration instead.
+      assert AshPostgres.DataLayer.Info.custom_statements(UuidV5User) == []
+    end
+
+    test "every statement is a single SQL command" do
+      # Ecto sends a migration's execute/1 string on the extended protocol,
+      # which rejects multiple commands with 42601. A statement carrying both a
+      # CREATE FUNCTION and its CREATE TRIGGER fails at migrate time, so this
+      # asserts the property rather than trusting it.
+      for statement <- AshStrangler.Migration.statements(UuidV5User) do
+        refute statement.up |> String.trim_trailing() |> String.trim_trailing(";") =~ ";",
+               "#{statement.name} up carries more than one command:\n#{statement.up}"
+      end
     end
   end
 
