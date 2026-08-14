@@ -95,24 +95,44 @@ defmodule AshStrangler.RoundTripTest do
       assert collides?
     end
 
-    test "does NOT fold whitespace or non-ASCII case" do
-      # citext folds through SQL `lower()`, which under this cluster's collation
-      # touches only ASCII. A developer reading "case-insensitive" will assume
-      # otherwise, and an ASCII-only test will never contradict them -- so the
-      # negative case is asserted explicitly.
-      for {left, right} <- [
-            {" alice", "alice"},
-            {"alice ", "alice"},
-            {"İstanbul", "istanbul"},
-            {"Straße", "STRASSE"},
-            # NFC vs NFD of the same visual string, escaped so the two are
-            # distinguishable in source.
-            {"caf\u00E9", "cafe\u0301"}
-          ] do
-        %Postgrex.Result{rows: [[equal?]]} =
-          TestRepo.query!("SELECT $1::citext = $2::citext", [left, right])
+    test "never folds whitespace, under any collation" do
+      # Invariant. citext folds case, never whitespace, so leading and trailing
+      # padding keeps rows distinct that a human would call duplicates.
+      for {left, right} <- [{" alice", "alice"}, {"alice ", "alice"}, {"alice", "ALICE "}] do
+        refute citext_equal?(left, right),
+               "expected #{inspect(left)} and #{inspect(right)} to stay distinct"
+      end
+    end
 
-        refute equal?, "expected #{inspect(left)} and #{inspect(right)} to stay distinct"
+    test "never folds NFC against NFD, under any collation" do
+      # Also invariant: citext does no Unicode normalization. These two render
+      # identically and are unequal under `=`, under citext, and therefore under
+      # any Ash identity built on the column.
+      refute citext_equal?("caf\u00E9", "cafe\u0301")
+    end
+
+    test "folds non-ASCII case only when the database collation does" do
+      # **This is a portability hazard, not a curiosity.** citext folds by
+      # calling SQL `lower()`, which follows the database's LC_CTYPE. Under `C`
+      # only ASCII folds; under a UTF-8 locale, Turkish dotted I and friends fold
+      # too. So the SAME mapping gives a different uniqueness answer on two
+      # servers -- and a strangler migration is precisely a situation with two
+      # servers involved.
+      #
+      # Found by CI: this suite asserted the `C` behaviour it saw locally and
+      # failed on postgres:16, whose default collation is a UTF-8 locale. The
+      # test now asserts the DEPENDENCY, so it is honest on either.
+      %Postgrex.Result{rows: [[collation]]} =
+        TestRepo.query!("SELECT datctype FROM pg_database WHERE datname = current_database()", [])
+
+      c_locale? = collation in ["C", "POSIX", "C.UTF-8", "C.utf8"]
+
+      folds? = citext_equal?("\u0130stanbul", "istanbul")
+
+      if c_locale? do
+        refute folds?, "under #{collation} citext should fold only ASCII"
+      else
+        assert folds?, "under #{collation} citext should fold non-ASCII case too"
       end
     end
   end
@@ -155,6 +175,13 @@ defmodule AshStrangler.RoundTripTest do
       TestRepo.query!("SELECT login FROM legacy.users WHERE id = $1", [legacy_id])
 
     login
+  end
+
+  defp citext_equal?(left, right) do
+    %Postgrex.Result{rows: [[equal?]]} =
+      TestRepo.query!("SELECT $1::citext = $2::citext", [left, right])
+
+    equal?
   end
 
   defp ci_to_string(nil), do: nil

@@ -104,7 +104,16 @@ incomplete backfill produces missing rows, not an error.
     `writable? false` mapping blocks the phase by design — do not work around
     `VerifyReverseMappable`, carry the legacy columns across instead.
 
-15. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
+15. **`cast: :citext` folds differently depending on the database collation.**
+    citext folds by calling SQL `lower()`, which follows `LC_CTYPE`. Under `C`
+    only ASCII folds; under a UTF-8 locale non-ASCII case folds too. The same
+    mapping therefore gives a *different uniqueness answer* on two servers —
+    and a strangler migration has two servers in it by definition. Check the
+    collation on both before relying on a citext identity, and never assume
+    what holds in development holds in production. It never folds whitespace,
+    and never normalizes NFC against NFD, under any collation.
+
+16. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
     a `pg_notify` payload from row data: the ceiling is 7999 bytes and
     exceeding it aborts the *legacy application's* transaction. Never use them
     to count writes — Postgres collapses duplicates within a transaction.
