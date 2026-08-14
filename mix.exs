@@ -15,14 +15,19 @@ defmodule AshStrangler.MixProject do
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
+      aliases: aliases(),
       deps: deps(),
       description:
         "Strangler-fig migrations for Ash: map an Ash resource onto a legacy Postgres schema " <>
           "and move it through the migration phases without hand-writing SQL.",
       package: package(),
-      docs: docs(),
+      # Deferred on purpose. `docs/0` calls `Spark.Docs.search_data_for/1`, which
+      # introspects the compiled extension -- evaluating it eagerly would run it
+      # on every `mix` invocation, including the ones that have not compiled yet.
+      docs: &docs/0,
       name: "AshStrangler",
       source_url: @source_url,
+      homepage_url: @source_url,
       dialyzer: [
         plt_add_apps: [:mix, :ex_unit],
         plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
@@ -63,24 +68,78 @@ defmodule AshStrangler.MixProject do
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      # The Ash CI workflow runs `mix igniter.upgrade` on dependabot pull
+      # requests, and the ecosystem's installer convention (`mix igniter.install
+      # ash_strangler`) is built on it.
+      {:igniter, "~> 0.6", only: [:dev, :test]},
+      # Backs the unconditional `mix deps.audit` step in the shared Ash CI
+      # workflow's `audit` job.
+      {:mix_audit, ">= 0.0.0", only: [:dev, :test], runtime: false}
     ]
   end
 
   defp package do
     [
+      maintainers: ["Luke Galea <luke@ideaforge.org>"],
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files:
-        ~w(lib .formatter.exs mix.exs README.md LICENSE LICENSE.license LICENSES usage-rules.md)
+      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE LICENSE.license LICENSES
+        usage-rules.md documentation),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md",
+        "Discord" => "https://discord.gg/HTHRaaVPUc",
+        "Website" => "https://ash-hq.org",
+        "Forum" => "https://elixirforum.com/c/elixir-framework-forums/ash-framework-forum",
+        "REUSE Compliance" => "https://api.reuse.software/info/github.com/lukegalea/ash_strangler"
+      }
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "usage-rules.md"],
-      source_ref: "v#{@version}"
+      source_ref: "v#{@version}",
+      extra_section: "GUIDES",
+      extras: [
+        {"README.md", title: "Home"},
+        "usage-rules.md",
+        {"documentation/dsls/DSL-AshStrangler.Resource.md",
+         search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},
+        "CHANGELOG.md"
+      ],
+      groups_for_extras: [
+        Tutorials: ~r'documentation/tutorials',
+        "How To": ~r'documentation/how_to',
+        Topics: ~r'documentation/topics',
+        DSLs: ~r'documentation/dsls',
+        "About AshStrangler": [
+          "CHANGELOG.md",
+          "usage-rules.md"
+        ]
+      ],
+      groups_for_modules: [
+        Dsl: [
+          AshStrangler.Resource
+        ],
+        Introspection: [
+          AshStrangler.Info
+        ],
+        Internals: ~r/.*/
+      ]
+    ]
+  end
+
+  defp aliases do
+    [
+      credo: "credo --strict",
+      docs: [
+        "spark.cheat_sheets",
+        "docs",
+        "spark.replace_doc_links"
+      ],
+      "spark.formatter": "spark.formatter --extensions AshStrangler.Resource",
+      "spark.cheat_sheets": "spark.cheat_sheets --extensions AshStrangler.Resource"
     ]
   end
 end

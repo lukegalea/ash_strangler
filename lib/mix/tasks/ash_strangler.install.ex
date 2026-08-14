@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
+if Code.ensure_loaded?(Igniter) do
+  defmodule Mix.Tasks.AshStrangler.Install do
+    @shortdoc "Installs AshStrangler. Invoked by `mix igniter.install ash_strangler`"
+
+    @moduledoc """
+    Wires AshStrangler into a project.
+
+    Does one thing, and it is the one thing nobody remembers to do by hand:
+    adds `:ash_strangler` to `import_deps` in the project's `.formatter.exs`.
+    Without it the formatter does not know the `strangler` DSL and rewrites
+    `map :email, "email"` into `map(:email, "email")` on the first save — which
+    is not wrong, exactly, but it makes every mapping unreadable and produces a
+    diff nobody wants to review.
+
+    Deliberately does **not** add a supervision-tree child.
+    `AshStrangler.Listener` is opt-in, needs a repo and a resource list, and
+    only makes sense once a resource has declared `notify? true`.
+    """
+
+    use Igniter.Mix.Task
+
+    @impl Igniter.Mix.Task
+    def info(_argv, _composing_task) do
+      %Igniter.Mix.Task.Info{group: :ash}
+    end
+
+    @impl Igniter.Mix.Task
+    def igniter(igniter) do
+      Igniter.Project.Formatter.import_dep(igniter, :ash_strangler)
+    end
+  end
+else
+  defmodule Mix.Tasks.AshStrangler.Install do
+    @shortdoc "Installs AshStrangler | Install `igniter` to use"
+
+    @moduledoc @shortdoc
+
+    use Mix.Task
+
+    @impl Mix.Task
+    def run(_argv) do
+      Mix.shell().error("""
+      The task 'ash_strangler.install' requires igniter. Please install igniter and try again.
+
+      For more information, see: https://hexdocs.pm/igniter/readme.html#installation
+      """)
+
+      exit({:shutdown, 1})
+    end
+  end
+end

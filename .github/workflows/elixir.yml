@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Luke Galea
+#
+# SPDX-License-Identifier: MIT
+
+name: CI
+on:
+  push:
+    tags:
+      - "v*"
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+jobs:
+  ash-ci:
+    uses: ash-project/ash/.github/workflows/ash-ci.yml@main
+    # The union of what the reusable workflow's own jobs ask for:
+    # `contents: write` (dependency submission, igniter upgrade commits, hex
+    # publish, github release), `security-events: write` (the credo SARIF
+    # upload) and `pages: write` + `id-token: write` (the docs deploy). A
+    # called workflow can only ever narrow what the caller grants, so anything
+    # missing here is silently dropped rather than reported.
+    permissions:
+      contents: write
+      security-events: write
+      pages: write
+      id-token: write
+    with:
+      # The suite is not a mock. `test/support/legacy_schema.ex` installs a real
+      # legacy schema, and the round-trip property tests read back through a
+      # generated Postgres view, so a live server is mandatory.
+      postgres: true
+      # 14 is the floor the test repo declares (`CREATE OR REPLACE TRIGGER`
+      # first appears there). 16 is what the sibling extensions pin, and the
+      # stock `postgres:16` image ships the `uuid-ossp` and `citext` contrib
+      # modules the fixture schema creates.
+      postgres-version: "16"
+      # Both false: `test/test_helper.exs` provisions its own database
+      # (`Ecto.Adapters.Postgres.storage_up/1`) and installs the fixture schema
+      # itself, so the workflow's `ecto.create` / `ash_postgres.create` and
+      # migrate steps have nothing to do. AshPostgres is an *optional*
+      # dependency here, which also makes `ash_postgres.generate_migrations
+      # --check` the wrong gate for this repo.
+      ash_postgres: false
+      ecto_postgres: false
+      # No multitenancy: nothing in the extension is tenant-scoped.
+      tenants: false
+      # Sobelow scans Phoenix applications for web vulnerabilities. This is a
+      # DSL extension with no web surface, and the package carries no sobelow
+      # dependency for the step to invoke.
+      sobelow: false
+      # See CHANGELOG.md. The shared lint rejects `## [Unreleased]` sections
+      # because ash-project repos generate their changelogs from conventional
+      # commits with git_ops. This package has not adopted git_ops and has not
+      # cut a release yet, so it keeps a hand-written Unreleased section. Flip
+      # this back to `true` (and drop the section) when git_ops lands.
+      changelog-lint: false
+      # The repository is REUSE-annotated: SPDX headers throughout, LICENSES/,
+      # and .license sidecars.
+      reuse: true
+      # Deliberately not set: `rustler-precompiled-module` and `rust-crate-dir`.
+      # There are no Rust NIFs, and leaving them unset skips the `rust-check`
+      # and `build-release` jobs entirely.
+    secrets:
+      HEX_API_KEY: ${{ secrets.HEX_API_KEY }}

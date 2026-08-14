@@ -257,6 +257,40 @@ defmodule AshStrangler.BackfillTest do
       assert counters() == %{1 => 7}
     end
 
+    test "refuses to spin when something re-flags the rows it just finished" do
+      # The realistic version of "this never terminates": a trigger on the
+      # legacy table that fires on the backfill's own UPDATE and puts the flag
+      # back. Every pass then does real work, updates real rows and reports
+      # real progress -- nothing in the counters ever looks wrong, and the job
+      # simply never ends. A backfill that hangs is indistinguishable from one
+      # that is merely slow, which is why this raises instead.
+      seed!(4)
+      Backfill.add_flag_column!(TestRepo, @relation)
+
+      TestRepo.query!(
+        """
+        CREATE FUNCTION backfill_test.reflag() RETURNS trigger AS $$
+        BEGIN
+          NEW."#{Backfill.flag_column()}" := true;
+          RETURN NEW;
+        END $$ LANGUAGE plpgsql
+        """,
+        []
+      )
+
+      TestRepo.query!(
+        """
+        CREATE TRIGGER reflag BEFORE UPDATE ON backfill_test.widgets
+          FOR EACH ROW EXECUTE FUNCTION backfill_test.reflag()
+        """,
+        []
+      )
+
+      assert_raise RuntimeError, ~r/started a second pass at key 1/, fn ->
+        Backfill.run(TestRepo, increment_config(batch_size: 2))
+      end
+    end
+
     test "reports progress against a total, falling back to count(*) with no statistics" do
       seed!(4)
       Backfill.add_flag_column!(TestRepo, @relation)

@@ -74,9 +74,7 @@ defmodule AshStrangler.Sql.View do
     view_name = ~s("#{schema}"."#{table}")
 
     column_lines =
-      columns
-      |> Enum.map(fn {expr, attribute} -> "  #{expr} AS #{attribute}" end)
-      |> Enum.join(",\n")
+      Enum.map_join(columns, ",\n", fn {expr, attribute} -> "  #{expr} AS #{attribute}" end)
 
     up = """
     CREATE OR REPLACE VIEW #{view_name} AS

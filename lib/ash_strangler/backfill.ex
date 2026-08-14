@@ -252,41 +252,41 @@ defmodule AshStrangler.Backfill do
   # every time the job restarts.
   defp start_pass(repo, config, state) do
     case min_pending_key(repo, config) do
-      nil ->
-        %{state | complete?: true}
-
-      key when key == :erlang.map_get(:pass_start, state) ->
-        # A pass already cleared this row's flag, and the row is pending again.
-        # Clearing the flag is durable, so the only ways back are something
-        # re-setting it -- a trigger on the legacy table that fires on the
-        # backfill's own UPDATE is the realistic one -- or the key being
-        # deleted and reinserted.
-        #
-        # Both loop forever otherwise: every pass does real work, updates real
-        # rows and reports real progress, so nothing in the counters ever looks
-        # wrong. The job simply never finishes.
-        raise """
-        AshStrangler.Backfill started a second pass at key #{inspect(key)}, which a \
-        previous pass had already marked as done.
-
-        Something is setting "#{config.flag}" back to true on #{config.relation} -- \
-        most likely a trigger that fires on this backfill's own UPDATE. Left alone \
-        this is an infinite loop that looks exactly like a slow backfill.
-        """
-
-      key ->
-        # `>=` for the first batch of a pass because `key` is itself pending;
-        # `>` from then on. Keeping the cursor semantics in the operator rather
-        # than in a "have I started yet" flag is what lets one SQL template
-        # serve both.
-        loop(repo, config, %{
-          state
-          | cursor: key,
-            op: ">=",
-            pass_start: key,
-            passes: state.passes + 1
-        })
+      nil -> %{state | complete?: true}
+      key -> open_pass(repo, config, state, key)
     end
+  end
+
+  # A pass already cleared this row's flag, and the row is pending again.
+  # Clearing the flag is durable, so the only ways back are something re-setting
+  # it -- a trigger on the legacy table that fires on the backfill's own UPDATE
+  # is the realistic one -- or the key being deleted and reinserted.
+  #
+  # This loops forever otherwise, and does so invisibly: every pass does real
+  # work, updates real rows and reports real progress, so nothing in the
+  # counters ever looks wrong. The job simply never finishes.
+  defp open_pass(_repo, config, %{pass_start: pass_start}, key) when key == pass_start do
+    raise """
+    AshStrangler.Backfill started a second pass at key #{inspect(key)}, which an
+    earlier pass had already marked as done.
+
+    Something is setting "#{config.flag}" back to true on #{config.relation} --
+    most likely a trigger that fires on this backfill's own UPDATE. Left alone
+    this is an infinite loop that looks exactly like a slow backfill.
+    """
+  end
+
+  defp open_pass(repo, config, state, key) do
+    # `>=` for the first batch of a pass because `key` is itself pending; `>`
+    # from then on. Keeping the cursor semantics in the operator rather than in
+    # a "have I started yet" flag is what lets one SQL template serve both.
+    loop(repo, config, %{
+      state
+      | cursor: key,
+        op: ">=",
+        pass_start: key,
+        passes: state.passes + 1
+    })
   end
 
   defp run_batch(repo, config, state) do
