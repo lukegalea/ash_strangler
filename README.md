@@ -293,6 +293,88 @@ defmodule MyApp.Sales.Customer do
 end
 ```
 
+### And here is what that mapping actually does
+
+The mapping is the one part of this everybody has to agree about and nobody can
+hold in their head. It is already declared in one place, so it can be **drawn**
+from that declaration — `mix ash_strangler.gen.diagram` renders the block above,
+not a picture of it:
+
+```mermaid
+flowchart LR
+  subgraph legacy_demo_legacy_accounts ["demo_legacy.accounts"]
+    direction TB
+    l_demo_legacy_accounts__id["id"]
+    l_demo_legacy_accounts__email["email"]
+    l_demo_legacy_accounts__first_name["first_name"]
+    l_demo_legacy_accounts__last_name["last_name"]
+    l_demo_legacy_accounts__is_deleted["is_deleted"]
+    l_demo_legacy_accounts__cancelled_at["cancelled_at"]
+    l_demo_legacy_accounts__approved_at["approved_at"]
+    l_demo_legacy_accounts__id ~~~ l_demo_legacy_accounts__email
+    l_demo_legacy_accounts__email ~~~ l_demo_legacy_accounts__first_name
+    l_demo_legacy_accounts__first_name ~~~ l_demo_legacy_accounts__last_name
+    l_demo_legacy_accounts__last_name ~~~ l_demo_legacy_accounts__is_deleted
+    l_demo_legacy_accounts__is_deleted ~~~ l_demo_legacy_accounts__cancelled_at
+    l_demo_legacy_accounts__cancelled_at ~~~ l_demo_legacy_accounts__approved_at
+  end
+  t_customer__id{{"uuid_v5(ns, 'demo_legacy.accounts:' || id)"}}
+  t_customer__full_name{{"coalesce(first_name,'') || ' ' || coalesce(last_name,'')"}}
+  t_customer__status{{"CASE WHEN is_deleted THEN 'archived' WHEN cancelled_at IS..."}}
+  t_customer__organization_id{{"uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid..."}}
+  t_customer__id ~~~ t_customer__full_name
+  t_customer__full_name ~~~ t_customer__status
+  t_customer__status ~~~ t_customer__organization_id
+  subgraph resource_customer ["Customer - demo.customers (view) - writes: auto"]
+    direction TB
+    n_customer__id(["id : UUID PK"])
+    n_customer__email(["email : CiString"])
+    n_customer__full_name(["full_name : String"])
+    n_customer__status(["status : Atom [pending, active, cancelled, archived]"])
+    n_customer__organization_id(["organization_id : UUID"])
+    n_customer__id ~~~ n_customer__email
+    n_customer__email ~~~ n_customer__full_name
+    n_customer__full_name ~~~ n_customer__status
+    n_customer__status ~~~ n_customer__organization_id
+  end
+  l_demo_legacy_accounts__id --> t_customer__id
+  t_customer__id ==>|"key"| n_customer__id
+  l_demo_legacy_accounts__email <-->|"::citext"| n_customer__email
+  l_demo_legacy_accounts__first_name --> t_customer__full_name
+  l_demo_legacy_accounts__last_name --> t_customer__full_name
+  t_customer__full_name -.->|"read only - Not decomposable: 'de la Cruz' splits wrong, and no..."| n_customer__full_name
+  l_demo_legacy_accounts__is_deleted --> t_customer__status
+  l_demo_legacy_accounts__cancelled_at --> t_customer__status
+  l_demo_legacy_accounts__approved_at --> t_customer__status
+  t_customer__status -.->|"read only - Four legacy columns with no single inverse. Supply..."| n_customer__status
+  l_demo_legacy_accounts__id --> t_customer__organization_id
+  t_customer__organization_id -.->|"read only - Derived from the same legacy row; the split is..."| n_customer__organization_id
+```
+
+Three columns converge on one hexagon and come out as `status`; that is the
+lifecycle collapse, drawn. The dotted arrows are the read-only mappings, each
+labelled with its own `because:` — so the diagram carries the *reason* a value
+cannot travel back, which is the question anyone reading it is about to ask.
+Solid double-headed arrows are the mappings that do travel back.
+
+The whole notation is four shapes and four line styles:
+
+| | |
+|---|---|
+| rectangle | a legacy column |
+| stadium | a resource attribute |
+| hexagon | a transformation — an expression, a key derivation, a constant |
+| `==>` | structural: the key, or a constant with no legacy source |
+| `<-->` | writable — the value travels in both directions |
+| `-->` | a column feeding a transformation |
+| `-.->` | read-only, labelled with the mapping's own `because:` |
+
+No colours anywhere, deliberately: GitHub only adapts a diagram to dark mode
+when the diagram does not pin its own palette. Plain 1:1 mappings are gathered
+into one node rather than drawn individually — a rename is not a transformation,
+and a dozen of them drawn out buries the one thing worth looking at. Pass
+`--verbose` when you want them all.
+
 The employer buried in the same table becomes its own resource, with its own
 view over the same rows:
 
@@ -422,10 +504,62 @@ erDiagram
   }
   "AshStrangler.Demo.Customer" |o--o{ "AshStrangler.Demo.Organization" : ""
   "AshStrangler.Demo.Address" |o--|| "AshStrangler.Demo.Customer" : ""
+  "demo_legacy.accounts"["demo_legacy.accounts"] {
+    column addr_city
+    column addr_line1
+    column approved_at
+    column cancelled_at
+    column company_name
+    column company_vat
+    column email
+    column first_name
+    column id
+    column is_deleted
+    column last_name
+  }
+  "demo_legacy.accounts" ||..o{ "AshStrangler.Demo.Address" : "strangler"
+  "demo_legacy.accounts" ||..o{ "AshStrangler.Demo.Customer" : "strangler"
+  "demo_legacy.accounts" ||..o{ "AshStrangler.Demo.Organization" : "strangler"
 ```
 
 Separate entities, real relationships, typed attributes — over exactly the same
 rows, with the old application still running against them untouched.
+
+The legacy table is in that picture because `AshStrangler.Resource` implements
+`ash_diagram`'s extension hook, so a strangled resource carries its source into
+*any* diagram drawn of the application — including the ones `mix
+ash.generate_resource_diagrams` and [Clarity](https://hex.pm/packages/clarity)
+produce, neither of which knows this package exists. For as long as the
+migration runs, the old table is part of the data model, and a diagram that
+leaves it out is describing a system that does not exist yet. Only the columns
+the mapping actually names appear: `is_active` is absent because nothing reads
+it, which is the sort of thing you want to find out from a picture.
+
+And the same three resources, from further back — one table, three views, which
+way writes flow, and how far along each one is:
+
+```mermaid
+flowchart LR
+  subgraph legacy ["Legacy schema"]
+    direction TB
+    rel_demo_legacy_accounts[("demo_legacy.accounts")]
+  end
+  subgraph strangled ["The strangled model - phase: read_from_legacy"]
+    direction TB
+    res_customer["Customer - demo.customers (view) - writes: auto"]
+    res_organization["Organization - demo.organizations (view) - writes: auto"]
+    res_address["Address - demo.addresses (view) - writes: auto"]
+    res_customer ~~~ res_organization
+    res_organization ~~~ res_address
+  end
+  rel_demo_legacy_accounts <-->|"4 mapped, 3 read only"| res_customer
+  rel_demo_legacy_accounts <-->|"2 mapped"| res_organization
+  rel_demo_legacy_accounts <-->|"2 mapped"| res_address
+```
+
+That is `mix ash_strangler.gen.diagram --type overview`, and it is the one that
+stays readable for a whole application. A column-level diagram of every mapping
+at once is a picture of nothing.
 
 **And the lifecycle**, as `ash_state_machine` renders it — four contradictory
 columns turned into a machine that can be reasoned about:
@@ -490,6 +624,7 @@ systems** — which is the most valuable thing here.
 | | |
 |---|---|
 | **`mix ash_strangler.check`** | Runs your new model's assertions against the *legacy data* before you generate anything. NULLs where you declared `allow_nil? false`? Duplicates under your new identity? Values that will not cast? |
+| **`mix ash_strangler.gen.diagram`** | Draws the mapping from the declaration — per resource, or `--type overview` for the whole application. `--format md` for a README, `svg`/`png`/`pdf` for everywhere else. A generated picture cannot drift from the mapping the way one in a wiki does. |
 | **Backfill** | Batched and resumable, built not to take the database down: keyset pagination, one transaction per batch, and a flag column rather than a predicate that cannot terminate. |
 | **Reconciler** | Counts and per-batch checksums across both shapes, with per-column normalization — because Ash's own types transform values on write, and without that the first run is a wall of false positives. |
 

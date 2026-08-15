@@ -23,6 +23,19 @@ The checks were shipped first and stayed useful on their own against a
 hand-written strangler migration; the generator is built against that oracle
 rather than alongside it.
 
+## Diagrams
+
+When the optional `:ash_diagram` dependency is present this extension also
+implements `AshDiagram.Data.Extension`, so a strangled resource carries its
+legacy source into any entity-relationship diagram drawn of the application —
+including the ones `mix ash.generate_resource_diagrams` and `Clarity` produce,
+neither of which knows this package exists.
+
+That is the point of the hook: the legacy table is part of the data model for
+as long as the migration runs, and a diagram that omits it is describing a
+system that does not exist yet. For the mapping itself, drawn column by
+column, see `AshStrangler.Diagram.Mapping`.
+
 
 ## strangler
 Maps this resource onto a legacy relation, and declares which migration

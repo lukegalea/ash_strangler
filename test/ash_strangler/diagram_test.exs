@@ -23,6 +23,41 @@ defmodule AshStrangler.DiagramTest do
 
   defp readme, do: File.read!(@readme)
 
+  test "the mapping diagram matches the mapping" do
+    rendered =
+      [AshStrangler.Demo.Customer]
+      |> AshStrangler.Diagram.Mapping.for_resources()
+      |> AshDiagram.compose()
+      |> IO.iodata_to_binary()
+      |> String.trim()
+
+    assert String.contains?(readme(), rendered), """
+    The README's mapping diagram no longer matches Customer's `strangler` block.
+
+    Replace the `flowchart LR` block under "And here is what that mapping
+    actually does" with:
+
+    #{rendered}
+    """
+  end
+
+  test "the overview diagram matches the domain" do
+    rendered =
+      [AshStrangler.Demo.Domain]
+      |> AshStrangler.Diagram.Overview.for_domains()
+      |> AshDiagram.compose()
+      |> IO.iodata_to_binary()
+      |> String.trim()
+
+    assert String.contains?(readme(), rendered), """
+    The README's overview diagram no longer matches the domain.
+
+    Replace the `flowchart LR` block under "What that actually bought you" with:
+
+    #{rendered}
+    """
+  end
+
   test "the entity-relationship diagram matches the model" do
     rendered =
       [AshStrangler.Demo.Domain]

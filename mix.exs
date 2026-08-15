@@ -64,11 +64,18 @@ defmodule AshStrangler.MixProject do
       # rejects a narrower `:only` than a dependency's own dependents declare
       # with "dependencies have diverged".
       {:stream_data, "~> 1.0"},
-      # Doc-generation only. The README's diagrams are real generator output --
+      # Optional rather than dev-only, because `AshStrangler.Diagram.Mapping`
+      # and `mix ash_strangler.gen.diagram` are built on it and a consumer has
+      # to be able to reach them. Optional keeps it out of the dependency tree
+      # of anyone who only wants the checks and the SQL: the diagram modules are
+      # guarded with `Code.ensure_compiled/1` and are simply not compiled
+      # without it, the same way `AshDiagram.Renderer.CLI` guards `:ex_cmd`.
+      #
+      # The README's diagrams are real generator output -- the mapping diagram,
       # the entity-relationship diagram of the modernised model and the state
       # machine chart -- rather than hand-drawn approximations of it, and a test
-      # asserts they still match. Neither ships to consumers.
-      {:ash_diagram, "~> 0.2", only: [:dev, :test]},
+      # asserts they still match.
+      {:ash_diagram, "~> 0.2", optional: true},
       {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
       # Required by Spark.Formatter, which formats the DSL blocks.
       {:sourceror, "~> 1.7", only: [:dev, :test]},
@@ -136,10 +143,60 @@ defmodule AshStrangler.MixProject do
         Introspection: [
           AshStrangler.Info
         ],
+        Diagrams: [
+          AshStrangler.Diagram.Mapping,
+          AshStrangler.Diagram.Overview,
+          AshStrangler.Diagram.Sql
+        ],
         Internals: ~r/.*/
-      ]
+      ],
+      before_closing_body_tag: &before_closing_body_tag/1
     ]
   end
+
+  # ex_doc has no built-in Mermaid support and never has -- it is documentation
+  # only, and the script below is what its README tells you to inject. Without
+  # it every diagram in this project renders on HexDocs as a wall of raw
+  # `flowchart LR` source, which is worse than no diagram.
+  #
+  # `startOnLoad: false` with an explicit render pass, rather than the simpler
+  # `startOnLoad: true`, because ex_doc is a single-page application: the
+  # `exdoc:loaded` event fires again on navigation, and the one-shot version
+  # leaves every page after the first unrendered.
+  defp before_closing_body_tag(:html) do
+    """
+    <script defer src="https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.min.js"></script>
+    <script>
+      let initialized = false;
+
+      window.addEventListener("exdoc:loaded", () => {
+        if (!initialized) {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: document.body.className.includes("dark") ? "dark" : "default"
+          });
+          initialized = true;
+        }
+
+        let id = 0;
+        for (const codeEl of document.querySelectorAll("pre code.mermaid")) {
+          const preEl = codeEl.parentElement;
+          const graphDefinition = codeEl.textContent;
+          const graphEl = document.createElement("div");
+          const graphId = "mermaid-graph-" + id++;
+          mermaid.render(graphId, graphDefinition).then(({svg, bindFunctions}) => {
+            graphEl.innerHTML = svg;
+            bindFunctions?.(graphEl);
+            preEl.insertAdjacentElement("afterend", graphEl);
+            preEl.remove();
+          });
+        }
+      });
+    </script>
+    """
+  end
+
+  defp before_closing_body_tag(_format), do: ""
 
   defp aliases do
     [

@@ -46,6 +46,33 @@ summarised from the commit history.
 - `mix ash_strangler.check`, a pre-flight task that runs the verifiers over a
   set of resources without compiling a migration.
 
+- Diagrams generated from the mapping, since it is already declared in one
+  place and a picture maintained separately is a second description with
+  nothing keeping it honest. `mix ash_strangler.gen.diagram` renders either a
+  column-level `AshStrangler.Diagram.Mapping` per resource — legacy columns,
+  the transformations between, and one edge per mapping carrying its cast, its
+  writability and its `because:` — or an `AshStrangler.Diagram.Overview` of
+  which relations feed which resources, which is the one that stays readable
+  for a whole application. Plain 1:1 mappings collapse into a single node by
+  default, because a rename is not a transformation and a dozen of them drawn
+  out buries the ones that are; `--verbose` expands them.
+
+- `AshStrangler.Resource` now implements `AshDiagram.Data.Extension`, so a
+  strangled resource carries its legacy source into any entity-relationship
+  diagram drawn of the application — including those produced by
+  `mix ash.generate_resource_diagrams` and Clarity, neither of which knows this
+  package exists. A Clarity content provider surfaces the mapping directly.
+
+- `:ash_diagram` moved from a dev-only dependency to an optional one, so
+  consumers can reach the diagram modules. They are guarded with
+  `Code.ensure_compiled/1` and are simply not compiled without it.
+
+### Fixed:
+
+- HexDocs rendered every Mermaid diagram in the documentation as raw source.
+  ex_doc has no built-in Mermaid support; the renderer script it documents is
+  now injected via `before_closing_body_tag`.
+
 ### Testing:
 
 - A round-trip property harness backed by a real Postgres server: a legacy

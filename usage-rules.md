@@ -123,6 +123,13 @@ incomplete backfill produces missing rows, not an error.
     more than one row per primary row makes the view return duplicates for a
     single primary key, and only real data can reveal that.
 
+17. **Never hand-draw a diagram of a mapping.** `mix ash_strangler.gen.diagram`
+    renders it from the declaration — per resource, or `--type overview` for the
+    whole application. A drawing made by hand is a second description of the
+    mapping with nothing keeping it honest, which is the exact failure the
+    `strangler` block exists to prevent. If a diagram in a README or a document
+    is wrong, regenerate it; do not edit the picture.
+
 17. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
     a `pg_notify` payload from row data: the ceiling is 7999 bytes and
     exceeding it aborts the *legacy application's* transaction. Never use them
