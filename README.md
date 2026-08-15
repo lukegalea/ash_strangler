@@ -65,6 +65,115 @@ tenancy all apply — which means your new LiveViews update in real time in
 response to writes made by the *old* system. You get the modern experience
 before you have migrated anything.
 
+## Declare it once, derive the rest
+
+This is the Ash bargain, applied one layer lower.
+
+In Ash you describe *what* a resource is and the framework derives the rest — the
+queries, the changesets, the API, the policies. You do not hand-write the
+plumbing, so the plumbing cannot drift from the description.
+
+A schema migration normally has no such description. The mapping between the old
+shape and the new one lives in four places at once — a migration, a trigger
+function, an application model, and a runbook — and nothing keeps them agreeing.
+They drift, quietly, and the first symptom is wrong data.
+
+So the mapping becomes **one declaration**, and everything else is derived from
+it:
+
+```mermaid
+flowchart LR
+    dsl["<b>strangler do … end</b><br/><i>declared once,<br/>on the resource</i>"]
+
+    dsl --> v["The compatibility view"]
+    dsl --> t["INSTEAD OF triggers<br/><i>only where required</i>"]
+    dsl --> i["The expression index<br/><i>that keeps lookups fast</i>"]
+    dsl --> b["A resumable backfill"]
+    dsl --> r["A drift reconciler"]
+    dsl --> n["The notification bridge"]
+    dsl --> c["Compile-time checks<br/><i>that reject bad mappings</i>"]
+```
+
+One description, one source of truth, and nothing to keep in sync by hand.
+
+## What that gets you: both directions, live
+
+Once that declaration exists, the two applications are genuinely running
+together — not one migrating toward the other. Writes flow both ways, and the new
+application is reactive from the first day:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Legacy as Legacy app (2011)
+    participant PG as PostgreSQL
+    participant Ash as New Ash app
+    participant LV as Your LiveView
+
+    Note over Legacy,LV: The old app writes — and the new UI reacts
+    Legacy->>PG: UPDATE accounts SET is_deleted = true
+    PG--)Ash: pg_notify — the key only
+    Ash->>PG: re-read through the view
+    Note over Ash: calculations, policies<br/>and tenancy all apply
+    Ash--)LV: Ash.Notifier.Notification
+    LV-->>LV: re-renders — status is now :archived
+
+    Note over Legacy,LV: The new app writes — and the old app sees it
+    LV->>Ash: Customer.approve(customer)
+    Ash->>PG: UPDATE demo.customers — which is a view
+    PG->>PG: INSTEAD OF trigger translates the write
+    PG->>PG: UPDATE legacy.accounts SET approved_at = now()
+    Legacy->>PG: SELECT * FROM accounts
+    PG-->>Legacy: approved_at is set, in its own schema
+```
+
+Neither side was modified to make that work. The old application still issues the
+SQL it always did; the new one writes ordinary Ash actions against ordinary Ash
+resources. A database view and its triggers sit in between, translating in both
+directions — [yes, PostgreSQL views can be written to](#the-idea-in-thirty-seconds),
+which is the trick the whole thing rests on — and the notification bridge closes
+the loop, so a change made by fifteen-year-old code lands in a LiveView you wrote
+last week.
+
+### The contract is checked before it runs
+
+The mapping is a contract between two schemas, and because it is declared rather
+than hand-written, **the compiler can check that contract is satisfiable** — before
+a single statement reaches a database.
+
+That is the actual product. Not the SQL: the SQL is forty lines and you could
+write it. What you cannot do by hand is *prove* that every attribute your new model
+declares is actually derivable from the old one, that every value the new model
+writes can be translated back, and that nothing in the projection is ambiguous.
+
+So it will not compile a mapping where:
+
+- an attribute has **no legacy source** — the view would read `NULL` for it forever,
+  and nothing would raise;
+- a computed value **claims to be writable** but cannot be inverted;
+- an `identity` rests on a **uniqueness the database does not enforce**, which
+  would have Ash planning upserts against a constraint that is not there;
+- a timestamp projection is **not deterministic**, because a naive column cast
+  without a stated zone reads differently on different connections;
+- a mapping would **silently cost you upserts** by forcing a trigger where the
+  view could have stayed auto-updatable;
+- a column gathered from a **joined relation claims to be writable**, when
+  nothing identifies which row over there it would write to.
+
+Each refusal names the mapping responsible and what it would have cost, so the
+error is a next step rather than a puzzle.
+
+→ [Every check, and the failure it prevents](documentation/topics/what-it-refuses.md)
+
+> [!WARNING]
+> `ash_authentication`'s `oauth2` and `oidc` strategies **cannot** be defined
+> without an upsert, so they are mutually exclusive with the trigger path. The
+> `password` strategy is fine — the common case for a legacy monolith.
+
+---
+
+---
+
 ## The idea in thirty seconds
 
 **The pattern has two names.** *Strangler fig* is the metaphor: the fig seeds in
@@ -265,8 +374,6 @@ CREATE INDEX IF NOT EXISTS strangler_customers_key_idx ON legacy.accounts
 
 ---
 
----
-
 ## What that actually bought you
 
 The pictures below are **generated from the resources above**, not drawn to
@@ -340,60 +447,6 @@ guarantee you did not previously have, because `is_active = true` and
 
 ---
 
-## Declare the mapping, derive everything else
-
-This is the Ash bargain, applied one layer lower.
-
-In Ash you describe *what* a resource is and the framework derives the rest — the
-queries, the changesets, the API, the policies. You do not hand-write the
-plumbing, so the plumbing cannot drift from the description.
-
-A schema migration normally has no such description. The mapping between old and
-new lives in four places at once — a migration, a trigger function, an
-application model, and a runbook — and nothing keeps them agreeing. They drift,
-quietly, and the first symptom is wrong data.
-
-AshStrangler makes that mapping a **declaration**, and derives the compatibility
-view, the triggers, the index, the backfill, the reconciler and the notification
-bridge from it. One description, one source of truth.
-
-### The contract is checked before it runs
-
-The mapping is a contract between two schemas, and because it is declared rather
-than hand-written, **the compiler can check that contract is satisfiable** — before
-a single statement reaches a database.
-
-That is the actual product. Not the SQL: the SQL is forty lines and you could
-write it. What you cannot do by hand is *prove* that every attribute your new model
-declares is actually derivable from the old one, that every value the new model
-writes can be translated back, and that nothing in the projection is ambiguous.
-
-So it will not compile a mapping where:
-
-- an attribute has **no legacy source** — the view would read `NULL` for it forever,
-  and nothing would raise;
-- a computed value **claims to be writable** but cannot be inverted;
-- an `identity` rests on a **uniqueness the database does not enforce**, which
-  would have Ash planning upserts against a constraint that is not there;
-- a timestamp projection is **not deterministic**, because a naive column cast
-  without a stated zone reads differently on different connections;
-- a mapping would **silently cost you upserts** by forcing a trigger where the
-  view could have stayed auto-updatable;
-- a column gathered from a **joined relation claims to be writable**, when
-  nothing identifies which row over there it would write to.
-
-Each refusal names the mapping responsible and what it would have cost, so the
-error is a next step rather than a puzzle.
-
-→ [Every check, and the failure it prevents](documentation/topics/what-it-refuses.md)
-
-> [!WARNING]
-> `ash_authentication`'s `oauth2` and `oidc` strategies **cannot** be defined
-> without an upsert, so they are mutually exclusive with the trigger path. The
-> `password` strategy is fine — the common case for a legacy monolith.
-
----
-
 ## The phases in full
 
 | | `:read_from_legacy` | `:dual_write` | `:read_from_new` | `:decommissioned` |
@@ -442,11 +495,9 @@ systems** — which is the most valuable thing here.
 
 ---
 
-## Live updates from a legacy write
+## Turning the notifications on
 
-This is the part that surprises people, so it is worth showing.
-
-Turn it on with one option, and run the bridge:
+The loop above is opt-in, and it is two lines:
 
 ```elixir
 # on the source
@@ -456,33 +507,14 @@ notify? true
 {AshStrangler.Listener, repo: MyApp.Repo, resources: [MyApp.Sales.Customer]}
 ```
 
-Now a write from the old application — an admin screen from 2011, a nightly
-batch job, somebody running `UPDATE` in `psql` — arrives in your new app as a
-first-class Ash notification:
-
-```mermaid
-sequenceDiagram
-    participant Legacy as Legacy app
-    participant PG as PostgreSQL
-    participant L as AshStrangler.Listener
-    participant LV as Your LiveView
-
-    Legacy->>PG: UPDATE accounts SET ...
-    PG-->>L: pg_notify (the key only)
-    L->>PG: re-read through Ash
-    Note over L: calculations, policies,<br/>tenancy all apply
-    L-->>LV: Ash.Notifier.Notification
-    LV->>LV: re-render
-```
-
-Nothing downstream can tell the change came from the legacy system — that is the
+Nothing downstream can tell a change came from the legacy system — that is the
 point. Your subscribers, GraphQL subscriptions and LiveViews behave exactly as
 they would for a write your own code made.
 
 The payload carries the key and nothing else, deliberately: `pg_notify` has a
-7999-**byte** ceiling and exceeding it is a hard error that aborts the *legacy
+7999-**byte** ceiling, and exceeding it is a hard error that aborts the *legacy
 application's* transaction. Delivery is at-most-once and in-memory, which is
-right for cache invalidation and live views and wrong for an audit trail.
+right for cache invalidation and live views, and wrong for an audit trail.
 
 → [Notifications in full](documentation/topics/notifications.md)
 
