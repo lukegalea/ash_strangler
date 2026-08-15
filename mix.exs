@@ -64,6 +64,12 @@ defmodule AshStrangler.MixProject do
       # rejects a narrower `:only` than a dependency's own dependents declare
       # with "dependencies have diverged".
       {:stream_data, "~> 1.0"},
+      # Doc-generation only. The README's diagrams are real generator output --
+      # the entity-relationship diagram of the modernised model and the state
+      # machine chart -- rather than hand-drawn approximations of it, and a test
+      # asserts they still match. Neither ships to consumers.
+      {:ash_diagram, "~> 0.2", only: [:dev, :test]},
+      {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
       # Required by Spark.Formatter, which formats the DSL blocks.
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

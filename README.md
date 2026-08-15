@@ -58,6 +58,13 @@ flowchart LR
 One legacy table becomes three well-modelled resources; several legacy tables can
 just as easily become one. Neither application knows the other exists.
 
+And because both are writing to the same rows, **the new application can be live
+from day one**. A write from the fifteen-year-old app becomes a real
+`Ash.Notifier.Notification` — re-read through Ash, so calculations, policies and
+tenancy all apply — which means your new LiveViews update in real time in
+response to writes made by the *old* system. You get the modern experience
+before you have migrated anything.
+
 ## The idea in thirty seconds
 
 **The pattern has two names.** *Strangler fig* is the metaphor: the fig seeds in
@@ -205,9 +212,9 @@ mix ash_strangler.gen.migration  # generate the compatibility layer
 mix ecto.migrate
 ```
 
-You now have `Customer` and `Organization` as real Ash resources — reads,
-filters, relationships, policies, a state machine — over a table you did not
-design and are not yet allowed to change.
+You now have `Customer`, `Organization` and `Address` as real Ash resources —
+reads, filters, relationships, policies, a state machine — over a table you did
+not design and are not yet allowed to change.
 
 And a resource can gather columns the old schema scattered, with `join`:
 
@@ -255,6 +262,81 @@ CREATE INDEX IF NOT EXISTS strangler_customers_key_idx ON legacy.accounts
 ```
 
 </details>
+
+---
+
+---
+
+## What that actually bought you
+
+The pictures below are **generated from the resources above**, not drawn to
+resemble them. A test renders them and fails the build if the README drifts.
+
+**Before** — the legacy shape, all of it one table:
+
+```mermaid
+erDiagram
+  accounts {
+    bigserial id PK
+    text email
+    text first_name
+    text last_name
+    text company_name
+    text company_vat
+    text addr_line1
+    text addr_city
+    boolean is_active
+    boolean is_deleted
+    timestamp approved_at
+    timestamp cancelled_at
+  }
+```
+
+Three concepts and a lifecycle, flattened into twelve columns with no
+relationships and four flags that can disagree with each other.
+
+**After** — the model, as `ash_diagram` renders it from the resources:
+
+```mermaid
+erDiagram
+  "AshStrangler.Demo.Address"["Address"] {
+    String？ line1
+    String？ city
+  }
+  "AshStrangler.Demo.Customer"["Customer"] {
+    CiString email
+    String？ full_name
+    Atom status
+    UUID？ organization_id
+  }
+  "AshStrangler.Demo.Organization"["Organization"] {
+    String？ name
+    String？ vat_number
+  }
+  "AshStrangler.Demo.Customer" |o--o{ "AshStrangler.Demo.Organization" : ""
+  "AshStrangler.Demo.Address" |o--|| "AshStrangler.Demo.Customer" : ""
+```
+
+Separate entities, real relationships, typed attributes — over exactly the same
+rows, with the old application still running against them untouched.
+
+**And the lifecycle**, as `ash_state_machine` renders it — four contradictory
+columns turned into a machine that can be reasoned about:
+
+```mermaid
+stateDiagram-v2
+pending --> active: approve
+active --> cancelled: cancel
+cancelled --> archived: archive
+active --> archived: archive
+pending --> cancelled: cancel
+pending --> archived: archive
+```
+
+That is the whole pitch in three pictures. The middle one is what you get to
+build against on day one; the first one is what is still on disk; the last is a
+guarantee you did not previously have, because `is_active = true` and
+`is_deleted = true` used to be a state the database would happily store.
 
 ---
 
@@ -357,7 +439,52 @@ systems** — which is the most valuable thing here.
 | **`mix ash_strangler.check`** | Runs your new model's assertions against the *legacy data* before you generate anything. NULLs where you declared `allow_nil? false`? Duplicates under your new identity? Values that will not cast? |
 | **Backfill** | Batched and resumable, built not to take the database down: keyset pagination, one transaction per batch, and a flag column rather than a predicate that cannot terminate. |
 | **Reconciler** | Counts and per-batch checksums across both shapes, with per-column normalization — because Ash's own types transform values on write, and without that the first run is a wall of false positives. |
-| **Notifications** | Legacy writes become real `Ash.Notifier.Notification`s, re-read through Ash so calculations, policies and tenancy apply. Your LiveViews update when the *old* app writes. |
+
+---
+
+## Live updates from a legacy write
+
+This is the part that surprises people, so it is worth showing.
+
+Turn it on with one option, and run the bridge:
+
+```elixir
+# on the source
+notify? true
+
+# in your supervision tree
+{AshStrangler.Listener, repo: MyApp.Repo, resources: [MyApp.Sales.Customer]}
+```
+
+Now a write from the old application — an admin screen from 2011, a nightly
+batch job, somebody running `UPDATE` in `psql` — arrives in your new app as a
+first-class Ash notification:
+
+```mermaid
+sequenceDiagram
+    participant Legacy as Legacy app
+    participant PG as PostgreSQL
+    participant L as AshStrangler.Listener
+    participant LV as Your LiveView
+
+    Legacy->>PG: UPDATE accounts SET ...
+    PG-->>L: pg_notify (the key only)
+    L->>PG: re-read through Ash
+    Note over L: calculations, policies,<br/>tenancy all apply
+    L-->>LV: Ash.Notifier.Notification
+    LV->>LV: re-render
+```
+
+Nothing downstream can tell the change came from the legacy system — that is the
+point. Your subscribers, GraphQL subscriptions and LiveViews behave exactly as
+they would for a write your own code made.
+
+The payload carries the key and nothing else, deliberately: `pg_notify` has a
+7999-**byte** ceiling and exceeding it is a hard error that aborts the *legacy
+application's* transaction. Delivery is at-most-once and in-memory, which is
+right for cache invalidation and live views and wrong for an audit trail.
+
+→ [Notifications in full](documentation/topics/notifications.md)
 
 ---
 
