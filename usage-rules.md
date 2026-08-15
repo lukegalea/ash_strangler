@@ -113,7 +113,17 @@ incomplete backfill produces missing rows, not an error.
     what holds in development holds in production. It never folds whitespace,
     and never normalizes NFC against NFD, under any collation.
 
-16. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
+16. **`join` gathers, and gathered columns are read-only.** A mapping that
+    reads from a joined relation must declare `writable? false` with a reason —
+    writes key off `__legacy_id`, which identifies a row in the *primary*
+    relation only. Keep `type: :left` (the default) unless the match is
+    genuinely total; `:inner` removes rows the legacy app can still see. Any
+    join forces the trigger path, so it also costs upserts. Run
+    `mix ash_strangler.check` after adding one: a join whose other side has
+    more than one row per primary row makes the view return duplicates for a
+    single primary key, and only real data can reveal that.
+
+17. **Notifications are opt-in (`notify? true`) and at-most-once.** Never build
     a `pg_notify` payload from row data: the ceiling is 7999 bytes and
     exceeding it aborts the *legacy application's* transaction. Never use them
     to count writes — Postgres collapses duplicates within a transaction.

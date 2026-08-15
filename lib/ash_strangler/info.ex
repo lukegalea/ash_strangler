@@ -55,9 +55,10 @@ defmodule AshStrangler.Info do
   @doc """
   How writes reach the base table, resolved rather than merely declared.
 
-  When `writes` is not set explicitly it is DERIVED from the mapping shape: a
-  mapping that needs a computed value written back cannot rely on Postgres view
-  auto-updatability, so it requires triggers.
+  When `writes` is not set explicitly it is DERIVED from the mapping shape.
+  Two things force triggers, both because Postgres will not auto-update the
+  view: a mapping that needs a computed value written back, and **any join** --
+  auto-updatability requires exactly one base table.
 
   This matters because the two are not equivalent. Auto-updatable views keep
   upserts, correct `RETURNING` and `WITH CHECK OPTION`; `INSTEAD OF` triggers
@@ -100,6 +101,8 @@ defmodule AshStrangler.Info do
   @spec notify?(Spark.Dsl.t() | Ash.Resource.t()) :: boolean()
   def notify?(resource), do: match?(%{notify?: true}, source(resource))
 
+  defp derive_writes(%{joins: [_ | _]}), do: :triggers
+
   defp derive_writes(source) do
     needs_triggers? =
       Enum.any?(source.mappings, fn
@@ -108,6 +111,27 @@ defmodule AshStrangler.Info do
       end)
 
     if needs_triggers?, do: :triggers, else: :auto
+  end
+
+  @doc "Every `join` declared on the resource's source."
+  @spec joins(Spark.Dsl.t() | Ash.Resource.t()) :: [AshStrangler.Join.t()]
+  def joins(resource) do
+    case source(resource) do
+      %{joins: joins} -> joins
+      _ -> []
+    end
+  end
+
+  @doc """
+  The alias every joined relation is referenced by.
+
+  This is how a mapping declares which relation it reads from: qualifying a
+  column as `"addr.city"` is what tells the compiler it came from the join
+  aliased `addr` rather than from the primary relation.
+  """
+  @spec join_aliases(Spark.Dsl.t() | Ash.Resource.t()) :: [String.t()]
+  def join_aliases(resource) do
+    resource |> joins() |> Enum.map(&AshStrangler.Sql.View.alias_for/1)
   end
 
   defp of_type(resource, struct_module) do

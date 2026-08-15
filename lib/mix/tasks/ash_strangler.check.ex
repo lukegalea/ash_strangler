@@ -81,8 +81,70 @@ defmodule Mix.Tasks.AshStrangler.Check do
       phase      #{inspect(phase)}
       writes     #{inspect(writes)}#{derived_note(source)}
       mappings   #{length(mappings)} mapped, #{length(AshStrangler.Info.constants(resource))} constant, #{unmapped_count(resource)} unmapped
-      read-only  #{read_only_summary(read_only)}#{upsert_warning(resource, writes)}
+      read-only  #{read_only_summary(read_only)}#{joins_summary(resource)}#{upsert_warning(resource, writes)}#{fan_out_warning(resource, source)}
     """)
+  end
+
+  defp joins_summary(resource) do
+    case AshStrangler.Info.joins(resource) do
+      [] ->
+        ""
+
+      joins ->
+        "\n      joins      " <>
+          Enum.map_join(joins, ", ", fn join ->
+            "#{join.relation} AS #{AshStrangler.Sql.View.alias_for(join)} (#{join.type})"
+          end)
+    end
+  end
+
+  # The hazard a join introduces that no compile-time check can see: if the
+  # joined relation has more than one row per primary row, the view returns
+  # several rows for one primary key. `Ash.get/2` then finds duplicates, counts
+  # inflate, and nothing raises -- the view is perfectly valid SQL.
+  #
+  # It depends entirely on the data, which is exactly why it belongs here rather
+  # than in a verifier.
+  defp fan_out_warning(resource, source) do
+    case AshStrangler.Info.joins(resource) do
+      [] -> ""
+      _ -> measure_fan_out(resource, source)
+    end
+  end
+
+  defp measure_fan_out(resource, source) do
+    repo = AshPostgres.DataLayer.Info.repo(resource)
+    from_clause = AshStrangler.Sql.View.from_clause(source)
+
+    %{rows: [[base]]} = repo.query!("SELECT count(*) FROM #{source.relation}", [])
+    %{rows: [[joined]]} = repo.query!("SELECT count(*) FROM #{from_clause}", [])
+
+    cond do
+      joined > base ->
+        """
+
+        \e[31mFAN-OUT\e[0m  the joins multiply rows: #{base} in #{source.relation}, #{joined} through the view.
+                A joined relation has more than one row per primary row, so the view
+                returns duplicates for a single primary key. Ash.get/2 will find more
+                than one record and counts will be wrong. Narrow the join condition,
+                or model the joined relation as its own resource.
+        """
+
+      joined < base ->
+        """
+
+        \e[33mROWS LOST\e[0m  #{base} rows in #{source.relation}, only #{joined} through the view.
+                An INNER JOIN is dropping rows the legacy application can still see.
+                Use `type: :left` unless the match is genuinely total.
+        """
+
+      true ->
+        ""
+    end
+  rescue
+    # The check is best-effort: the legacy relations may not exist yet in this
+    # environment, and that is not a reason to fail the whole report.
+    _ -> ""
   end
 
   defp derived_note(%{writes: nil}), do: "  (derived from the mapping shape)"

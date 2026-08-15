@@ -45,6 +45,12 @@ defmodule AshStrangler.Index do
   @type t :: %__MODULE__{}
 end
 
+defmodule AshStrangler.Join do
+  @moduledoc "Another legacy relation gathered into the same resource."
+  defstruct [:relation, :as, :on, :__spark_metadata__, type: :left]
+  @type t :: %__MODULE__{}
+end
+
 defmodule AshStrangler.Key do
   @moduledoc "How the modern primary key is derived from the legacy key."
   defstruct [:attribute, :from, :strategy, :__spark_metadata__]
@@ -57,11 +63,13 @@ defmodule AshStrangler.Source do
     :relation,
     :writes,
     :notify_channel,
+    :as,
     :__spark_metadata__,
     notify?: false,
     mappings: [],
     indexes: [],
-    keys: []
+    keys: [],
+    joins: []
   ]
 
   @type t :: %__MODULE__{}

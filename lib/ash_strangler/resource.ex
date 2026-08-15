@@ -34,6 +34,7 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifyCompleteMapping,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyTimestampZones,
+      AshStrangler.Verifiers.VerifyJoinedMappingsReadOnly,
       AshStrangler.Verifiers.VerifyWritableMappingsReversible,
       AshStrangler.Verifiers.VerifyNoUpserts,
       AshStrangler.Verifiers.VerifyReverseMappable,

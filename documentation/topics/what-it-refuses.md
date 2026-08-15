@@ -186,9 +186,49 @@ or be explicitly marked as unenforced.
 
 ---
 
+## A gathered column that claims to be writable
+
+**`VerifyJoinedMappingsReadOnly`**
+
+A `join` lets a resource gather columns the old schema scattered across several
+tables. Reading them is straightforward. Writing them is not.
+
+Writes reach the primary relation through `__legacy_id`, which identifies exactly
+one row there. Nothing identifies the corresponding row in a joined relation — the
+row depends on the join condition, which is arbitrary SQL, and under a `LEFT JOIN`
+there may be no matching row at all. A generated write would have to choose
+between updating nothing, inserting into a table the mapping never claimed to own,
+and failing. No choice is right for every schema, and making one silently is how a
+tool like this corrupts data.
+
+So a mapping qualified against a join alias must say `writable? false`:
+
+```elixir
+map :city, "addr.city" do
+  writable? false
+  because "Read from a joined relation; write it through its own resource."
+end
+```
+
+The advice in that message is the real answer. If `legacy.addresses` has its own
+rows and its own lifecycle, it is an `Address` resource with an `Address` view —
+not a few columns bolted onto `Customer`. Read them together through a
+relationship; write them separately.
+
+> **What no compile-time check can tell you:** whether the join *fans out*. If the
+> joined relation holds more than one row per primary row, the view returns
+> duplicates for a single primary key — `Ash.get/2` finds several records and
+> counts inflate, while the SQL stays perfectly valid. That depends on the data,
+> so `mix ash_strangler.check` measures it, and reports rows lost to an
+> `INNER JOIN` in the same breath.
+
 ## Cutting over when it would lose columns
 
 **`VerifyReverseMappable`**
+
+`:read_from_new` is also refused outright while the source still gathers joined
+relations: reversing a gather means scattering one table back across several, and
+the mapping never said which column belongs where on the way back.
 
 At `:read_from_new` the legacy name becomes a view over the new table, so the old
 application's `SELECT * FROM users` keeps working. That view has to produce every

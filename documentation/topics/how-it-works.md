@@ -195,7 +195,47 @@ the view uses rather than a restatement of it, because PostgreSQL will only use 
 expression index when it matches exactly, and a difference as small as whitespace
 makes it silently decline.
 
-### 4. `INSTEAD OF` triggers, only where required
+### 4. Joins, when the model gathers rather than splits
+
+A resource can pull in columns the legacy schema scattered:
+
+```elixir
+join "legacy.addresses", as: "addr", on: "addr.account_id = accounts.id"
+```
+
+which makes the `FROM` clause a join and aliases the primary relation so column
+names stay unambiguous:
+
+```sql
+FROM legacy.accounts AS accounts
+  LEFT JOIN legacy.addresses AS addr ON addr.account_id = accounts.id
+```
+
+Three consequences follow, and all three are enforced rather than documented:
+
+**`LEFT` is the default.** An `INNER JOIN` removes rows — a legacy row with no
+match simply stops existing for the new application, and the only symptom is a
+row count lower than the old application's. That is the same class of silent loss
+as an unmapped column, so it is not something to opt into by accident.
+
+**The view stops being auto-updatable.** Auto-updatability requires exactly one
+base table, so any join forces the trigger path. `AshStrangler.Info.writes/1`
+derives that for you.
+
+**Joined columns are read-only.** Writes reach the primary relation through
+`__legacy_id`, which identifies exactly one row there. Nothing identifies the
+corresponding row in a joined relation — and under a `LEFT JOIN` there may not be
+one — so there is no write to generate that is right for every schema. Model the
+joined relation as its own resource and write it there.
+
+There is a fourth consequence that no compile-time check can see: **if the joined
+relation has more than one row per primary row, the view returns duplicates for a
+single primary key.** `Ash.get/2` finds more than one record, counts inflate, and
+the SQL is perfectly valid throughout. It depends entirely on the data, so
+`mix ash_strangler.check` measures it — comparing rows through the view against
+rows in the primary relation, and reporting both fan-out and rows lost.
+
+### 5. `INSTEAD OF` triggers, only where required
 
 Triggers are **not** generated for every mapping, because adding one is a trade
 rather than an addition. Attaching an `INSTEAD OF` trigger to an auto-updatable

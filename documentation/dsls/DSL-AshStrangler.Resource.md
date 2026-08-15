@@ -36,6 +36,7 @@ phase it is in.
    * unmapped
    * index
    * key
+   * join
 
 
 
@@ -63,6 +64,7 @@ The legacy relation this resource is mapped onto.
  * [unmapped](#strangler-source-unmapped)
  * [index](#strangler-source-index)
  * [key](#strangler-source-key)
+ * [join](#strangler-source-join)
 
 
 ### Examples
@@ -85,6 +87,7 @@ end
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
+| [`as`](#strangler-source-as){: #strangler-source-as } | `String.t` |  | The alias the primary relation's columns are qualified by, defaulting to its table name. Only meaningful alongside `join` — with no joins, unqualified column names are unambiguous anyway. |
 | [`notify?`](#strangler-source-notify?){: #strangler-source-notify? } | `boolean` | `false` | Emit an `AFTER` trigger on the legacy table that announces writes over `pg_notify`, for `AshStrangler.Listener` to turn into `Ash.Notifier.Notification`s. Off by default, because it is not free to the *old* system: every legacy write pays a `pg_notify`, and a full notify queue fails the transaction that issued it — which is the legacy application's transaction, not yours. Delivery is at-most-once and in-memory. Suitable for cache invalidation and LiveView reactivity; not suitable for an audit trail. |
 | [`notify_channel`](#strangler-source-notify_channel){: #strangler-source-notify_channel } | `String.t` |  | The `pg_notify` channel, defaulting to `"ash_strangler"`. One channel for every resource, with the resource named in the payload. Deliberately not interpolated from anything user-supplied at runtime: Postgrex has had channel-name escaping CVEs, and a channel name derived from a compile-time DSL literal cannot carry an injection. |
 | [`writes`](#strangler-source-writes){: #strangler-source-writes } | `:auto \| :triggers` |  | How writes reach the base table. Derived from the mapping shape when omitted; declaring it is an override with a real cost either way. - `:auto` — rely on Postgres view auto-updatability. **Keeps upserts,   correct `RETURNING`, and `WITH CHECK OPTION`.** Requires a mapping   Postgres considers auto-updatable. - `:triggers` — generate `INSTEAD OF` triggers. Governs every write and   nothing can reach the base table by an undescribed path, and   **destroys all three of the above**. This is a trade, not an addition. See the README. |
@@ -305,6 +308,48 @@ key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e...71"}
 ### Introspection
 
 Target: `AshStrangler.Key`
+
+### strangler.source.join
+```elixir
+join relation
+```
+
+
+Another legacy relation to gather columns from.
+
+This is what lets a properly-designed resource pull together data the old
+schema scattered across several tables, rather than only reshaping one.
+
+
+
+
+### Examples
+```
+join "legacy.addresses", as: "addr", on: "addr.account_id = accounts.id"
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`relation`](#strangler-source-join-relation){: #strangler-source-join-relation .spark-required} | `String.t` |  | The relation to join, schema-qualified: "legacy.addresses". |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`on`](#strangler-source-join-on){: #strangler-source-join-on .spark-required} | `String.t` |  | The join condition, as SQL: `"addr.account_id = accounts.id"`. Required, and deliberately so — a join with no condition is a cross join, which multiplies every row by every row and is never what anyone meant. |
+| [`as`](#strangler-source-join-as){: #strangler-source-join-as } | `String.t` |  | The alias to reference its columns by. Defaults to the relation's table name, so `"legacy.addresses"` becomes `addresses`. Mappings qualify against this alias — `map :city, "addr.city"` — and that qualification is also how the compiler knows a mapping reads from a joined relation rather than the primary one. |
+| [`type`](#strangler-source-join-type){: #strangler-source-join-type } | `:left \| :inner` | `:left` | `:left` (the default) or `:inner`. The default is `:left` on purpose. An `INNER JOIN` **removes rows** — a legacy row with no matching row in the joined table simply disappears from the view, so the new application sees fewer records than the old one and nothing anywhere reports it. That is precisely the class of silent loss this package exists to refuse, so making it the default was not an option. Choose `:inner` only when you have established that the match is total. |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Join`
 
 
 

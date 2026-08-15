@@ -18,7 +18,7 @@ defmodule AshStrangler.Sql.View do
   `AshStrangler.Info`.
   """
 
-  alias AshStrangler.{Constant, Key, Source, Unmapped}
+  alias AshStrangler.{Constant, Join, Key, Source, Unmapped}
   alias AshStrangler.Map, as: MapEntry
 
   @doc """
@@ -80,7 +80,7 @@ defmodule AshStrangler.Sql.View do
     CREATE OR REPLACE VIEW #{view_name} AS
     SELECT
     #{column_lines}
-    FROM #{source.relation};
+    FROM #{from_clause(source)};
     """
 
     %{name: :"strangler_#{table}_view", up: up, down: "DROP VIEW IF EXISTS #{view_name};"}
@@ -117,8 +117,15 @@ defmodule AshStrangler.Sql.View do
       """
     end
 
-    key_column = {key_expression(key, source.relation), key.attribute}
-    legacy_id_column = {legacy_id_expression(key), :__legacy_id}
+    # Qualified only when a join makes a bare column name ambiguous. The
+    # expression index on the base table stays UNqualified -- Postgres resolves
+    # the alias at parse time, so both forms reference the same column and the
+    # index still matches. Asserted by an EXPLAIN test rather than assumed,
+    # because a mismatch here degrades silently to a sequential scan.
+    qualifier = if source.joins == [], do: nil, else: primary_alias(source)
+
+    key_column = {key_expression(key, source.relation, qualifier), key.attribute}
+    legacy_id_column = {qualify(legacy_id_expression(key), qualifier), :__legacy_id}
 
     [key_column, legacy_id_column | Enum.reverse(rest)]
   end
@@ -170,22 +177,64 @@ defmodule AshStrangler.Sql.View do
   defp with_cast(expr, %MapEntry{cast: nil}), do: expr
   defp with_cast(expr, %MapEntry{cast: cast}), do: "(#{expr})::#{cast}"
 
+  @doc false
+  # The `FROM` clause, aliased only when there is something to disambiguate.
+  #
+  # With no joins the relation stands alone and unqualified column names are
+  # unambiguous, so no alias is emitted -- which keeps the generated SQL for the
+  # common case exactly as it was before joins existed.
+  def from_clause(%Source{joins: []} = source), do: source.relation
+
+  def from_clause(%Source{joins: joins} = source) do
+    primary = "#{source.relation} AS #{primary_alias(source)}"
+
+    Enum.reduce(joins, primary, fn %Join{} = join, acc ->
+      keyword = if join.type == :inner, do: "INNER JOIN", else: "LEFT JOIN"
+
+      "#{acc}\n  #{keyword} #{join.relation} AS #{alias_for(join)} ON #{join.on}"
+    end)
+  end
+
+  @doc false
+  def primary_alias(%Source{as: as}) when is_binary(as), do: as
+  def primary_alias(%Source{relation: relation}), do: table_name(relation)
+
+  @doc false
+  def alias_for(%Join{as: as}) when is_binary(as), do: as
+  def alias_for(%Join{relation: relation}), do: table_name(relation)
+
+  defp table_name(relation) do
+    relation |> String.split(".") |> List.last() |> String.trim(~s("))
+  end
+
   # --- the key ---------------------------------------------------------------
 
-  defp key_expression(%Key{from: from, strategy: {:uuid_v5, namespace: namespace}}, relation) do
+  defp key_expression(key, relation), do: key_expression(key, relation, nil)
+
+  defp key_expression(
+         %Key{from: from, strategy: {:uuid_v5, namespace: namespace}},
+         relation,
+         qualifier
+       ) do
     # The name prefix comes from `AshStrangler.KeyDerivation` rather than being
     # spelled out here, so the Elixir and SQL sides cannot disagree about it.
     # They must produce byte-identical uuids -- see that module.
     prefix = AshStrangler.KeyDerivation.name_prefix(relation)
 
-    "uuid_generate_v5('#{namespace}'::uuid, '#{prefix}' || #{from}::text)"
+    "uuid_generate_v5('#{namespace}'::uuid, '#{prefix}' || #{qualify(from, qualifier)}::text)"
   end
 
-  defp key_expression(%Key{from: from, strategy: :identity}, _relation) do
-    "#{from}::uuid"
+  defp key_expression(%Key{from: from, strategy: :identity}, _relation, qualifier) do
+    "#{qualify(from, qualifier)}::uuid"
   end
 
-  defp key_expression(%Key{strategy: other}, _relation), do: unsupported_strategy!(other)
+  defp key_expression(%Key{strategy: other}, _relation, _qualifier),
+    do: unsupported_strategy!(other)
+
+  # Once a join exists, a bare `id` is ambiguous across relations, so the
+  # primary key column has to say which table it came from.
+  defp qualify(column, nil), do: column
+  defp qualify(column, qualifier), do: "#{qualifier}.#{column}"
 
   defp legacy_id_expression(%Key{from: from}), do: from
 

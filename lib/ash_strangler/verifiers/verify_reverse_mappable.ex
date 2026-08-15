@@ -41,12 +41,39 @@ defmodule AshStrangler.Verifiers.VerifyReverseMappable do
   @impl true
   def verify(dsl) do
     with true <- AshStrangler.Info.strangled?(dsl),
-         :read_from_new <- AshStrangler.Info.strangler_phase!(dsl),
-         [_ | _] = offenders <- irreversible(dsl) do
-      {:error, error(dsl, offenders)}
+         :read_from_new <- AshStrangler.Info.strangler_phase!(dsl) do
+      cond do
+        AshStrangler.Info.joins(dsl) != [] -> {:error, join_error(dsl)}
+        (offenders = irreversible(dsl)) != [] -> {:error, error(dsl, offenders)}
+        true -> :ok
+      end
     else
       _ -> :ok
     end
+  end
+
+  # A forward view gathers several legacy relations into one shape. Reversing
+  # that means scattering one table back across several -- deciding which of
+  # them each column belongs to, and what to do when a row exists on one side
+  # and not the other. The mapping does not say, and guessing would write real
+  # data into the wrong table.
+  defp join_error(dsl) do
+    Spark.Error.DslError.exception(
+      module: Verifier.get_persisted(dsl, :module),
+      path: [:strangler, :phase],
+      message: """
+      This source gathers #{length(AshStrangler.Info.joins(dsl))} joined relation(s), and phase
+      :read_from_new has to run the mapping backwards -- which would mean
+      scattering one table back across several legacy tables.
+
+      Nothing in the mapping says which joined relation each column belongs to
+      on the way back, or what to do when a row exists on one side and not the
+      other, so there is no reversal to generate.
+
+      Before cutting over, split the gathered relations into their own resources
+      so each one reverses into exactly one table.
+      """
+    )
   end
 
   defp irreversible(dsl) do

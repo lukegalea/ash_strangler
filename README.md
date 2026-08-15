@@ -55,8 +55,8 @@ flowchart LR
     legacy -- "SELECT * FROM accounts" --> table
 ```
 
-One legacy table, three well-modelled resources, the same rows. Neither
-application knows the other exists.
+One legacy table becomes three well-modelled resources; several legacy tables can
+just as easily become one. Neither application knows the other exists.
 
 ## The idea in thirty seconds
 
@@ -209,10 +209,27 @@ You now have `Customer` and `Organization` as real Ash resources — reads,
 filters, relationships, policies, a state machine — over a table you did not
 design and are not yet allowed to change.
 
-> [!NOTE]
-> Each resource maps **one** legacy relation. Splitting a wide table into several
-> resources works today; composing several legacy tables into one resource
-> (a join) does not yet.
+And a resource can gather columns the old schema scattered, with `join`:
+
+```elixir
+source "legacy.accounts" do
+  key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-…"}
+
+  join "legacy.addresses", as: "addr", on: "addr.account_id = accounts.id"
+
+  map :email, "email", cast: :citext
+
+  map :city, "addr.city" do
+    writable? false
+    because "Read from a joined relation; write it through its own resource."
+  end
+end
+```
+
+`LEFT JOIN` by default, deliberately: an `INNER JOIN` **removes** rows the old
+application can still see, and nothing anywhere would report it. Columns from a
+joined relation are read-only — writes go back through `__legacy_id`, which
+identifies a row in the primary relation and nothing in a joined one.
 
 <details>
 <summary><b>The SQL it generated for <code>Customer</code></b></summary>
@@ -279,7 +296,9 @@ So it will not compile a mapping where:
 - a timestamp projection is **not deterministic**, because a naive column cast
   without a stated zone reads differently on different connections;
 - a mapping would **silently cost you upserts** by forcing a trigger where the
-  view could have stayed auto-updatable.
+  view could have stayed auto-updatable;
+- a column gathered from a **joined relation claims to be writable**, when
+  nothing identifies which row over there it would write to.
 
 Each refusal names the mapping responsible and what it would have cost, so the
 error is a next step rather than a puzzle.

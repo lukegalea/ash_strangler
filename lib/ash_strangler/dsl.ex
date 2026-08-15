@@ -188,6 +188,64 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
+  @join %Spark.Dsl.Entity{
+    name: :join,
+    describe: """
+    Another legacy relation to gather columns from.
+
+    This is what lets a properly-designed resource pull together data the old
+    schema scattered across several tables, rather than only reshaping one.
+    """,
+    examples: [
+      ~S|join "legacy.addresses", as: "addr", on: "addr.account_id = accounts.id"|
+    ],
+    target: AshStrangler.Join,
+    args: [:relation],
+    schema: [
+      relation: [
+        type: :string,
+        required: true,
+        doc: ~S|The relation to join, schema-qualified: "legacy.addresses".|
+      ],
+      as: [
+        type: :string,
+        doc: """
+        The alias to reference its columns by. Defaults to the relation's table
+        name, so `"legacy.addresses"` becomes `addresses`.
+
+        Mappings qualify against this alias — `map :city, "addr.city"` — and that
+        qualification is also how the compiler knows a mapping reads from a
+        joined relation rather than the primary one.
+        """
+      ],
+      on: [
+        type: :string,
+        required: true,
+        doc: """
+        The join condition, as SQL: `"addr.account_id = accounts.id"`.
+
+        Required, and deliberately so — a join with no condition is a cross join,
+        which multiplies every row by every row and is never what anyone meant.
+        """
+      ],
+      type: [
+        type: {:one_of, [:left, :inner]},
+        default: :left,
+        doc: """
+        `:left` (the default) or `:inner`.
+
+        The default is `:left` on purpose. An `INNER JOIN` **removes rows** — a
+        legacy row with no matching row in the joined table simply disappears
+        from the view, so the new application sees fewer records than the old
+        one and nothing anywhere reports it. That is precisely the class of
+        silent loss this package exists to refuse, so making it the default was
+        not an option. Choose `:inner` only when you have established that the
+        match is total.
+        """
+      ]
+    ]
+  }
+
   @source %Spark.Dsl.Entity{
     name: :source,
     describe: "The legacy relation this resource is mapped onto.",
@@ -201,12 +259,25 @@ defmodule AshStrangler.Dsl do
     ],
     target: AshStrangler.Source,
     args: [:relation],
-    entities: [mappings: [@map, @constant, @unmapped], indexes: [@index], keys: [@key]],
+    entities: [
+      mappings: [@map, @constant, @unmapped],
+      indexes: [@index],
+      keys: [@key],
+      joins: [@join]
+    ],
     schema: [
       relation: [
         type: :string,
         required: true,
         doc: ~S|The legacy relation, schema-qualified: "legacy.users".|
+      ],
+      as: [
+        type: :string,
+        doc: """
+        The alias the primary relation's columns are qualified by, defaulting to
+        its table name. Only meaningful alongside `join` — with no joins,
+        unqualified column names are unambiguous anyway.
+        """
       ],
       notify?: [
         type: :boolean,
