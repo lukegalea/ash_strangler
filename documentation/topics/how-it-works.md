@@ -13,19 +13,29 @@ writable before.
 ## The problem, precisely
 
 Two applications need the same rows, and they disagree about what those rows look
-like.
+like — usually not by a little.
 
-The legacy application expects `users` to have `first_name`, `last_name`,
-`deleted_at`, a `state` column holding `'active'`, and an integer `id`. It has
-that expectation compiled into fifteen years of queries, reports and background
-jobs, and you are not allowed to change it today.
+The legacy application expects one `accounts` table holding a person, their
+employer and their address together, with the lifecycle spread across
+`is_active`, `is_deleted`, `approved_at` and `cancelled_at`. That expectation is
+compiled into fifteen years of queries, reports and background jobs, and you are
+not allowed to change it today.
 
-The new application wants `full_name`, `archived_at`, a `state_code` integer, and
-a UUID primary key.
+The new application wants what you would design now: a `Customer`, an
+`Organization` and an `Address` as separate resources with real relationships,
+one `status` governed by a state machine, and UUID keys.
 
-Copying the data into a second table means writing synchronisation, and
+Copying the data into second tables means writing synchronisation, and
 synchronisation means a window where the two disagree. What you want instead is
-**one set of rows, presented two ways**.
+**one set of rows, presented two ways** — and the presentation can differ in shape,
+not just in column names.
+
+### This is expand/contract
+
+The formal name for the technique is **expand/contract**, or parallel change:
+expand the schema so both shapes coexist, move readers and then writers across,
+then contract by removing the old. The phases in this library are that sequence,
+with the middle step split so reads and writes move independently.
 
 ## Views are not read-only
 
