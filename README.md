@@ -369,12 +369,6 @@ The whole notation is four shapes and four line styles:
 | `-->` | a column feeding a transformation |
 | `-.->` | read-only, labelled with the mapping's own `because:` |
 
-No colours anywhere, deliberately: GitHub only adapts a diagram to dark mode
-when the diagram does not pin its own palette. Plain 1:1 mappings are gathered
-into one node rather than drawn individually — a rename is not a transformation,
-and a dozen of them drawn out buries the one thing worth looking at. Pass
-`--verbose` when you want them all.
-
 The employer buried in the same table becomes its own resource, with its own
 view over the same rows:
 
@@ -459,7 +453,7 @@ CREATE INDEX IF NOT EXISTS strangler_customers_key_idx ON legacy.accounts
 ## What that actually bought you
 
 The pictures below are **generated from the resources above**, not drawn to
-resemble them. A test renders them and fails the build if the README drifts.
+resemble them.
 
 **Before** — the legacy shape, all of it one table:
 
@@ -558,8 +552,7 @@ flowchart LR
 ```
 
 That is `mix ash_strangler.gen.diagram --type overview`, and it is the one that
-stays readable for a whole application. A column-level diagram of every mapping
-at once is a picture of nothing.
+stays readable for a whole application.
 
 **And the lifecycle**, as `ash_state_machine` renders it — four contradictory
 columns turned into a machine that can be reasoned about:
