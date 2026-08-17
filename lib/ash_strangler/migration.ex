@@ -37,7 +37,7 @@ defmodule AshStrangler.Migration do
 
         :read_from_new ->
           # No notify trigger here, deliberately. `Sql.Notify` attaches an
-          # `AFTER ... FOR EACH ROW` trigger to `source.relation`, and in this
+          # `AFTER ... FOR EACH ROW` trigger to the legacy relation, and in this
           # phase that name is the reverse *view* -- which Postgres rejects
           # outright ("Views cannot have row-level BEFORE or AFTER triggers"),
           # so emitting it would produce a migration that cannot run.

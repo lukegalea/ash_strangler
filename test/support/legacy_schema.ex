@@ -21,12 +21,20 @@ defmodule AshStrangler.Test.LegacySchema do
 
   alias AshStrangler.Test.DualWriteUser
   alias AshStrangler.Test.LegacyUser
+  alias AshStrangler.Test.MixedUser
   alias AshStrangler.TestRepo
 
+  # Two things here are load-bearing for the mapping, not incidental to it.
+  #
   # `deleted_at` is deliberately `timestamp` (without time zone) while the
-  # resource's attribute is `:utc_datetime_usec`: the mapping's
-  # `cast: :timestamptz` is what bridges them, and a cast that only ever ran
-  # against an already-timestamptz column would be testing nothing.
+  # resource's attribute is `:utc_datetime_usec`: the mapping's `zone: "UTC"` is
+  # what bridges them, and a mapping that only ever ran against an
+  # already-timestamptz column would be testing nothing.
+  #
+  # `state` carries a CHECK constraint naming its five values, which is what
+  # `mix ash_strangler.gen.twin` reads to give the twin attribute its `one_of` --
+  # and the twin's `one_of` is what makes the `GetTotal` obligation decidable at
+  # compile time rather than measurable only against data.
   @users_table """
   CREATE TABLE legacy.users (
     id               bigserial PRIMARY KEY,
@@ -34,7 +42,8 @@ defmodule AshStrangler.Test.LegacySchema do
     email            text,
     first_name       text,
     last_name        text,
-    state            text NOT NULL DEFAULT 'active',
+    state            text NOT NULL DEFAULT 'active'
+                       CHECK (state IN ('passive', 'pending', 'active', 'suspended', 'deleted')),
     deleted_at       timestamp,
     salt             text,
     crypted_password text,
@@ -67,6 +76,10 @@ defmodule AshStrangler.Test.LegacySchema do
 
     install_resource!(LegacyUser)
     install_resource!(DualWriteUser)
+    # Three resources over one legacy table, which is the case this package exists
+    # for -- and here it is also what lets `AshStrangler.MechanismTest` compare a
+    # trigger-backed view against an auto-updatable one over the same rows.
+    install_resource!(MixedUser)
 
     :ok
   end

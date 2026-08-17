@@ -84,7 +84,7 @@ defmodule AshStrangler.KeyDerivationTest do
     test "qualifies the legacy id with the relation" do
       key = %AshStrangler.Key{
         attribute: :id,
-        from: "id",
+        from: :id,
         strategy: {:uuid_v5, namespace: @namespace}
       }
 
@@ -96,7 +96,7 @@ defmodule AshStrangler.KeyDerivationTest do
     end
 
     test "the :identity strategy passes the legacy key through" do
-      key = %AshStrangler.Key{attribute: :id, from: "row_uuid", strategy: :identity}
+      key = %AshStrangler.Key{attribute: :id, from: :row_uuid, strategy: :identity}
       uuid = "0e6b0c1e-0c1e-4c1e-8c1e-0c1e0c1e0c1e"
 
       assert KeyDerivation.derive(key, "legacy.things", uuid) == uuid

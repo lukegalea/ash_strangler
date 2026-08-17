@@ -1,3 +1,67 @@
+defmodule AshStrangler.ListenerTest.Notifier do
+  @moduledoc """
+  Forwards every notification to the process registered under this module's name.
+
+  `Ash.Notifier.notify/1` dispatches synchronously in the calling process, so a
+  test can register itself and then assert on its own mailbox.
+  """
+  use Ash.Notifier
+
+  @impl true
+  def notify(notification) do
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> send(pid, {:notification, notification})
+    end
+
+    :ok
+  end
+end
+
+defmodule AshStrangler.ListenerTest.NotifiedUser do
+  @moduledoc """
+  A copy of the dual-write mapping with a notifier attached, so a dispatch is
+  observable.
+
+  It reads the same view as `AshStrangler.Test.DualWriteUser` and generates no
+  migration of its own -- only `:delete` notifications are exercised through it, and
+  those need no re-read.
+  """
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: nil,
+    validate_domain_inclusion?: false,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshStrangler.ListenerTest.Notifier],
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "dual_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+  end
+
+  actions do
+    defaults [:read, :destroy]
+  end
+
+  strangler do
+    phase :dual_write
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :login, from: :login
+    end
+  end
+end
+
 # SPDX-FileCopyrightText: 2026 Luke Galea
 #
 # SPDX-License-Identifier: MIT
@@ -22,7 +86,34 @@ defmodule AshStrangler.ListenerTest do
   use AshStrangler.DataCase, async: false
 
   alias AshStrangler.Listener
+  alias AshStrangler.ListenerTest.NotifiedUser
+  alias AshStrangler.Sql.Notify
   alias AshStrangler.Test.DualWriteUser
+
+  describe "the generated trigger" do
+    test "attaches to the relation the twin names, and keys off the twin's key column" do
+      # The relation is read off the twin's own `postgres do table/schema end`
+      # rather than from a `source "legacy.users"` string in the mapping. That
+      # removed the one place these two facts could disagree -- and a notify
+      # trigger attached to the wrong relation is silent, because nothing ever
+      # arrives to be missed.
+      [function, trigger] = Notify.build(DualWriteUser)
+
+      assert trigger.up =~ "AFTER INSERT OR UPDATE OR DELETE ON legacy.users"
+      assert function.up =~ "affected.id"
+
+      # The resource module is baked in, in the atom's real text form, because
+      # `String.to_existing_atom/1` on the way back needs exactly that.
+      assert function.up =~ "'resource', 'Elixir.AshStrangler.Test.DualWriteUser'"
+    end
+
+    test "is not generated for a resource that did not opt in" do
+      # Off by default, and the default is not free to withhold: every legacy write
+      # would pay a `pg_notify`, and a full notify queue fails the transaction that
+      # issued it -- which is the legacy application's transaction, not ours.
+      assert Notify.build(LegacyUser) == []
+    end
+  end
 
   describe "decode/2" do
     test "resolves the resource, key and operation from a payload" do
@@ -59,6 +150,12 @@ defmodule AshStrangler.ListenerTest do
   end
 
   describe "notify/2" do
+    setup do
+      Process.register(self(), AshStrangler.ListenerTest.Notifier)
+      on_exit(fn -> :ok end)
+      :ok
+    end
+
     test "dispatches a notification carrying the re-read record" do
       # `Ash.Notifier.notify/1` dispatches synchronously in the calling process,
       # so a test notifier can simply send to self().
@@ -91,6 +188,38 @@ defmodule AshStrangler.ListenerTest do
       # carry the derived primary key, which is what a destroy topic uses.
       assert :ok =
                Listener.notify(%{resource: DualWriteUser, legacy_id: 999_999, op: :delete}, [])
+    end
+
+    test "it actually dispatches, rather than returning :ok having done nothing" do
+      # This is the assertion every other test in this block was missing, and the
+      # gap was not academic: `derived_id/2` matched `%{keys: [key], relation: _}`
+      # against `%AshStrangler.Source{}`, and once `source` began carrying a twin
+      # instead of a relation name that match simply stopped matching. A struct
+      # match that stops matching does not raise — it fell to `_ -> :error`,
+      # `notify/2` returned `:ok`, and **every legacy write produced no
+      # notification at all**.
+      #
+      # Every test here asserted `:ok`, which `notify/2` returns either way, so the
+      # bridge was dead and green. The only way to tell the difference is to watch
+      # for the notification, which is what a notifier is for.
+      legacy_id = insert_legacy_user!(%{login: "dispatch-#{System.unique_integer([:positive])}"})
+
+      Listener.notify(%{resource: NotifiedUser, legacy_id: legacy_id, op: :delete}, [])
+
+      assert_receive {:notification, notification}
+
+      assert notification.resource == NotifiedUser
+      assert notification.metadata.ash_strangler == %{origin: :legacy, legacy_id: legacy_id}
+
+      # And the derived id is the one Elixir computes independently, so this also
+      # covers the half of `derived_id/2` that reads the relation off the twin --
+      # a wrong relation would hash to a different uuid and still look like a
+      # working notification.
+      assert notification.data.id ==
+               AshStrangler.KeyDerivation.uuid_v5(
+                 DualWriteUser.namespace(),
+                 AshStrangler.KeyDerivation.name("legacy.users", legacy_id)
+               )
     end
 
     test "a vanished row on insert/update is ignored rather than raising" do

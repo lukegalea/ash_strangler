@@ -86,12 +86,19 @@ defmodule AshStrangler.Verifiers.VerifyNoUpserts do
       #{strategy_note(strategy_owned)}#{user_note(user_owned)}
       Options:
 
-        1. `writes: :auto` — rely on view auto-updatability, which keeps upserts,
-           correct RETURNING and WITH CHECK OPTION. Requires a mapping Postgres
-           considers auto-updatable: a single base table and no computed column
-           written back.
+        1. Look at WHICH mapping forced the triggers, and see whether it can be
+           expressed as a combinator that needs a weaker mechanism.
+           `mix ash_strangler.check` prints the classification per attribute.
+           `AshStrangler.Mechanism` only reaches `:instead_of` for a mapping that
+           writes across relations or writes more than one legacy column — a
+           `decode`d status column, which 0.1 would have charged triggers for, does
+           not.
 
-        2. Do not strangle this resource. Cut it over directly instead.
+        2. `writes: :auto` — rely on view auto-updatability, which keeps upserts,
+           correct RETURNING and WITH CHECK OPTION. An override, so the mapping
+           still has to be one Postgres considers auto-updatable.
+
+        3. Do not strangle this resource. Cut it over directly instead.
       """
     )
   end

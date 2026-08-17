@@ -247,13 +247,25 @@ defmodule AshStrangler.Listener do
     end
   end
 
+  # The relation comes off the twin rather than out of the `source` entity, and
+  # that is the whole of this function's history: it used to match
+  # `%{keys: [key], relation: relation}` against `%AshStrangler.Source{}`, which no
+  # longer carries a `:relation`.
+  #
+  # The failure that caused is the reason this comment is here. A struct match that
+  # stops matching does not raise -- it falls to the `_ -> :error` clause, `record/4`
+  # returns `:error`, and `notify/2` returns `:ok` having dispatched nothing. Every
+  # legacy write silently produced no notification, and the only symptom was a
+  # LiveView that stopped updating. The bridge is exactly the kind of code where a
+  # silent no-op is indistinguishable from "the old application happened not to
+  # write anything", so it gets `Info.relation/1` -- one accessor, which fails loudly
+  # if the source is malformed -- rather than a shape match that can drift again.
   defp derived_id(resource, legacy_id) do
-    case AshStrangler.Info.source(resource) do
-      %{keys: [key], relation: relation} ->
-        {:ok, key.attribute, AshStrangler.KeyDerivation.derive(key, relation, legacy_id)}
-
-      _ ->
-        :error
+    with %{keys: [key]} <- AshStrangler.Info.source(resource),
+         relation when is_binary(relation) <- AshStrangler.Info.relation(resource) do
+      {:ok, key.attribute, AshStrangler.KeyDerivation.derive(key, relation, legacy_id)}
+    else
+      _ -> :error
     end
   end
 

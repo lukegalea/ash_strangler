@@ -40,7 +40,7 @@ defmodule AshStrangler.Sql.Notify do
   legacy application's availability to that table's health.
   """
 
-  alias AshStrangler.{Key, Source}
+  alias AshStrangler.{Info, Key, Source}
 
   @doc """
   Builds the notify function and trigger for `resource_or_dsl`.
@@ -51,15 +51,16 @@ defmodule AshStrangler.Sql.Notify do
   """
   def build(resource_or_dsl) do
     case AshStrangler.Info.source(resource_or_dsl) do
-      %Source{notify?: true, keys: [%Key{} = key]} = source ->
-        do_build(resource_or_dsl, source, key)
+      %Source{notify?: true, keys: [%Key{} = key]} ->
+        do_build(resource_or_dsl, key)
 
       _ ->
         []
     end
   end
 
-  defp do_build(resource_or_dsl, source, key) do
+  defp do_build(resource_or_dsl, key) do
+    relation = Info.relation(resource_or_dsl)
     table = AshPostgres.DataLayer.Info.table(resource_or_dsl)
     schema = AshPostgres.DataLayer.Info.schema(resource_or_dsl) || "public"
     channel = AshStrangler.Info.notify_channel(resource_or_dsl)
@@ -95,7 +96,7 @@ defmodule AshStrangler.Sql.Notify do
 
     trigger_up = """
     CREATE OR REPLACE TRIGGER #{trigger}
-      AFTER INSERT OR UPDATE OR DELETE ON #{source.relation}
+      AFTER INSERT OR UPDATE OR DELETE ON #{relation}
       FOR EACH ROW EXECUTE FUNCTION #{function}();
     """
 
@@ -113,8 +114,8 @@ defmodule AshStrangler.Sql.Notify do
         down: """
         DO $strangler$
         BEGIN
-          IF to_regclass('#{source.relation}') IS NOT NULL THEN
-            EXECUTE 'DROP TRIGGER IF EXISTS #{trigger} ON #{source.relation}';
+          IF to_regclass('#{relation}') IS NOT NULL THEN
+            EXECUTE 'DROP TRIGGER IF EXISTS #{trigger} ON #{relation}';
           END IF;
         END $strangler$;
         """

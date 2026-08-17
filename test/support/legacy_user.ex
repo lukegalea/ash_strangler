@@ -10,6 +10,7 @@ defmodule AshStrangler.Test.Domain do
   resources do
     resource AshStrangler.Test.LegacyUser
     resource AshStrangler.Test.DualWriteUser
+    resource AshStrangler.Test.MixedUser
   end
 end
 
@@ -24,21 +25,32 @@ defmodule AshStrangler.Test.LegacyUser do
   | Attribute | Kind | What it exercises |
   |---|---|---|
   | `id` | `key`, `{:uuid_v5, ...}` | SQL/Elixir agreement on the derived key |
-  | `login` | plain `map`, no cast | pass-through, and the unique legacy index |
-  | `email` | `map ... cast: :citext` | a cast that changes comparison semantics |
-  | `full_name` | computed `from`, read-only | NULL handling inside concatenation |
-  | `archived_at` | `map ... cast: :timestamptz` | a cast that can depend on session state |
+  | `login` | `map from: :login` | a rename, which needs no mechanism at all |
+  | `email` | `map from: :email` | a **derived** cast: twin `:string` against resource `:ci_string` |
+  | `full_name` | `map from: expr(...)`, read-only | NULL handling inside concatenation |
+  | `archived_at` | `map ... zone: "UTC"` | a naive column read as an instant, deterministically |
   | `organization_id` | `constant` | a column with no legacy source |
   | `created_by_id` | `unmapped, as: :null` | a deliberately absent column |
 
-  ## `migrate? true`, deliberately
+  ## The cast is derived, not typed
 
-  Ash does **not** own `legacy.users` -- but it does own the view, and the view
-  is emitted through `custom_statements`, which the AshPostgres migration
-  generator only visits for resources with `migrate? true`. Setting
-  `migrate? false` (the instinct for a view-backed resource, and what
-  `mix ash_postgres.gen.resources --include-views` writes) would silently mean
-  no view is ever generated.
+  0.1 said `map :email, "email", cast: :citext`. That restated the resource
+  attribute's own Ash type, and then the reconciler restated it a third time as
+  `normalize: %{email: :ci_string}`. Here the twin says `email` is `:string` and
+  the resource says it is `:ci_string`, so `AshStrangler.Lens` derives
+  `(email)::citext` -- and the reconciler derives the same normalisation from the
+  same two facts.
+
+  The cast is load-bearing rather than cosmetic: without it the view column's
+  declared type stays `text`, so `WHERE email = 'X'` **through the view** is
+  case-sensitive while the resource says it is not.
+
+  ## `migrate? false`, deliberately
+
+  Ash does not own `legacy.users`, and it does not own this view either -- the
+  compatibility DDL comes from `mix ash_strangler.gen.migration`, not from
+  `mix ash.codegen`. See `AshStrangler.Verifiers.VerifyNotMigrated` for why there is
+  no configuration in which `custom_statements` works for a view-backed resource.
   """
 
   # Fixed so the derived ids are stable across runs and can be asserted
@@ -75,27 +87,24 @@ defmodule AshStrangler.Test.LegacyUser do
   strangler do
     phase :read_from_legacy
 
-    source "legacy.users" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: @namespace}
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
 
-      map :login, "login"
-      map :email, "email", cast: :citext
-      # `from_zone:` is mandatory with `cast: :timestamptz` -- see
-      # AshStrangler.Verifiers.VerifyTimestampZones. The fixture's `deleted_at`
-      # is a naive `timestamp` recorded in UTC.
-      map :archived_at, "deleted_at", cast: :timestamptz, from_zone: "UTC"
+      map :login, from: :login
+      map :email, from: :email
 
-      map :full_name do
-        from "coalesce(first_name,'') || ' ' || coalesce(last_name,'')"
-        writable? false
-        because "Not decomposable: 'de la Cruz' splits wrong, and no rule fixes it."
-      end
+      # `zone:` replaces 0.1's `cast: :timestamptz, from_zone:` pair -- and the four
+      # places that hard-coded its inversion by hand.
+      map :archived_at, from: :deleted_at, zone: "UTC"
 
-      constant :organization_id, "'#{@organization_id}'::uuid"
+      map :full_name,
+        from: expr((first_name || "") <> " " <> (last_name || "")),
+        read_only?: true,
+        because: "Not decomposable: 'de la Cruz' splits wrong, and no rule fixes it."
+
+      constant :organization_id, expr(type(@organization_id, :uuid))
 
       unmapped [:created_by_id], as: :null, because: "No provenance for pre-migration rows."
-
-      index "index_users_on_login", unique: true, columns: ["login"]
     end
   end
 

@@ -4,32 +4,56 @@
 
 defmodule AshStrangler.RoundTripTest do
   @moduledoc """
-  The core of the suite (plan §8.3): insert an arbitrary legacy row with raw
-  SQL, read it back through the **generated** compatibility view as an Ash
-  record, and assert the projection is faithful.
+  The core of the suite: insert an arbitrary legacy row with raw SQL, read it back
+  through the **generated** compatibility view as an Ash record, and assert the
+  projection is faithful.
 
   Faithful means each mapping kind does what it claims: the key derives, plain
-  columns pass through, casts apply, computed columns compute, constants are
-  constant, and unmapped columns are NULL. None of those failures raise on
+  columns pass through, derived casts apply, computed columns compute, constants
+  are constant, and unmapped columns are NULL. None of those failures raise on
   their own — a wrong projection is a wrong value, quietly, which is why this
   is a property over generated adversarial input rather than a handful of
   examples.
 
-  `:read_from_legacy` is read-only, so this is the read half only. The write
-  half — round-tripping back through `INSTEAD OF` triggers — arrives with step
-  4, and this harness is deliberately in place first so the risky generator is
-  built against an oracle rather than alongside one.
+  ## The value space it generates over
+
+  Rows are generated over the **legacy** value space, not the modern one. That is
+  the rule the whole design follows from, and it is worth stating in the file that
+  would otherwise get it wrong: the modern value space contains only rows this
+  package created, while the legacy space is the one holding rows the old
+  application wrote over fifteen years, and it is the space a mapping has to be
+  faithful on.
+
+  The suite learned this the expensive way. A round-trip property named *"an
+  arbitrary row written through Ash reads back as it was stored"* generated
+  `state_code <- member_of([0, 1])` — the one value set on which a broken
+  five-values-onto-two mapping *is* a bijection — while its legacy-row helper never
+  set `state` at all, so every row in the entire suite carried the column default
+  `'active'`. Both directions of a mapping that destroyed three of five lifecycle
+  states were green.
+
+  So `state` is generated here from `AshStrangler.DataCase.legacy_states/0`, which
+  is every value the column actually ranges over.
+
+  `AshStrangler.Test.LegacyUser` is `:read_from_legacy`, so this file is the read
+  half. The write half — a row read through the view, written back, and compared
+  against the legacy row it came from — is `AshStrangler.DualWriteTest`.
   """
 
   use AshStrangler.DataCase, async: false
   use ExUnitProperties
 
+  alias AshStrangler.Test.DualWriteUser
   alias AshStrangler.Test.Generators
 
   describe "the projection is faithful" do
     property "every mapping kind projects correctly for an arbitrary legacy row" do
-      check all(row <- Generators.legacy_user_row(), max_runs: 50) do
-        legacy_id = insert_legacy_user!(row)
+      check all(
+              row <- Generators.legacy_user_row(),
+              state <- StreamData.member_of(legacy_states()),
+              max_runs: 50
+            ) do
+        legacy_id = insert_legacy_user!(Map.put(row, :state, state))
         record = read_through_view!(legacy_id)
 
         # The key: derived in SQL by the view, recomputed independently in
@@ -39,17 +63,27 @@ defmodule AshStrangler.RoundTripTest do
         # "record not found".
         assert record.id == derived_id(legacy_id)
 
-        # A plain mapping with no cast: byte-for-byte pass-through.
+        # A plain rename, which needs no mechanism at all: the view column is a
+        # simple reference, so it is byte-for-byte pass-through.
         assert record.login == login_of(legacy_id)
 
-        # `cast: :citext`. citext preserves the value as written and changes
-        # only how it COMPARES, so the projected text must be unchanged.
+        # The derived cast. The twin declares `email` as `:string` and the
+        # resource as `:ci_string`, so the view casts to `citext` -- nothing types
+        # it, and the reconciler derives its normalisation from those same two
+        # facts rather than a third restatement. citext preserves the value as
+        # written and changes only how it COMPARES, so the projected text must be
+        # unchanged.
         assert ci_to_string(record.email) == row.email
 
-        # A computed mapping. Note what `coalesce(a,'') || ' ' || coalesce(b,'')`
-        # actually does: two NULLs produce a single SPACE, not NULL and not "".
-        # The concatenation is never null, and NULL is indistinguishable from ""
-        # once projected -- verified against PostgreSQL 17.10.
+        # A computed mapping, and the one place Ash's operators invert SQL's:
+        # `expr((first_name || "") <> " " <> (last_name || ""))` is Ash's `||` for
+        # null-defaulting and `<>` for concatenation, so it renders as
+        # `coalesce(first_name, '') || ' ' || coalesce(last_name, '')`.
+        #
+        # Note what that actually does with two NULLs: it produces a single SPACE,
+        # not NULL and not "". The concatenation is never null, and NULL is
+        # indistinguishable from "" once projected -- verified against PostgreSQL
+        # 17.10.
         assert record.full_name == "#{row.first_name} #{row.last_name}"
 
         # A constant: no legacy source, same value for every row.
@@ -58,10 +92,17 @@ defmodule AshStrangler.RoundTripTest do
         # `unmapped ..., as: :null`.
         assert record.created_by_id == nil
 
-        # `cast: :timestamptz` over a naive `timestamp` column. Only nil-ness is
-        # asserted here; which INSTANT it lands on is session-dependent and has
-        # its own test below.
+        # `zone: "UTC"` over a naive `timestamp` column. Only nil-ness is asserted
+        # here; which INSTANT it lands on is the subject of its own test below.
         assert is_nil(record.archived_at) == is_nil(row.deleted_at)
+
+        # The same legacy row, read through the other resource mapped onto this
+        # table, whose `decode` turns the lifecycle into a code. This is `GetTotal`
+        # measured rather than proven: the obligation is decided at compile time
+        # against the value set the twin *declares*, and this is the same question
+        # asked of a value the database actually holds.
+        assert Ash.get!(DualWriteUser, derived_id(legacy_id)).state_code ==
+                 DualWriteUser.state_codes()[String.to_existing_atom(state)]
       end
     end
 
@@ -80,10 +121,36 @@ defmodule AshStrangler.RoundTripTest do
       # limitation of this mapping shape: the projection is lossy, and anything
       # downstream that needs to tell "no first name recorded" from "first name
       # recorded as empty" cannot get it from `full_name`.
+      #
+      # It is also why `full_name` is `read_only?: true` with a reason rather than
+      # a `concat`: `concat` reverses with `split_part`, and no separator makes
+      # that correct for 'de la Cruz'.
       from_nulls = read_through_view!(insert_legacy_user!(%{first_name: nil, last_name: nil}))
       from_empties = read_through_view!(insert_legacy_user!(%{first_name: "", last_name: ""}))
 
       assert from_nulls.full_name == from_empties.full_name
+    end
+  end
+
+  describe "the projection is total over the legacy value space" do
+    test "every value `state` ranges over projects to the code the decode declares" do
+      # The property the old suite could not have failed, because it never inserted
+      # a row whose `state` was anything but the column default.
+      #
+      # Compared against the mapping's own declaration rather than a copy of it, so
+      # this test cannot drift from the DSL -- and comparing the whole map at once
+      # asserts three things in one: every legacy value projects (totality), none
+      # projects to NULL, and no two share a code (injectivity, which is what makes
+      # the reverse have one answer per row).
+      projected =
+        Map.new(legacy_states(), fn state ->
+          legacy_id = insert_legacy_user!(%{state: state})
+          record = Ash.get!(DualWriteUser, derived_id(legacy_id))
+
+          {String.to_existing_atom(state), record.state_code}
+        end)
+
+      assert projected == DualWriteUser.state_codes()
     end
   end
 
@@ -108,6 +175,11 @@ defmodule AshStrangler.RoundTripTest do
       # Also invariant: citext does no Unicode normalization. These two render
       # identically and are unequal under `=`, under citext, and therefore under
       # any Ash identity built on the column.
+      #
+      # Written as escapes rather than literally, because spelled out they are two
+      # source lines that look identical, with no way for a reader to tell which is
+      # which -- and an edit that "tidied" them into literals would silently delete
+      # the distinction the test exists for.
       refute citext_equal?("caf\u00E9", "cafe\u0301")
     end
 
@@ -137,13 +209,19 @@ defmodule AshStrangler.RoundTripTest do
     end
   end
 
-  describe "from_zone makes the timestamp projection connection-independent" do
+  describe "`zone:` makes the timestamp projection connection-independent" do
     test "the same stored value projects to one instant under every session TimeZone" do
-      # The regression test for §10.12. With a bare `(deleted_at)::timestamptz`
-      # this same assertion showed 10.5 hours of drift between two connections
-      # -- silently, with no error anywhere -- because the cast read the naive
-      # value as wall-clock time in the SESSION's TimeZone. `from_zone: "UTC"`
-      # generates `AT TIME ZONE 'UTC'`, stating the zone in the view itself.
+      # The regression test for a measured 10.5 hours of drift. With a bare
+      # `(deleted_at)::timestamptz` this same assertion showed two connections
+      # reading two different instants from one row -- silently, with no error
+      # anywhere -- because the cast reads a naive value as wall-clock time in the
+      # SESSION's TimeZone. `zone: "UTC"` renders `AT TIME ZONE 'UTC'`, stating the
+      # zone in the view itself.
+      #
+      # `AT TIME ZONE` is also the only form that could carry an index:
+      # `timezone(text, timestamp without time zone)` is IMMUTABLE, while the
+      # one-argument form a bare cast resolves to is STABLE, and PostgreSQL refuses
+      # a STABLE function in an index expression.
       #
       # Lord Howe is in the list deliberately: its offset is a half hour, so an
       # implementation that still depended on the session in some partial way

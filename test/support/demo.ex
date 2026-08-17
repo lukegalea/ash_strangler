@@ -43,6 +43,56 @@ defmodule AshStrangler.Demo do
   end
 end
 
+defmodule AshStrangler.Demo.Legacy do
+  @moduledoc "Domain for the demo's twin."
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.Demo.Legacy.Accounts
+  end
+end
+
+defmodule AshStrangler.Demo.Legacy.Accounts do
+  @moduledoc """
+  The twin for `demo_legacy.accounts`.
+
+  Three resources are mapped onto it. Declaring the legacy schema once, here, is
+  what replaced repeating `source "demo_legacy.accounts" do key … end` in each of
+  them — and it is what lets all three read a *typed* column rather than a name in
+  a string.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Demo.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "accounts"
+    schema "demo_legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :email, :string, allow_nil?: false
+    attribute :first_name, :string
+    attribute :last_name, :string
+    attribute :company_name, :string
+    attribute :company_vat, :string
+    attribute :addr_line1, :string
+    attribute :addr_city, :string
+    attribute :is_active, :boolean, allow_nil?: false
+    attribute :is_deleted, :boolean, allow_nil?: false
+    attribute :approved_at, :naive_datetime
+    attribute :cancelled_at, :naive_datetime
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshStrangler.Demo.Domain do
   @moduledoc "Domain for the documented example."
   use Ash.Domain, validate_config_inclusion?: false
@@ -58,6 +108,27 @@ defmodule AshStrangler.Demo.Customer do
   @moduledoc """
   The person — with a lifecycle collapsed out of four legacy columns and handed
   to an ordinary state machine.
+
+  ## The mapping 0.1 could not write
+
+  `status` is four legacy columns and one attribute. In 0.1 the only way to state
+  it was an irreversible `CASE`, and the README said so out loud:
+
+      map :status do
+        from "CASE WHEN is_deleted THEN 'archived' ... END"
+        writable? false
+        because "Four legacy columns with no single inverse. Supply `to:`/`into:` before dual-write."
+      end
+
+  That `because:` was an invitation to write the bug: "supply an inverse" meant
+  hand-writing a second SQL string that nothing would ever compare to the first.
+
+  `collapse` states both directions per clause, which is Sparcl's
+  `case … of { p → e with e′ }` (rule **T-RCase**, ICFP 2020). Because `set:` names
+  **every** legacy column the table touches, the backward direction is total and
+  canonical by construction — there is no "which of the four do I write" left to
+  get wrong — and `AshStrangler.Obligations` decides completeness, reachability and
+  surjectivity over the guard lattice.
   """
   use Ash.Resource,
     domain: AshStrangler.Demo.Domain,
@@ -121,9 +192,7 @@ defmodule AshStrangler.Demo.Customer do
     defaults [:read]
 
     # One action per transition, so the lifecycle is expressed as intent rather
-    # than as an attribute somebody happens to set. They become usable at
-    # `:dual_write`; declaring them now is how the target model gets written
-    # down while the legacy columns are still the source of truth.
+    # than as an attribute somebody happens to set.
     update :approve do
       accept []
       require_atomic? false
@@ -146,41 +215,52 @@ defmodule AshStrangler.Demo.Customer do
   strangler do
     phase :read_from_legacy
 
-    source "demo_legacy.accounts" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
+    source AshStrangler.Demo.Legacy.Accounts do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
 
-      map :email, "email", cast: :citext
+      map :email, from: :email
 
-      map :full_name do
-        from "coalesce(first_name,'') || ' ' || coalesce(last_name,'')"
-        writable? false
-        because "Not decomposable: 'de la Cruz' splits wrong, and no rule fixes it."
-      end
+      concat :full_name,
+        from: [:first_name, :last_name],
+        separator: " ",
+        read_only?: true,
+        because: "Not decomposable: 'de la Cruz' splits wrong, and no separator fixes it."
 
       # Four columns, one lifecycle. Most-terminal first, so the projection stays
       # a total function over rows the old application was never stopped from
-      # writing.
-      map :status do
-        from """
-        CASE
-          WHEN is_deleted THEN 'archived'
-          WHEN cancelled_at IS NOT NULL THEN 'cancelled'
-          WHEN approved_at IS NOT NULL THEN 'active'
-          ELSE 'pending'
-        END
-        """
+      # writing -- and `:otherwise` is what makes that guarantee rather than a hope.
+      collapse :status do
+        hit_policy :first
 
-        writable? false
+        state :archived,
+          when: expr(is_deleted),
+          set: [is_deleted: true, cancelled_at: nil, approved_at: nil]
 
-        because "Four legacy columns with no single inverse. Supply `to:`/`into:` before dual-write."
+        state :cancelled,
+          when: expr(not is_nil(cancelled_at)),
+          set: [is_deleted: false, cancelled_at: touch(), approved_at: nil]
+
+        state :active,
+          when: expr(not is_nil(approved_at)),
+          set: [is_deleted: false, cancelled_at: nil, approved_at: touch()]
+
+        state :pending,
+          when: :otherwise,
+          set: [is_deleted: false, cancelled_at: nil, approved_at: nil]
       end
 
       # The employer lives in the same row, so the association is the row itself.
-      map :organization_id do
-        from "uuid_generate_v5('#{AshStrangler.Demo.namespace()}'::uuid, 'demo_legacy.accounts:' || id::text)"
-        writable? false
-        because "Derived from the same legacy row; the split is presentational."
-      end
+      map :organization_id,
+        from:
+          expr(
+            fragment(
+              "uuid_generate_v5(?::uuid, 'demo_legacy.accounts:' || ?::text)",
+              "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71",
+              id
+            )
+          ),
+        read_only?: true,
+        because: "Derived from the same legacy row; the split is presentational."
     end
   end
 end
@@ -219,11 +299,11 @@ defmodule AshStrangler.Demo.Organization do
   strangler do
     phase :read_from_legacy
 
-    source "demo_legacy.accounts" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
+    source AshStrangler.Demo.Legacy.Accounts do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
 
-      map :name, "company_name"
-      map :vat_number, "company_vat"
+      map :name, from: :company_name
+      map :vat_number, from: :company_vat
     end
   end
 end
@@ -255,11 +335,11 @@ defmodule AshStrangler.Demo.Address do
   strangler do
     phase :read_from_legacy
 
-    source "demo_legacy.accounts" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
+    source AshStrangler.Demo.Legacy.Accounts do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: AshStrangler.Demo.namespace()}
 
-      map :line1, "addr_line1"
-      map :city, "addr_city"
+      map :line1, from: :addr_line1
+      map :city, from: :addr_city
     end
   end
 end

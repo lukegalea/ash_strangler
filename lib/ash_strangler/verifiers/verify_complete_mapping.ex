@@ -54,7 +54,7 @@ defmodule AshStrangler.Verifiers.VerifyCompleteMapping do
       An unmentioned attribute would read NULL for every legacy row, which is a
       silent data loss rather than a failure. Either map it:
 
-          map #{inspect(List.first(missing))}, "legacy_column"
+          map #{inspect(List.first(missing))}, from: :legacy_column
 
       or declare the omission and say why:
 

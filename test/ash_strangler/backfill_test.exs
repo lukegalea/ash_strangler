@@ -2,9 +2,121 @@
 #
 # SPDX-License-Identifier: MIT
 
+defmodule AshStrangler.BackfillTest.Domain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.BackfillTest.ExpandedUser
+    resource AshStrangler.BackfillTest.IdentityKeyedUser
+  end
+end
+
+defmodule AshStrangler.BackfillTest.ExpandedUser do
+  @moduledoc """
+  A resource caught mid-expand: the legacy table has grown a column and nothing
+  has put a value in it yet.
+
+  `salt` really is a column of `legacy.users`, and the twin declares it, but the
+  mapping says `constant` — which is what an expand step looks like from the
+  model's side between the `ALTER TABLE` and the backfill. That combination is
+  the one case where `AshStrangler.Backfill.plan/2` has somewhere to write a
+  constant to, and no other fixture in the suite is in that state: `LegacyUser`'s
+  `organization_id` has no legacy column at all, which is the ordinary meaning of
+  `constant` and correctly produces no backfill work.
+
+  Once the backfill has run, this declaration becomes `map :salt, from: :salt`
+  and the entry leaves the plan on its own — which is the property that keeps a
+  derived backfill from accreting statements nobody can retire. See
+  `AshStrangler.Backfill`'s moduledoc.
+  """
+
+  use Ash.Resource,
+    domain: AshStrangler.BackfillTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  postgres do
+    table "expanded_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+    attribute :salt, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :login, from: :login
+
+      constant :salt, expr("fixed-by-backfill")
+    end
+  end
+end
+
+defmodule AshStrangler.BackfillTest.IdentityKeyedUser do
+  @moduledoc """
+  A `strategy: :identity` key, here only so the refusal has something to refuse.
+
+  `:identity` says the legacy table already holds the modern key and the view
+  reads it unchanged, which means there is no expression to derive a stored value
+  *from* — the column `key from:` names *is* the stored key. Deciding what those
+  uuids should be is a choice the mapping does not state, so
+  `AshStrangler.Backfill.plan/2` refuses `store_key:` here rather than inventing
+  one.
+
+  Never installed in the database: it exists to be read, not run.
+  """
+
+  use Ash.Resource,
+    domain: AshStrangler.BackfillTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "identity_keyed_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :salt, strategy: :identity
+
+      map :login, from: :login
+    end
+  end
+end
+
 defmodule AshStrangler.BackfillTest do
   @moduledoc """
-  Step 6: the backfill loop, against a real table.
+  The backfill loop, against a real table.
 
   Every failure this file asserts against is silent in production. A backfill
   that re-processes rows corrupts the ones it touches twice; a backfill that
@@ -14,13 +126,16 @@ defmodule AshStrangler.BackfillTest do
   raise on their own, so each gets an explicit test here.
 
   The fixture tables are created inside the test's own sandbox transaction, in
-  a `backfill_test` schema, and vanish when it rolls back. Nothing here touches
-  the shared `legacy` fixture.
+  a `backfill_test` schema, and vanish when it rolls back. The derived-plan
+  tests are the exception: a plan is derived from a real mapping, so they run
+  against the shared `legacy` fixture — inside the same transaction, so the
+  `ALTER TABLE`s they need roll back with everything else.
   """
 
   use AshStrangler.DataCase, async: false
 
   alias AshStrangler.Backfill
+  alias AshStrangler.BackfillTest.ExpandedUser
 
   @relation "backfill_test.widgets"
 
@@ -437,7 +552,172 @@ defmodule AshStrangler.BackfillTest do
     end
   end
 
+  describe "plan/2: the backfill comes out of the mapping it is backfilling" do
+    test "the relation and the key are read off the twin and the key entity" do
+      plan = Backfill.plan(LegacyUser)
+
+      assert plan[:relation] == "legacy.users"
+      assert plan[:key] == "id"
+    end
+
+    test "a constant with no legacy column to live in produces no work" do
+      # `organization_id` has no column in `legacy.users`, which is the ordinary
+      # meaning of `constant`: the view manufactures the value and nothing stores
+      # it. So the plan is honest about having nothing to do, rather than
+      # inventing a column for a value that has no home.
+      assert Backfill.plan(LegacyUser)[:set] == []
+    end
+
+    test "a constant whose column the twin declares is materialised into it" do
+      # The transitional state of an expand step -- see
+      # `AshStrangler.BackfillTest.ExpandedUser`. The twin is the record of which
+      # columns the legacy table actually has, so it is the thing asked.
+      assert Backfill.plan(ExpandedUser)[:set] == [{"salt", "'fixed-by-backfill'"}]
+    end
+
+    test "store_key stores the view's own key expression, not a fourth copy of it" do
+      [{"row_uuid", expression}] = Backfill.plan(LegacyUser, store_key: :row_uuid)[:set]
+
+      %{view: %{up: view_sql}, key_index: %{up: index_sql}} =
+        AshStrangler.Sql.View.build(LegacyUser)
+
+      # The view's SELECT, the expression index and this UPDATE have to agree
+      # byte for byte. A difference as small as whitespace makes Postgres decline
+      # to use the index, silently, with a sequential scan as the only symptom;
+      # a difference in the *value* means the ids the new application has been
+      # reading for weeks are not the ids the backfill stored, and that surfaces
+      # only at cutover.
+      assert String.contains?(view_sql, expression)
+      assert String.contains?(index_sql, expression)
+    end
+
+    test ":identity refuses store_key, because there is nothing to derive a value from" do
+      # `:identity` means the legacy table already holds the modern key. What
+      # those uuids should be is a choice no mapping states, so deriving one
+      # would be inventing it.
+      assert_raise ArgumentError, ~r/the key strategy is `:identity`/, fn ->
+        Backfill.plan(AshStrangler.BackfillTest.IdentityKeyedUser, store_key: :salt)
+      end
+    end
+
+    test "an explicit set entry replaces the derived one rather than joining it" do
+      # Two assignments to one column is a hard error from PostgreSQL, so which
+      # one wins is not a matter of preference.
+      plan =
+        Backfill.plan(LegacyUser, store_key: :row_uuid, set: [row_uuid: "gen_random_uuid()"])
+
+      assert plan[:set] == [row_uuid: "gen_random_uuid()"]
+    end
+
+    test "run/2 options pass straight through" do
+      plan = Backfill.plan(LegacyUser, batch_size: 250, max_batches: 4, progress: nil)
+
+      assert plan[:batch_size] == 250
+      assert plan[:max_batches] == 4
+    end
+
+    test "a resource with no strangler mapping says so, and says what to do instead" do
+      assert_raise ArgumentError, ~r/has no strangler `source`/, fn ->
+        Backfill.plan(AshStrangler.DiagramTest.Plain)
+      end
+    end
+  end
+
+  describe "run/2 with a derived plan" do
+    setup do
+      # The expand step, as DDL: a column the legacy schema never had. Inside the
+      # test's own sandbox transaction, so it rolls back with the rows.
+      TestRepo.query!("ALTER TABLE legacy.users ADD COLUMN row_uuid uuid", [])
+
+      ids = Enum.map(1..3, fn _ -> insert_legacy_user!() end)
+      Backfill.add_flag_column!(TestRepo, "legacy.users")
+
+      %{ids: ids}
+    end
+
+    test "stores exactly the uuid the derivation computes in Elixir", %{ids: ids} do
+      {:ok, result} =
+        Backfill.run(TestRepo, Backfill.plan(LegacyUser, store_key: :row_uuid, batch_size: 2))
+
+      assert result.complete?
+      assert result.rows == 3
+
+      # `derived_id/1` computes the uuid in Elixir, so this is not Postgres being
+      # compared against Postgres. It is the independent side of the agreement
+      # the key derivation has to hold on, and the reason the backfill must not
+      # carry its own spelling of the expression.
+      for legacy_id <- ids do
+        assert stored_uuid(legacy_id) == derived_id(legacy_id)
+      end
+    end
+
+    test "and therefore the value the view has been serving all along", %{ids: ids} do
+      {:ok, _} = Backfill.run(TestRepo, Backfill.plan(LegacyUser, store_key: :row_uuid))
+
+      for legacy_id <- ids do
+        %Postgrex.Result{rows: [[view_id]]} =
+          TestRepo.query!(
+            "SELECT id::text FROM strangler.users WHERE __legacy_id = $1",
+            [legacy_id]
+          )
+
+        assert stored_uuid(legacy_id) == view_id
+      end
+    end
+
+    test "a derived constant is written into the legacy column the twin declares" do
+      {:ok, result} = Backfill.run(TestRepo, Backfill.plan(ExpandedUser))
+
+      assert result.rows == 3
+      assert salts() == ["fixed-by-backfill"]
+    end
+
+    test "a derived plan is idempotent, which is what bounds the missing interlock" do
+      # The trigger does not clear the flag, so a row a concurrent writer already
+      # handled can be re-derived by a later batch. That is only harmless because
+      # every expression `plan/2` produces is a function of the row -- so this
+      # asserts the property the moduledoc leans on rather than leaving it as a
+      # claim. `add_flag_column!` re-flags nothing, so the flags are reset by
+      # hand here to force the second pass.
+      plan = Backfill.plan(LegacyUser, store_key: :row_uuid)
+
+      {:ok, _} = Backfill.run(TestRepo, plan)
+      first = uuids()
+
+      TestRepo.query!(
+        ~s|UPDATE legacy.users SET "#{Backfill.flag_column()}" = true|,
+        []
+      )
+
+      {:ok, second} = Backfill.run(TestRepo, plan)
+
+      assert second.rows == 3
+      assert uuids() == first
+    end
+  end
+
   # --- helpers -----------------------------------------------------------------
+
+  defp stored_uuid(legacy_id) do
+    %Postgrex.Result{rows: [[uuid]]} =
+      TestRepo.query!("SELECT row_uuid::text FROM legacy.users WHERE id = $1", [legacy_id])
+
+    uuid
+  end
+
+  defp uuids do
+    %Postgrex.Result{rows: rows} =
+      TestRepo.query!("SELECT id, row_uuid::text FROM legacy.users ORDER BY id", [])
+
+    rows
+  end
+
+  defp salts do
+    %Postgrex.Result{rows: rows} =
+      TestRepo.query!("SELECT DISTINCT salt FROM legacy.users", [])
+
+    List.flatten(rows)
+  end
 
   # `severity` is not decoration: `Postgrex.Error.message/1` reads it
   # unconditionally, so a hand-built error without it makes ExUnit's

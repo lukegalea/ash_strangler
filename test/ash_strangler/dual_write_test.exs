@@ -57,14 +57,25 @@ defmodule AshStrangler.DualWriteTest do
       assert to_string(user.email) == "returning@example.com"
     end
 
-    test "the write reaches the legacy table with the inverse mapping applied" do
-      user = create!(%{state_code: 0, email: "inverse@example.com"})
+    test "the write reaches the legacy table with the decode's inverse applied" do
+      # Every code, not the two the mapping used to be a bijection on. The inverse
+      # is the `decode` table read right-to-left, so this loop is checking the
+      # declaration against itself in the only place it can be wrong -- the SQL.
+      for {state, code} <- DualWriteUser.state_codes() do
+        user = create!(%{state_code: code})
+        assert legacy_row(user.login).state == to_string(state)
+      end
+    end
 
-      # state_code 0 maps back through `to:` to the legacy string 'active'.
-      assert legacy_row(user.login).state == "active"
+    test "code 1 is `passive`, which is what 0.1 got wrong" do
+      # Stated on its own because it is the specific value the shipped mapping
+      # destroyed. Forward sent every non-`active` state to `1`; backward sent `1`
+      # to `'suspended'`. Three of five lifecycle states went in and came out as a
+      # fourth.
+      user = create!(%{state_code: 1})
 
-      suspended = create!(%{state_code: 1})
-      assert legacy_row(suspended.login).state == "suspended"
+      assert legacy_row(user.login).state == "passive"
+      refute legacy_row(user.login).state == "suspended"
     end
 
     test "a derived column is computed from what was actually stored" do
@@ -83,7 +94,7 @@ defmodule AshStrangler.DualWriteTest do
 
       updated =
         user
-        |> Ash.Changeset.for_update(:update, %{state_code: 1, email: "after@example.com"})
+        |> Ash.Changeset.for_update(:update, %{state_code: 3, email: "after@example.com"})
         |> Ash.update!()
 
       assert updated.id == user.id
@@ -168,8 +179,9 @@ defmodule AshStrangler.DualWriteTest do
     test "a timestamptz written through Ash lands as the right naive instant" do
       # The write direction of §10.12. Assigning a timestamptz to a naive
       # `timestamp` column uses an assignment cast that reads the session's
-      # TimeZone -- the same hazard as the read, mirrored. `from_zone: "UTC"`
-      # makes the trigger emit `AT TIME ZONE 'UTC'` explicitly.
+      # TimeZone -- the same hazard as the read, mirrored. `zone: "UTC"` makes the
+      # trigger emit `AT TIME ZONE 'UTC'` explicitly, and it is the SAME expression
+      # the view reads with, rendered through a different reference frame.
       user = create!(%{archived_at: ~U[2024-06-15 12:00:00.000000Z]})
 
       assert legacy_row(user.login).deleted_at == ~N[2024-06-15 12:00:00.000000]
@@ -185,7 +197,43 @@ defmodule AshStrangler.DualWriteTest do
     end
   end
 
-  describe "round trip" do
+  describe "round trip over the legacy value space" do
+    property "a legacy row read and written back unchanged is still the row it was" do
+      # The property the suite was missing. `state_code`'s own value space
+      # contains only rows this package created; the legacy `state` space is the
+      # one holding rows the old application wrote, and it is the space the
+      # mapping has to be a bijection on.
+      #
+      # No write here mentions the lifecycle. The mapping is asked only to leave
+      # alone what it was not asked to change.
+      check all(
+              state <- StreamData.member_of(legacy_states()),
+              email <- Generators.adversarial_text(),
+              max_runs: 25
+            ) do
+        login = "rt-#{System.unique_integer([:positive])}"
+        insert_legacy_user!(%{login: login, state: state})
+
+        user = Ash.get!(DualWriteUser, derived_id_for(login))
+
+        user
+        |> Ash.Changeset.for_update(:update, %{email: email})
+        |> Ash.update!()
+
+        assert legacy_row(login).state == state,
+               """
+               Writing only `email` rewrote the lifecycle.
+
+                 legacy state before: #{inspect(state)}
+                 projected state_code: #{inspect(user.state_code)}
+                 legacy state after:  #{inspect(legacy_row(login).state)}
+
+               This is a PutGet violation: forward(backward(forward(row))) is not
+               forward(row), so the declared inverse is not an inverse.
+               """
+      end
+    end
+
     property "an arbitrary row written through Ash reads back as it was stored" do
       check all(
               email <- Generators.adversarial_text(),

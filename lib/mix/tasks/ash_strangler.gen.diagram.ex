@@ -22,6 +22,20 @@ defmodule Mix.Tasks.AshStrangler.Gen.Diagram do
   than maintained alongside it — and a drawing that is generated cannot drift
   from the mapping the way one in a wiki does.
 
+  ## What the notation means
+
+  Nothing here is a notation of its own. Every shape and line style is a rendering
+  of `AshStrangler.Lens.classify/1` — `:identity`, `:transformation` or `:masked`,
+  with `invertible: :yes | :semi | :no` — so the picture and the writability
+  decision are computed from one source and cannot disagree.
+
+  That is worth stating because 0.1's mapping diagram needed **a second notation**
+  to describe what the DSL did: four shapes and four line styles, including a
+  rhombus reading *"source columns not resolved"* for the cases a regex over the
+  `from:` SQL string could not parse. Needing a second language to talk about the
+  first was the symptom. Legacy columns are typed twin attributes now, so lineage
+  is a fact rather than a guess and that rhombus is not expressible.
+
   ## Prerequisites
 
   The `plain` and `md` formats need nothing. `svg`, `pdf` and `png` are rendered

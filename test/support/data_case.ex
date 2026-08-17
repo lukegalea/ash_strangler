@@ -48,8 +48,8 @@ defmodule AshStrangler.DataCase do
     %Postgrex.Result{rows: [[legacy_id]]} =
       AshStrangler.TestRepo.query!(
         """
-        INSERT INTO legacy.users (login, email, first_name, last_name, deleted_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO legacy.users (login, email, first_name, last_name, deleted_at, state)
+        VALUES ($1, $2, $3, $4, $5, coalesce($6, 'active'))
         RETURNING id
         """,
         [
@@ -57,12 +57,24 @@ defmodule AshStrangler.DataCase do
           Map.get(attrs, :email),
           Map.get(attrs, :first_name),
           Map.get(attrs, :last_name),
-          Map.get(attrs, :deleted_at)
+          Map.get(attrs, :deleted_at),
+          Map.get(attrs, :state)
         ]
       )
 
     legacy_id
   end
+
+  @doc """
+  Every value the legacy `state` column actually ranges over.
+
+  This list is the whole reason the round-trip property is worth running.
+  Generating over `state_code`'s *modern* value space only ever produces rows
+  this package created; the legacy space is the one holding rows the old
+  application wrote over fifteen years, and it is the space a mapping has to be
+  a bijection on.
+  """
+  def legacy_states, do: ~w(passive pending active suspended deleted)
 
   @doc "Reads a legacy row back through the generated view, as an Ash record."
   def read_through_view!(legacy_id) do
