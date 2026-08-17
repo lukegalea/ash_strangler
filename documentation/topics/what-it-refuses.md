@@ -21,7 +21,7 @@ compiling the broken mapping and reading what came out.
 
 ## Two layers, and one rule about the boundary
 
-There are **eleven verifiers** and, behind one of them, **ten proof obligations**.
+There are **twelve verifiers** and, behind one of them, **ten proof obligations**.
 The split is not arbitrary. A verifier answers a question about the *declaration* —
 is this attribute accounted for, does this identity exist, is this reference a real
 column. An obligation answers a question about the *values*: is there a legacy
@@ -247,6 +247,58 @@ provably absent from every operand — a condition only real data can settle. Pa
 that for a single column buys nothing.
 
 ---
+
+## A timestamp cast the session can move
+
+A naive legacy timestamp feeding an aware attribute is refused unless the mapping
+says which zone the column is recorded in.
+
+```elixir
+map :archived_at, from: :deleted_at            # refused
+map :archived_at, from: :deleted_at, zone: "UTC"   # accepted
+```
+
+The twin says `deleted_at` is `:naive_datetime` and the attribute says
+`:utc_datetime_usec`, so a cast is *derived* from those two type facts — and the
+derived cast is `(deleted_at)::timestamptz`, which reads the stored value as
+**wall-clock time in the session's `TimeZone`**. That is a per-connection setting.
+Measured against PostgreSQL 17.10, one stored value:
+
+| session `TimeZone` | resulting instant |
+|---|---|
+| `UTC` | `2024-06-15 12:00:00+00` |
+| `America/New_York` | `2024-06-15 12:00:00-04` |
+| `Australia/Lord_Howe` | `2024-06-15 12:00:00+10:30` |
+
+Fourteen and a half hours of spread, with no error anywhere: a background job, a
+`psql` session, a replica with a different default, or a pooled connection that
+inherited a `SET TimeZone` each read something different. The reverse direction
+writes `(NEW.archived_at)::timestamp`, session-dependent in the mirrored way.
+
+`zone:` is the deterministic form. It renders `deleted_at AT TIME ZONE 'UTC'`,
+where the zone lives in the view rather than in session state, and it is also the
+only form that can carry an index — `timezone(text, timestamp without time zone)`
+is `IMMUTABLE`, while the one-argument form a bare cast resolves to is `STABLE`,
+and PostgreSQL refuses a `STABLE` function in an index expression.
+
+**Why not default to UTC?** Because defaulting would be right for most legacy
+systems and silently wrong for the rest, moving every timestamp by a fixed
+offset — the worst available outcome. Which zone a naive column is recorded in is
+a fact about the *old application*, not about its schema, so there is nothing in
+the database to read it from and it is not guessed.
+
+If the column is already `timestamptz`, omit `zone:` entirely; `AT TIME ZONE` on
+an already-aware value converts it *back* to naive, which `VerifyNotRedundant`
+refuses.
+
+> #### Why a derived layer still needs this {: .info}
+>
+> Deriving the cast from the two types is what removed `cast:` from the DSL, and it
+> is the right move. But a derivation does not inherit the **judgement** a
+> hand-typed declaration carried: the type system can see that a cast is *needed*
+> and cannot see that one particular cast is *non-deterministic*. Every derivation
+> in this design needs the refusals its declared form would have carried, and this
+> is the one that shows why.
 
 ## A mapping whose prose disagrees with its reverse
 
@@ -969,58 +1021,13 @@ Note that the two symbols are inverted relative to SQL: Ash's `||` is SQL's
 
 # What replaced the checks that are gone
 
-Three verifiers were deleted. Recording where each of their rules went matters,
-because a deleted check is otherwise indistinguishable from a forgotten one — and
-one of the three is genuinely not fully carried, which is worth knowing rather
-than discovering.
+Two verifiers were deleted. Recording where each of their rules went matters,
+because a deleted check is otherwise indistinguishable from a forgotten one.
 
 | Deleted | What carries the rule now |
 |---|---|
 | `VerifyWritableMappingsReversible` — *a computed writable mapping must supply `to:`/`into:`* | Nothing supplies an inverse; the inverse is **constructed** from the combinator. `VerifyDerivedWritability` checks the two ways the prose can disagree with it, and `GetPut`/`PutGet` check that the constructed inverse is actually one. The old check only verified the two strings were *present*, never that they were inverses — which is how a wrong inverse shipped. |
 | `VerifyJoinedMappingsReadOnly` — *a mapping qualified by a join alias must be read-only* | `VerifyJoinedWritesRefused`, structurally, over the reference's relationship path rather than over a substring of SQL. |
-| `VerifyTimestampZones` — *a naive-to-aware timestamp cast must state its zone* | Partly `zone:` itself, which carries its own inverse and can be pushed into an index; partly `VerifyNotRedundant`, which refuses `zone:` on an already-aware column. **Partly nothing — see the gap below.** |
-
-## The one gap, stated rather than glossed
-
-`VerifyTimestampZones` existed to refuse `cast: :timestamptz` without a
-`from_zone:`. Measured against PostgreSQL 17.10, `(deleted_at)::timestamptz` reads
-the stored value as **wall-clock time in the session's `TimeZone`** and converts
-to an instant accordingly, and `TimeZone` is a per-connection setting:
-
-| session `TimeZone` | resulting instant |
-|---|---|
-| `UTC` | `2024-06-15 12:00:00Z` |
-| `America/New_York` | `2024-06-15 16:00:00Z` |
-| `Australia/Lord_Howe` | `2024-06-15 01:30:00Z` |
-
-Ten and a half hours of drift between two connections reading the same row, with
-no error anywhere. `zone:` is the deterministic form — it renders
-`deleted_at AT TIME ZONE 'UTC'`, where the zone is in the view rather than in
-session state — and it is also the only form that can carry an index, because
-`timezone(text, timestamp without time zone)` is `IMMUTABLE` while the
-one-argument form a bare cast resolves to is `STABLE`, and PostgreSQL refuses a
-`STABLE` function in an index expression.
-
-The gap is that a bare rename between a naive twin column and an aware attribute
-is not refused. `map :archived_at, from: :deleted_at`, where the twin says
-`:naive_datetime` and the attribute says `:utc_datetime_usec`, *derives*
-`(deleted_at)::timestamptz` from the two type facts, and every verifier passes.
-The reverse writes `(NEW.archived_at)::timestamp`, session-dependent in the
-mirrored direction. Nothing about the derivation is wrong in general — deriving
-the cast from the two types is what removed `cast:` — but this one pair should be
-refused with the same message the old verifier gave, because which zone a naive
-column is recorded in is a fact about the *old application* and there is nothing
-in the database to read it from. Until it is, state the zone:
-
-```elixir
-map :archived_at, from: :deleted_at, zone: "UTC"
-```
-
-**Why not default to UTC?** Because defaulting would be right for most legacy
-systems and silently wrong for the rest, moving every timestamp by a fixed
-offset — the worst available outcome. If the column is already `timestamptz`, omit
-`zone:` entirely; `AT TIME ZONE` on an already-aware value converts it *back* to
-naive, which `VerifyNotRedundant` does refuse.
 
 ---
 
