@@ -56,7 +56,9 @@ an optimisation. See below.
 
 **The listener re-reads through Ash.** This is the part that makes the resulting
 notification indistinguishable from an Ash-originated one: calculations are
-computed, field and row policies apply, tenancy applies.
+computed, field and row policies apply, tenancy applies. It is also why the
+payload can afford to be so small — the row data in it would have been thrown
+away.
 
 **Delivery happens on commit.** `NOTIFY` does not fire for a rolled-back
 transaction, which is correct and what you want.
@@ -74,12 +76,12 @@ yours.
 strangler do
   phase :dual_write
 
-  source "legacy.users" do
+  source MyApp.Legacy.Users do
     notify? true
     # notify_channel "my_app_strangler"   # optional; defaults to "ash_strangler"
 
-    key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-…"}
-    map :email, "email", cast: :citext
+    key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-…"}
+    map :email, from: :email
   end
 end
 ```
@@ -93,12 +95,15 @@ DECLARE
 BEGIN
   affected := COALESCE(NEW, OLD);
 
+  -- Key only. See the moduledoc: a payload built from row data can exceed
+  -- the 7999-byte ceiling and abort the LEGACY application's transaction.
   PERFORM pg_notify('ash_strangler', json_build_object(
     'resource', 'Elixir.MyApp.Accounts.User',
     'legacy_id', affected.id,
     'op', lower(TG_OP)
   )::text);
 
+  -- The return value of an AFTER row trigger is ignored.
   RETURN NULL;
 END $strangler$ LANGUAGE plpgsql;
 
@@ -110,11 +115,20 @@ CREATE OR REPLACE TRIGGER "strangler_users_notify"
 Returning `NULL` is fine here and only here: the return value of an `AFTER` row
 trigger is ignored. (In an `INSTEAD OF` trigger the same `RETURN NULL` reports
 "0 rows affected" and surfaces as `Ecto.StaleEntryError` — see
-[what it refuses to generate](what-it-refuses.md).)
+[how it works](how-it-works.md#7-instead-of-triggers-only-where-required).)
 
 The `down` statement for the trigger is guarded by `to_regclass`, because this
 trigger lives on a relation the package does not own and must not assume still
-exists.
+exists:
+
+```sql
+DO $strangler$
+BEGIN
+  IF to_regclass('legacy.users') IS NOT NULL THEN
+    EXECUTE 'DROP TRIGGER IF EXISTS "strangler_users_notify" ON legacy.users';
+  END IF;
+END $strangler$;
+```
 
 One channel serves every resource, with the resource named in the payload,
 because PostgreSQL caps a channel name at 63 bytes and a channel-per-resource
@@ -123,10 +137,15 @@ from a compile-time DSL literal and is never interpolated from anything supplied
 at runtime — Postgrex has had channel-name escaping CVEs, and a name that cannot
 vary cannot carry an injection.
 
-The trigger targets the relation named in `source`, so this mechanism belongs to
-the phases in which that relation is a real table — `:read_from_legacy` and
-`:dual_write`. After cutover the writes worth hearing about are Ash's own, and
-Ash's notifiers already cover them.
+The relation the trigger is attached to is the **twin's** — read off its
+`postgres do table/schema end` rather than named a second time in the `strangler`
+block. So this mechanism belongs to the phases in which that relation is a real
+table: `:read_from_legacy` and `:dual_write`. At `:read_from_new` the migration
+generator emits no notify trigger even with `notify? true`, and it has to not:
+the legacy name is the reverse *view* by then, and PostgreSQL rejects a row-level
+`AFTER` trigger on a view, so emitting it would produce a migration that cannot
+run. Nothing is lost — past cutover the writes worth hearing about are Ash's own,
+and Ash's notifiers already cover them.
 
 ---
 
@@ -209,7 +228,9 @@ database, not to stop delivering every subsequent one.
 
 The modern id is computed, not looked up: `AshStrangler.KeyDerivation.derive/3`
 applies the same derivation the view's key expression uses, so the listener never
-needs a round trip to turn a legacy id into an Ash id.
+needs a round trip to turn a legacy id into an Ash id. Both sides build the hashed
+name through `name_prefix/1`, which is why they cannot drift — and a drift here
+would not raise, it would simply find no row.
 
 `:metadata` carries the origin, which is how a consumer that cares can tell a
 legacy write from an Ash one.
@@ -267,7 +288,9 @@ that, and no amount of work in this listener would change it.
 That last row has a consequence worth stating as its own rule: **a row updated
 twice in one transaction produces one event, so this can never be used to count
 writes.** It is fine for a listener that re-reads. It is useless as a measure of
-write volume, and it is unacceptable as an audit trail.
+write volume, and it is unacceptable as an audit trail. It is also why
+`mix ash_strangler.check` tells you to answer *"is the legacy write path dead?"*
+with `pg_stat_user_tables` rather than with this.
 
 There is one more deployment constraint, and it is not a detail: **`LISTEN` is
 session-scoped and therefore does not work under pgbouncer transaction or
