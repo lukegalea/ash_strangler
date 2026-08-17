@@ -20,15 +20,22 @@ defmodule AshStrangler.Sql.ReverseView do
   | View is named for | the modern shape | the **legacy** shape |
   | View reads from | legacy tables | the Ash-owned table |
   | `migrate?` | `false` — the table is a view | `true` — Ash owns a real table |
-  | Projection uses | `from:` (forward) | `to:` (backward) |
+  | Projection uses | `AshStrangler.Lens`'s forward | the same lens's `writes/1` |
 
-  Because it projects *backwards*, this view can only be built from mappings
-  that declared an inverse. A `writable? false` mapping is precisely a
-  declaration that no inverse exists, so the legacy columns behind it cannot be
-  reconstructed — `full_name` cannot yield back `first_name` and `last_name`.
-  `AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase rather than
-  emitting a view that quietly returns nulls for columns the old application
-  still reads.
+  That last row is the change from 0.1. The reverse projection used to be
+  `String.replace(to, "$NEW.", "")` over a separately hand-written SQL string — a
+  third representation of one transform, and one that nothing related to the other
+  two. It is now the *same* `Lens.writes/1` the trigger uses, rendered through a
+  different reference frame: `Printer.bare_frame/1` spells an attribute reference
+  as a bare column of the stored table, where the trigger's `new_frame/0` spells it
+  `NEW.<attribute>`.
+
+  Because it projects *backwards*, this view can only be built from mappings whose
+  reverse exists. A read-only mapping is precisely a declaration that it does not —
+  `full_name` cannot yield back `first_name` and `last_name` —
+  and `AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase rather than
+  emitting a view that quietly returns nulls for columns the old application still
+  reads.
 
   ## What this does NOT emit, deliberately
 
@@ -41,8 +48,8 @@ defmodule AshStrangler.Sql.ReverseView do
   deliberately, rather than something that ran because a phase word changed.
   """
 
-  alias AshStrangler.{Constant, Source, Unmapped}
-  alias AshStrangler.Map, as: MapEntry
+  alias AshStrangler.{Info, Lens}
+  alias AshStrangler.Sql.Printer
 
   @doc """
   Builds the reverse view for `resource`.
@@ -51,24 +58,24 @@ defmodule AshStrangler.Sql.ReverseView do
   retirement of the old table -- see the moduledoc.
   """
   def build(resource) do
-    with true <- AshStrangler.Info.strangled?(resource),
-         :read_from_new <- AshStrangler.Info.strangler_phase!(resource),
-         %Source{} = source <- AshStrangler.Info.source(resource) do
-      do_build(resource, source)
+    with true <- Info.strangled?(resource),
+         :read_from_new <- Info.strangler_phase!(resource) do
+      do_build(resource)
     else
       _ -> []
     end
   end
 
-  defp do_build(resource, source) do
+  defp do_build(resource) do
     table = AshPostgres.DataLayer.Info.table(resource)
     schema = AshPostgres.DataLayer.Info.schema(resource) || "public"
     new_relation = ~s("#{schema}"."#{table}")
+    relation = Info.relation(resource)
 
-    columns = reverse_columns!(resource, source)
+    columns = reverse_columns!(resource)
 
     up = """
-    CREATE OR REPLACE VIEW #{source.relation} AS
+    CREATE OR REPLACE VIEW #{relation} AS
     SELECT
     #{Enum.map_join(columns, ",\n", fn {expr, name} -> "  #{expr} AS #{name}" end)}
     FROM #{new_relation};
@@ -78,47 +85,40 @@ defmodule AshStrangler.Sql.ReverseView do
       %{
         name: :"strangler_#{table}_reverse_view",
         up: up,
-        down: "DROP VIEW IF EXISTS #{source.relation};"
+        down: "DROP VIEW IF EXISTS #{relation};"
       }
     ]
   end
 
-  # `{expression_over_the_new_table, legacy_column_name}` for every legacy
-  # column the mapping can reconstruct.
-  defp reverse_columns!(resource, %Source{mappings: mappings, keys: keys}) do
+  # `{expression_over_the_new_table, legacy_column_name}` for every legacy column
+  # the mapping can reconstruct, ordered by legacy column so the SQL is stable.
+  defp reverse_columns!(resource) do
+    key = Info.key(resource)
+
     key_column =
-      case keys do
-        [key] -> [{legacy_id_column!(resource), key.from}]
-        _ -> []
+      case key do
+        nil -> []
+        key -> [{legacy_id_column!(resource), key.from}]
       end
 
-    key_column ++ Enum.flat_map(mappings, &reverse_column/1)
+    # `touch: :now` is unreachable here -- a `collapse` carrying `touch()` is
+    # `invertible: :semi`, and `VerifyReverseMappable` refuses the phase before this
+    # runs. Passed explicitly so a future relaxation of that verifier fails loudly
+    # rather than silently freezing an instant into a view definition.
+    mapped =
+      resource
+      |> Lens.for_resource()
+      |> Enum.reject(&(&1.combinator == :key))
+      |> Enum.flat_map(fn lens ->
+        Enum.map(Lens.writes(lens), fn {column, expression} ->
+          {Printer.to_sql(expression, ref: Printer.bare_frame(), touch: :now), column}
+        end)
+      end)
+      |> Enum.uniq_by(fn {_expression, column} -> column end)
+      |> Enum.sort_by(fn {_expression, column} -> to_string(column) end)
+
+    key_column ++ mapped
   end
-
-  defp reverse_column(%MapEntry{writable?: false}), do: []
-
-  defp reverse_column(%MapEntry{to: to, into: into})
-       when is_binary(to) and is_binary(into) do
-    # `$NEW.x` referred to the incoming row inside a trigger; here the same
-    # expression is evaluated over the stored table, so the prefix goes away
-    # entirely rather than becoming `NEW.`.
-    [{String.replace(to, "$NEW.", ""), into}]
-  end
-
-  defp reverse_column(%MapEntry{column: column, cast: :timestamptz, from_zone: zone} = entry)
-       when is_binary(column) and is_binary(zone) do
-    # The inverse of the forward `AT TIME ZONE`: an aware value converted back
-    # to the naive form the legacy column holds, in the stated zone.
-    [{"#{entry.attribute} AT TIME ZONE '#{zone}'", column}]
-  end
-
-  defp reverse_column(%MapEntry{column: column, attribute: attribute}) when is_binary(column) do
-    [{to_string(attribute), column}]
-  end
-
-  defp reverse_column(%MapEntry{}), do: []
-  defp reverse_column(%Constant{}), do: []
-  defp reverse_column(%Unmapped{}), do: []
 
   # The legacy key has to survive into the new table, or the old application's
   # integer ids stop resolving the moment the view goes live. There is nothing

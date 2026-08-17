@@ -30,11 +30,17 @@ defmodule AshStrangler.Diagram.OverviewTest do
     assert compose([Account]) =~ "Account - drawn.accounts (view) - writes: triggers"
   end
 
-  test "the primary relation edge counts the mappings and the one-way ones" do
-    # login, nickname, phone, postcode, email, state_code and seen_at read from
-    # the primary relation; only seen_at is read-only. `city` belongs to the
-    # join and must not be counted here.
-    assert compose([Account]) =~ "<-->|\"7 mapped, 1 read only\"| res_account"
+  test "the primary relation edge counts only the mappings that read from it" do
+    # login, nickname, phone, postcode, email and state_code. `city` belongs to the
+    # joined relation and must not be counted here.
+    #
+    # `seen_at`, `tenant_id` and `created_by_id` are not counted either, and that is
+    # the interesting case: a `fragment("now()")`, a `constant` and an `unmapped`
+    # read NO legacy column, so attributing them to a relation would claim it feeds
+    # something it does not. In 0.1 this distinction could not be drawn -- an
+    # expression's sources were guessed from its text, so a mapping reading nothing
+    # was indistinguishable from one whose sources the regex failed on.
+    assert compose([Account]) =~ "<-->|\"6 mapped\"| res_account"
   end
 
   test "a joined relation is dotted, named as a join, and always read-only" do

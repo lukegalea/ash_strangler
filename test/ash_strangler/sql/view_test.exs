@@ -17,12 +17,78 @@ defmodule AshStrangler.Sql.ViewTestRepo do
   def min_pg_version, do: %Version{major: 14, minor: 0, patch: 0}
 end
 
+defmodule AshStrangler.Sql.ViewTest.Legacy do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.Sql.ViewTest.Legacy.Users
+    resource AshStrangler.Sql.ViewTest.Legacy.Things
+  end
+end
+
+defmodule AshStrangler.Sql.ViewTest.Legacy.Users do
+  @moduledoc """
+  The twin the golden-SQL fixture maps.
+
+  Declaring it is what makes the generated SQL derivable at all: `email`'s
+  `(email)::citext` comes from comparing this `:string` against the resource's
+  `:ci_string`, and `first_name`/`last_name` resolve to real columns rather than
+  to identifiers a regex found in a string.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Sql.ViewTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "users"
+    schema "legacy"
+    repo AshStrangler.Sql.ViewTestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :email, :string
+    attribute :first_name, :string
+    attribute :last_name, :string
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.Sql.ViewTest.Legacy.Things do
+  @moduledoc "A twin whose key is already a uuid, so no derivation is needed."
+  use Ash.Resource,
+    domain: AshStrangler.Sql.ViewTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "things"
+    schema "legacy"
+    repo AshStrangler.Sql.ViewTestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :row_uuid, :uuid, primary_key?: true, allow_nil?: false
+    attribute :name, :string
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshStrangler.Sql.ViewTest.UuidV5User do
   @moduledoc """
-  The plan's §5.1 worked example, trimmed to what a golden-SQL test needs:
-  one plain mapping, one computed read-only mapping, one constant, one
-  unmapped attribute, and a `{:uuid_v5, ...}` key -- so the index-generation
-  path is covered too.
+  The worked example, trimmed to what a golden-SQL test needs: one plain
+  mapping, one computed read-only mapping, one constant, one unmapped attribute,
+  and a `{:uuid_v5, ...}` key -- so the index-generation path is covered too.
   """
 
   use Ash.Resource,
@@ -48,18 +114,19 @@ defmodule AshStrangler.Sql.ViewTest.UuidV5User do
   strangler do
     phase :read_from_legacy
 
-    source "legacy.users" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+    source AshStrangler.Sql.ViewTest.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
 
-      map :email, "email", cast: :citext
+      # No `cast:`. The `::citext` in the golden SQL below is DERIVED from the
+      # twin's `:string` against this resource's `:ci_string`.
+      map :email, from: :email
 
-      map :full_name do
-        from "coalesce(first_name,'') || ' ' || coalesce(last_name,'')"
-        writable? false
-        because "Not decomposable: 'de la Cruz' splits wrong."
-      end
+      map :full_name,
+        from: expr((first_name || "") <> " " <> (last_name || "")),
+        read_only?: true,
+        because: "Not decomposable: 'de la Cruz' splits wrong."
 
-      constant :organization_id, "'00000000-0000-0000-0000-0000000000fe'::uuid"
+      constant :organization_id, expr(type("00000000-0000-0000-0000-0000000000fe", :uuid))
 
       unmapped [:created_by_id], as: :null, because: "No provenance for pre-migration rows."
     end
@@ -88,9 +155,9 @@ defmodule AshStrangler.Sql.ViewTest.IdentityKeyThing do
   strangler do
     phase :read_from_legacy
 
-    source "legacy.things" do
-      key :id, from: "row_uuid", strategy: :identity
-      map :name, "name"
+    source AshStrangler.Sql.ViewTest.Legacy.Things do
+      key :id, from: :row_uuid, strategy: :identity
+      map :name, from: :name
     end
   end
 end
@@ -125,8 +192,8 @@ defmodule AshStrangler.Sql.ViewTest do
                uuid_generate_v5('6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71'::uuid, 'legacy.users:' || id::text) AS id,
                id AS __legacy_id,
                (email)::citext AS email,
-               coalesce(first_name,'') || ' ' || coalesce(last_name,'') AS full_name,
-               '00000000-0000-0000-0000-0000000000fe'::uuid AS organization_id,
+               (coalesce(first_name, '') || (' ' || coalesce(last_name, ''))) AS full_name,
+               ('00000000-0000-0000-0000-0000000000fe')::uuid AS organization_id,
                NULL AS created_by_id
              FROM legacy.users;
              """
@@ -187,8 +254,8 @@ defmodule AshStrangler.Sql.ViewTest do
         strangler do
           phase :read_from_legacy
 
-          source "legacy.widgets" do
-            key :id, from: "id", strategy: :identity
+          source AshStrangler.Sql.ViewTest.Legacy.Things do
+            key :id, from: :row_uuid, strategy: :identity
           end
         end
         """)
@@ -209,8 +276,8 @@ defmodule AshStrangler.Sql.ViewTest do
         strangler do
           phase :read_from_legacy
 
-          source "legacy.widgets" do
-            key :id, from: "id", strategy: :identity
+          source AshStrangler.Sql.ViewTest.Legacy.Things do
+            key :id, from: :row_uuid, strategy: :identity
           end
         end
         """)

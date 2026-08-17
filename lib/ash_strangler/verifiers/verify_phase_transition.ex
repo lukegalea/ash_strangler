@@ -57,19 +57,16 @@ defmodule AshStrangler.Verifiers.VerifyPhaseTransition do
        primary key, so that SQL and Elixir agree on a row's modern id without a
        lookup table:
 
-           key :id, from: "id", strategy: {:uuid_v5, namespace: "..."}
+           key :id, from: :id, strategy: {:uuid_v5, namespace: "..."}
        """
      )}
   end
 
   defp check(dsl, phase, source) when phase in [:dual_write, :read_from_new] do
     undeclared =
-      Enum.filter(source.mappings, fn
-        %AshStrangler.Map{writable?: false, because: because} ->
-          is_nil(because) or String.trim(because) == ""
-
-        _ ->
-          false
+      Enum.filter(source.mappings, fn entry ->
+        Map.get(entry, :read_only?, false) and
+          (is_nil(entry.because) or String.trim(entry.because) == "")
       end)
 
     case undeclared do

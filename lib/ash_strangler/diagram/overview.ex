@@ -30,7 +30,7 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
     | rectangle | a resource, with the view it reads through and its write mode |
     | `<-->` | the resource can write back |
     | `-->` | every mapping on this pair is read-only |
-    | `-.->` | a joined relation, which is always read-only |
+    | `-.->` | a relation reached through a relationship, which is always read-only |
     """
 
     alias AshDiagram.Flowchart
@@ -38,8 +38,7 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
     alias AshDiagram.Flowchart.Node
     alias AshDiagram.Flowchart.Subgraph
     alias AshStrangler.Diagram.Mapping
-    alias AshStrangler.Join
-    alias AshStrangler.Map, as: MapEntry
+    alias AshStrangler.{Info, Lens, Twin}
 
     @typedoc """
     Configuration option for overview diagram generation.
@@ -74,7 +73,7 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
     @spec for_resources(resources :: [Ash.Resource.t()], options :: options()) :: Flowchart.t()
     def for_resources(resources, options \\ []) do
       options = Keyword.merge(@default_options, options)
-      resources = Enum.filter(resources, &AshStrangler.Info.strangled?/1)
+      resources = Enum.filter(resources, &Info.strangled?/1)
       names = resource_names(resources, options[:name])
 
       ids = Map.new(resources, &{&1, "res_" <> slug(names[&1])})
@@ -91,50 +90,56 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
       }
     end
 
-    # One entry per resource-relation pair: the primary relation, plus each
-    # joined one. Joins are always read-only -- writes go back through
-    # `__legacy_id`, which identifies a row in the primary relation and nothing
-    # in a joined one.
+    # One entry per resource-relation pair: the primary relation, plus each one
+    # reached through a relationship. The latter are always read-only -- writes go
+    # back through `__legacy_id`, which identifies a row in the primary relation and
+    # nothing in a joined one. See
+    # `AshStrangler.Verifiers.VerifyJoinedWritesRefused`.
+    #
+    # Which relation a mapping reads from used to be worked out by looking for the
+    # join's alias as a substring of a SQL string. It is now the reference's own
+    # relationship path, which is data rather than a guess.
     defp pairs(resource) do
-      source = AshStrangler.Info.source(resource)
-      aliases = AshStrangler.Info.join_aliases(resource)
-      primary = AshStrangler.Sql.View.primary_alias(source)
+      twin = Info.twin(resource)
 
-      mappings = Enum.filter(source.mappings, &is_struct(&1, MapEntry))
+      # Only mappings that actually READ a column of the relation are attributed to
+      # it. The key is excluded because it is not a mapping, and a `constant`, an
+      # `unmapped`, or an expression over no columns at all (`fragment("now()")`) is
+      # excluded because it comes from nowhere -- counting it against a relation
+      # would claim the relation feeds something it does not.
+      grouped =
+        resource
+        |> Lens.for_resource()
+        |> Enum.reject(&(&1.combinator == :key))
+        |> Enum.flat_map(fn lens -> Enum.map(lens.sources, &{relation_for(twin, &1), lens}) end)
+        |> Enum.group_by(fn {relation, _lens} -> relation end, fn {_relation, lens} -> lens end)
 
-      {joined, own} =
-        Enum.split_with(mappings, fn %MapEntry{column: column} ->
-          is_binary(column) and qualifier(column, aliases, primary) != primary
-        end)
+      primary = Twin.relation(twin)
 
-      primary_pair = %{
-        resource: resource,
-        relation: source.relation,
-        join: nil,
-        mapped: length(own),
-        read_only: Enum.count(own, &(not &1.writable?)),
-        writable?: Enum.any?(own, & &1.writable?)
-      }
+      grouped
+      |> Enum.sort_by(fn {relation, _} -> {relation != primary, relation} end)
+      |> Enum.map(fn {relation, lenses} ->
+        lenses = Enum.uniq_by(lenses, & &1.attribute)
+        read_only = Enum.count(lenses, &(&1.type == :masked))
 
-      [primary_pair | Enum.map(source.joins, &join_pair(resource, &1, joined, aliases, primary))]
+        %{
+          resource: resource,
+          relation: relation,
+          joined?: relation != primary,
+          mapped: length(lenses),
+          read_only: read_only,
+          writable?: relation == primary and Enum.any?(lenses, &(&1.writes != []))
+        }
+      end)
     end
 
-    defp join_pair(resource, %Join{} = join, joined, aliases, primary) do
-      name = AshStrangler.Sql.View.alias_for(join)
+    defp relation_for(twin, {[], _attribute}), do: Twin.relation(twin)
 
-      mapped =
-        Enum.count(joined, fn %MapEntry{column: column} ->
-          qualifier(column, aliases, primary) == name
-        end)
-
-      %{
-        resource: resource,
-        relation: join.relation,
-        join: join,
-        mapped: mapped,
-        read_only: mapped,
-        writable?: false
-      }
+    defp relation_for(twin, {path, _attribute}) do
+      case Twin.resource_at(twin, path) do
+        {:ok, resource} -> Twin.relation(resource)
+        {:error, _} -> Twin.relation(twin)
+      end
     end
 
     defp legacy_subgraph(relations) do
@@ -173,14 +178,14 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
       [
         to_string(names[resource]),
         view_name(resource),
-        "writes: #{AshStrangler.Info.writes(resource)}"
+        "writes: #{Info.writes(resource)}"
       ]
       |> Enum.reject(&is_nil/1)
       |> Enum.join(" - ")
     end
 
     defp phase_label(resources) do
-      case resources |> Enum.map(&AshStrangler.Info.strangler_phase!/1) |> Enum.uniq() do
+      case resources |> Enum.map(&Info.strangler_phase!/1) |> Enum.uniq() do
         [phase] -> "The strangled model - phase: #{phase}"
         phases -> "The strangled model - phases: #{Enum.map_join(phases, ", ", &to_string/1)}"
       end
@@ -195,13 +200,16 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
       }
     end
 
-    defp edge_type(%{join: %Join{}}), do: :dotted_arrow
+    defp edge_type(%{joined?: true}), do: :dotted_arrow
     defp edge_type(%{writable?: true}), do: :bidirectional
     defp edge_type(_pair), do: :arrow
 
-    defp edge_label(%{join: %Join{} = join} = pair) do
-      keyword = if join.type == :inner, do: "INNER JOIN", else: "LEFT JOIN"
-      "#{keyword} - #{pair.mapped} mapped, read only"
+    # Always LEFT, and now structurally so: the join is derived from a relationship,
+    # and a relationship describes which rows RELATE, not which rows survive. An
+    # INNER JOIN removes rows, so a legacy row with no match would vanish from the
+    # view and the new application would report fewer records than the old one.
+    defp edge_label(%{joined?: true} = pair) do
+      "LEFT JOIN - #{pair.mapped} mapped, read only"
     end
 
     defp edge_label(pair) do
@@ -217,13 +225,6 @@ with {:module, AshDiagram.Flowchart} <- Code.ensure_compiled(AshDiagram.Flowchar
       nodes
       |> Enum.chunk_every(2, 1, :discard)
       |> Enum.map(fn [from, to] -> %Edge{from: from.id, to: to.id, type: :invisible} end)
-    end
-
-    defp qualifier(column, aliases, primary) do
-      case String.split(column, ".", parts: 2) do
-        [qualifier, _rest] -> if qualifier in aliases, do: qualifier, else: primary
-        [_bare] -> primary
-      end
     end
 
     defp view_name(resource) do

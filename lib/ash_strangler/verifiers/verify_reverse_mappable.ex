@@ -13,13 +13,19 @@ defmodule AshStrangler.Verifiers.VerifyReverseMappable do
   produce every column the old application reads — and it produces them by
   running each mapping **backwards**.
 
-  A `writable? false` mapping is a written declaration that no backward
-  direction exists. `full_name` cannot yield back `first_name` and `last_name`;
-  that is why the mapping had to carry a `because:` in the first place. So the
-  legacy columns behind such a mapping cannot appear in the reverse view, and
-  the old application would read `NULL` for them — silently, at the exact moment
-  the cutover made the new table the source of truth, which is the least
-  recoverable moment in the entire migration.
+  A mapping `AshStrangler.Lens` classifies `invertible: :no` has no backward
+  direction. `full_name` cannot yield back `first_name` and `last_name`; that is why
+  such a mapping has to carry a `because:` in the first place. So the legacy columns
+  behind it cannot appear in the reverse view, and the old application would read
+  `NULL` for them — silently, at the exact moment the cutover made the new table the
+  source of truth, which is the least recoverable moment in the entire migration.
+
+  `invertible: :semi` is refused here too, and that is a tightening over 0.1. A
+  `coalesce`, a `concat` or a `collapse` carrying `touch()` reverses *modulo*
+  something — a default that may also be a legal value, a separator that may occur
+  inside an operand, an instant that cannot be recovered. Modulo-something is fine
+  for a dual-write trigger, where the legacy row still exists to be compared against.
+  It is not fine for the phase in which the legacy table stops existing.
 
   §7 of the plan calls `:read_from_new` the one-way door. This is the lock on
   it.
@@ -62,7 +68,7 @@ defmodule AshStrangler.Verifiers.VerifyReverseMappable do
       module: Verifier.get_persisted(dsl, :module),
       path: [:strangler, :phase],
       message: """
-      This source gathers #{length(AshStrangler.Info.joins(dsl))} joined relation(s), and phase
+      This source reads through #{length(AshStrangler.Info.joins(dsl))} relationship(s) on the twin, and phase
       :read_from_new has to run the mapping backwards -- which would mean
       scattering one table back across several legacy tables.
 
@@ -78,8 +84,9 @@ defmodule AshStrangler.Verifiers.VerifyReverseMappable do
 
   defp irreversible(dsl) do
     dsl
-    |> AshStrangler.Info.mappings()
-    |> Enum.filter(&(&1.writable? == false))
+    |> AshStrangler.Lens.for_resource()
+    |> Enum.reject(&(&1.combinator in [:key, :constant, :unmapped, :default]))
+    |> Enum.filter(&(&1.invertible in [:no, :semi]))
   end
 
   defp error(dsl, offenders) do
@@ -102,7 +109,13 @@ defmodule AshStrangler.Verifiers.VerifyReverseMappable do
     )
   end
 
-  defp describe(mapping) do
-    "  #{inspect(mapping.attribute)} -- #{mapping.because || "(no reason given)"}"
+  defp describe(lens) do
+    reason =
+      case lens.invertible do
+        :no -> lens.because || "(no reason given)"
+        :semi -> "reverses only modulo a declared default, separator or `touch()`"
+      end
+
+    "  #{inspect(lens.attribute)} -- #{lens.combinator}, invertible: #{lens.invertible} -- #{reason}"
   end
 end

@@ -2,6 +2,48 @@
 #
 # SPDX-License-Identifier: MIT
 
+defmodule AshStrangler.ReverseViewTest.Legacy do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.ReverseViewTest.Legacy.Widgets
+  end
+end
+
+defmodule AshStrangler.ReverseViewTest.Legacy.Widgets do
+  @moduledoc """
+  The twin for `reverse_legacy.widgets`.
+
+  It describes the relation the old application still queries, which in this phase
+  is a view rather than a table -- but the mapping does not care which, and neither
+  does the twin. A twin types a *relation*, and the whole point of `:read_from_new`
+  is that the old application cannot tell the difference.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.ReverseViewTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "widgets"
+    schema "reverse_legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :name, :string
+    attribute :deleted_at, :naive_datetime
+    attribute :status, :atom, constraints: [one_of: [:active, :retired]]
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshStrangler.ReverseViewTest do
   @moduledoc """
   Step 7: the view flips direction, and its name flips with it.
@@ -52,13 +94,22 @@ defmodule AshStrangler.ReverseViewTest do
       [%{up: up, down: down}] = AshStrangler.Sql.ReverseView.build(resource)
 
       # Columns follow DSL declaration order, with the legacy key first.
+      # The legacy key first, then one column per reversible mapping, ordered by
+      # legacy column name so regenerating the migration is a no-op rather than a
+      # diff.
+      #
+      # Every expression here is `AshStrangler.Lens.writes/1` -- the SAME structure
+      # the `INSTEAD OF` trigger assigns from, rendered through a different
+      # reference frame. In 0.1 this was `String.replace(to, "$NEW.", "")` over a
+      # separately hand-written SQL string: a third representation of one transform,
+      # related to the other two by nothing.
       assert up == """
              CREATE OR REPLACE VIEW reverse_legacy.widgets AS
              SELECT
                legacy_id AS id,
+               (archived_at AT TIME ZONE 'UTC') AS deleted_at,
                label AS name,
-               archived_at AT TIME ZONE 'UTC' AS deleted_at,
-               CASE state_code WHEN 0 THEN 'active' ELSE 'retired' END AS status
+               (CASE state_code WHEN 0 THEN 'active' WHEN 1 THEN 'retired' END) AS status
              FROM "strangler"."widgets";
              """
 
@@ -196,11 +247,10 @@ defmodule AshStrangler.ReverseViewTest do
     irreversible_mapping =
       if Keyword.get(opts, :irreversible?, false) do
         """
-        map :summary do
-          from "label || ' ' || status"
-          writable? false
-          because "Collapsed from three columns and not decomposable."
-        end
+        map :summary,
+          from: expr(name <> " " <> fragment("?::text", status)),
+          read_only?: true,
+          because: "Collapsed from three columns and not decomposable."
         """
       else
         ""
@@ -234,7 +284,7 @@ defmodule AshStrangler.ReverseViewTest do
             attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
             #{legacy_id}
             attribute :label, :string, public?: true
-            attribute :state_code, :integer, public?: true
+            attribute :state_code, :integer, public?: true, constraints: [min: 0, max: 1]
             attribute :archived_at, :utc_datetime_usec, public?: true
             #{irreversible}
           end
@@ -242,18 +292,14 @@ defmodule AshStrangler.ReverseViewTest do
           strangler do
             phase :read_from_new
 
-            source "reverse_legacy.widgets" do
+            source AshStrangler.ReverseViewTest.Legacy.Widgets do
               #{notify}
-              key :id, from: "id", strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+              key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
 
-              map :label, "name"
-              map :archived_at, "deleted_at", cast: :timestamptz, from_zone: "UTC"
+              map :label, from: :name
+              map :archived_at, from: :deleted_at, zone: "UTC"
 
-              map :state_code do
-                from "CASE status WHEN 'active' THEN 0 ELSE 1 END"
-                to "CASE $NEW.state_code WHEN 0 THEN 'active' ELSE 'retired' END"
-                into "status"
-              end
+              decode :state_code, from: :status, values: %{active: 0, retired: 1}
 
               #{irreversible_mapping}
               #{unmapped_legacy_id}

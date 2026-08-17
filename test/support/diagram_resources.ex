@@ -19,6 +19,88 @@ defmodule AshStrangler.DiagramTest.Domain do
   end
 end
 
+defmodule AshStrangler.DiagramTest.Legacy do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.DiagramTest.Legacy.Accounts
+    resource AshStrangler.DiagramTest.Legacy.Addresses
+  end
+end
+
+defmodule AshStrangler.DiagramTest.Legacy.Addresses do
+  @moduledoc "Twin for the joined relation the diagram has to draw in its own subgraph."
+  use Ash.Resource,
+    domain: AshStrangler.DiagramTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "addresses"
+    schema "drawn_legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :account_id, :integer
+    attribute :city, :string
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.DiagramTest.Legacy.Accounts do
+  @moduledoc """
+  Twin for the primary relation.
+
+  The `address` relationship is what 0.1 spelled as
+  `join "drawn_legacy.addresses", as: "addr", on: "addr.account_id = accounts.id"` —
+  arbitrary SQL in a DSL option. As a `has_one` the join condition is derived, the
+  fan-out is a property of a declared relationship, and a cross join is not
+  expressible.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.DiagramTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "accounts"
+    schema "drawn_legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :login, :string
+    attribute :nick, :string
+    attribute :phone, :string
+    attribute :post_code, :string
+    attribute :email, :string
+
+    attribute :state, :atom do
+      constraints one_of: [:passive, :pending, :active, :suspended, :deleted]
+    end
+  end
+
+  relationships do
+    has_one :address, AshStrangler.DiagramTest.Legacy.Addresses do
+      source_attribute :id
+      destination_attribute :account_id
+    end
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshStrangler.DiagramTest.Plain do
   @moduledoc "An ordinary resource, here to be left out of the diagram."
   use Ash.Resource, domain: AshStrangler.DiagramTest.Domain
@@ -35,11 +117,20 @@ end
 defmodule AshStrangler.DiagramTest.Account do
   @moduledoc """
   A resource carrying every mapping construct the diagram has to draw at once:
-  plain renames, a cast, a joined relation, a constant, an unmapped attribute,
-  an expression with an inverse, and an expression whose source columns cannot
-  be worked out.
+  plain renames, a derived cast, a column read through a relationship, a constant,
+  an unmapped attribute, an invertible `decode`, and an opaque `fragment`.
 
   It exists to be drawn, not to be run — no migration is generated from it.
+
+  ## One node it can no longer carry
+
+  0.1's version had a mapping whose source columns the diagram *could not work
+  out* — `from "now()"` — which drew a rhombus reading "source columns not
+  resolved". That node is not expressible any more: lineage is
+  `AshStrangler.Expr.refs/1` over a tree that was constructed, so there is no
+  inference to fail. `seen_at` is an opaque `fragment` here instead, which is a
+  different thing and is drawn as one: the diagram knows exactly which columns it
+  reads (none), and says the transform itself is unproven.
   """
   use Ash.Resource,
     domain: AshStrangler.DiagramTest.Domain,
@@ -63,7 +154,12 @@ defmodule AshStrangler.DiagramTest.Account do
     attribute :postcode, :string, public?: true
     attribute :email, :ci_string, public?: true
     attribute :city, :string, public?: true
-    attribute :state_code, :integer, public?: true
+
+    attribute :state_code, :integer do
+      public? true
+      constraints min: 0, max: 4
+    end
+
     attribute :seen_at, :utc_datetime_usec, public?: true
     attribute :tenant_id, :uuid, public?: true
     attribute :created_by_id, :uuid, public?: true
@@ -76,37 +172,33 @@ defmodule AshStrangler.DiagramTest.Account do
   strangler do
     phase :read_from_legacy
 
-    source "drawn_legacy.accounts" do
-      key :id, from: "id", strategy: {:uuid_v5, namespace: @namespace}
-
-      join("drawn_legacy.addresses", as: "addr", on: "addr.account_id = accounts.id")
+    source AshStrangler.DiagramTest.Legacy.Accounts do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
 
       # Four plain mappings, which is over the bundling threshold.
-      map :login, "login"
-      map :nickname, "nick"
-      map :phone, "phone"
-      map :postcode, "post_code"
+      map :login, from: :login
+      map :nickname, from: :nick
+      map :phone, from: :phone
+      map :postcode, from: :post_code
 
-      map :email, "email", cast: :citext
+      # The cast is derived from `:string` against `:ci_string` -- not typed.
+      map :email, from: :email
 
-      map :city, "addr.city" do
-        writable? false
-        because "Read from a joined relation; write it through its own resource."
-      end
+      map :city,
+        from: expr(address.city),
+        read_only?: true,
+        because: "Read through a relationship; write it through its own resource."
 
-      map :state_code do
-        from "CASE state WHEN 'active' THEN 0 ELSE 1 END"
-        to "CASE $NEW.state_code WHEN 0 THEN 'active' ELSE 'suspended' END"
-        into "state"
-      end
+      decode :state_code,
+        from: :state,
+        values: %{active: 0, passive: 1, pending: 2, suspended: 3, deleted: 4}
 
-      map :seen_at do
-        from "now()"
-        writable? false
-        because "Not stored in legacy at all; the view reports read time."
-      end
+      map :seen_at,
+        from: expr(fragment("now()")),
+        read_only?: true,
+        because: "Not stored in legacy at all; the view reports read time."
 
-      constant :tenant_id, "'00000000-0000-0000-0000-0000000000fe'::uuid"
+      constant :tenant_id, expr(type("00000000-0000-0000-0000-0000000000fe", :uuid))
 
       unmapped([:created_by_id], as: :null, because: "No provenance for pre-migration rows.")
     end

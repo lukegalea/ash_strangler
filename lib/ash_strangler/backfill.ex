@@ -6,12 +6,34 @@ defmodule AshStrangler.Backfill do
   @moduledoc """
   Batched, resumable backfill of a legacy table.
 
-  Plain functions over a repo and a table. Nothing here reads the `strangler`
-  DSL, and that is deliberate: a backfill is the one operation an operator
-  wants to run against a table the Ash model does not describe yet — a column
-  added by hand, a partially-migrated tenant, a rerun after an incident. Tying
-  it to a compiled resource would make the emergency path the one that needs a
-  deploy.
+  The loop is plain functions over a repo and a table, and it reads no DSL. That
+  is deliberate: a backfill is the one operation an operator wants to run
+  against a table the Ash model does not describe yet — a column added by hand,
+  a partially-migrated tenant, a rerun after an incident. Tying the loop to a
+  compiled resource would make the emergency path the one that needs a deploy.
+
+  ## What a backfill is *for* is already declared, so it is derived
+
+  `plan/2` reads a strangler-mapped resource and produces the arguments `run/2`
+  takes:
+
+      {:ok, result} =
+        AshStrangler.Backfill.run(
+          MyApp.Repo,
+          AshStrangler.Backfill.plan(MyApp.Accounts.User, store_key: :row_uuid)
+        )
+
+  Retyping those arguments is not a style question. `relation` retyped is a
+  second spelling of the twin's own `postgres do table/schema end`; `key`
+  retyped is a second spelling of the `key` entity's `from:`; and the value
+  stored under `store_key:` is *the same uuid expression the compatibility view
+  projects and the expression index carries*. Three copies of that expression
+  have to be byte-identical, and the failure when they are not is the quietest
+  in the package: the view has been serving derived ids to the new application
+  for weeks, the backfill stores different ones, and the disagreement only
+  surfaces at `:read_from_new` when the old application's integer ids stop
+  resolving. So the plan comes from the declaration and the hand-passed form
+  stays for the emergency it was written for.
 
   ## The mechanics are not clever, but each one is load-bearing
 
@@ -53,6 +75,34 @@ defmodule AshStrangler.Backfill do
   exotic. When a pass exhausts, `run/2` recomputes the minimum pending key and
   sweeps again; only when nothing is pending does it stop.
 
+  ## The interlock is half-built, and the missing half is not in this module
+
+  `pgroll` has a second mechanism alongside the flag column, and only the column
+  was taken: **its writer clears the flag.** The dual-write trigger sets
+  `_pgroll_needs_backfill = false` on every row it writes, so a row the trigger
+  has already handled is never re-derived by the backfill.
+
+  Without that half the sequence is: the compatibility view's `INSTEAD OF`
+  trigger writes a row correctly, leaves the flag `true` because nothing told it
+  to clear it, and a later batch re-derives that row's columns from the legacy
+  row and overwrites what the trigger stored. Nothing in this module can fix
+  that, and it is worth being precise about why rather than adding SQL that
+  looks like a fix. The batch statement already selects `WHERE flag` under `FOR
+  NO KEY UPDATE`, and PostgreSQL re-evaluates a locking query's qualification
+  against the updated row version — so every row a concurrent writer *did* clear
+  is already dropped from the batch. The gap is entirely the `false` the writer
+  never assigns. `interlock_assignment/1` is that assignment, exported so the
+  writer and the batch statement cannot spell the column differently.
+
+  What the gap costs depends on the `set` expressions, and this is the one place
+  the derived plan is safer than a hand-written one. `plan/2` derives only
+  **row-functional** values — a key expression over the row's own key, a
+  constant — so re-deriving a row the trigger already handled produces identical
+  bytes and there is nothing to lose. A hand-passed
+  `set: [counter: "counter + 1"]` is not row-functional, and the same race
+  double-applies it: the stored value is wrong, every count of rows and batches
+  reads correctly, and nothing reports it.
+
   ## What this module does not do
 
   No `CREATE INDEX CONCURRENTLY`. A partial index on `(key) WHERE flag` is the
@@ -76,7 +126,22 @@ defmodule AshStrangler.Backfill do
         )
 
       AshStrangler.Backfill.drop_flag_column!(MyApp.Repo, "legacy.users")
+
+  Or, with the middle argument derived from the mapping rather than typed:
+
+      {:ok, result} =
+        AshStrangler.Backfill.run(
+          MyApp.Repo,
+          AshStrangler.Backfill.plan(MyApp.Accounts.User,
+            store_key: :row_uuid,
+            batch_size: 5_000,
+            progress: fn done, total -> IO.puts("\#{done}/\#{total}") end
+          )
+        )
   """
+
+  alias AshStrangler.{Constant, Info, Key, Lens, Twin}
+  alias AshStrangler.Sql.{Printer, View}
 
   @flag_column "_strangler_needs_backfill"
   @batch_size 1_000
@@ -109,9 +174,202 @@ defmodule AshStrangler.Backfill do
           complete?: boolean()
         }
 
+  # `:savepoint` is only meaningful *inside* an enclosing transaction. At the top
+  # level Ecto has nothing to open a savepoint against: `repo.transaction(fun, mode:
+  # :savepoint)` returns `{:error, :rollback}` and disconnects, so `batch!/3`'s
+  # `{:ok, %Postgrex.Result{}} =` match fails and the run dies on its first batch.
+  #
+  # The sandbox is what hid this. `Ecto.Adapters.SQL.Sandbox` holds an owner
+  # transaction open for the whole test, so every call in the suite is nested and
+  # `:savepoint` is always correct there -- and the documented way to call these
+  # functions, from a plain `mix` task or a migration that is not already in a
+  # transaction, is exactly the case the suite cannot reach.
+  #
+  # The comment two functions down anticipated the sandbox obscuring this
+  # distinction, and had it backwards: it warned that a test could not prove the
+  # savepoint was needed, when the thing a test could not prove was that it is
+  # sometimes wrong.
+  defp transaction_mode(repo), do: if(repo.in_transaction?(), do: :savepoint, else: :transaction)
+
   @doc "The default flag column name, exposed so trigger and migration code cannot misspell it."
   @spec flag_column() :: String.t()
   def flag_column, do: @flag_column
+
+  @doc """
+  The `SET` fragment a concurrent writer must include to interlock with a running
+  backfill.
+
+      AshStrangler.Backfill.interlock_assignment()
+      #=> ~s("_strangler_needs_backfill" = false)
+
+  A writer that includes it declares the row done, and the batch statement's
+  `WHERE #{@flag_column}` then skips it — which is the whole interlock, and the
+  half of it that does not live here. See the moduledoc for what its absence
+  costs.
+
+  Exported rather than left to each writer to spell, because the two spellings
+  would agree until one of them changed, and a writer assigning to a column the
+  batch statement is not reading is a no-op that reports success.
+
+  Options: `:flag_column`.
+  """
+  @spec interlock_assignment(keyword()) :: String.t()
+  def interlock_assignment(opts \\ []) do
+    flag = identifier!(Keyword.get(opts, :flag_column, @flag_column), :flag_column)
+
+    ~s("#{flag}" = false)
+  end
+
+  @doc """
+  The `run/2` options for `resource`, derived from its mapping.
+
+  Pure — it reads the DSL and touches no database — so what a backfill is about
+  to write is a value you can print and read before anything runs.
+
+      AshStrangler.Backfill.plan(MyApp.Accounts.User, store_key: :row_uuid)
+      #=> [
+      #     relation: "legacy.users",
+      #     key: "id",
+      #     set: [
+      #       {"row_uuid", "uuid_generate_v5('6b1e…'::uuid, 'legacy.users:' || id::text)"}
+      #     ]
+      #   ]
+
+  ## What is derived
+
+    * **`relation`** — the twin's relation. The twin's own
+      `postgres do table/schema end` is where the legacy table's name is
+      recorded; a second spelling of it in a backfill call is a second thing to
+      keep in step.
+
+    * **`key`** — `AshStrangler.Twin.column!/2` over the `key` entity's `from:`,
+      so a twin whose generator found a column Elixir would not want as an atom
+      still paginates on the real column name, and a stale twin raises here
+      rather than paginating on a column that does not exist.
+
+    * **`set`** — one entry per value the mapping says a legacy column should
+      hold and the legacy table does not hold yet:
+
+      * `store_key: :some_column` materialises the derived primary key into that
+        column, using `AshStrangler.Sql.View`'s **own** key expression. That is
+        the point of deriving it: the view's `SELECT`, the expression index and
+        this `UPDATE` must produce byte-identical uuids, and a hand-typed fourth
+        copy is a silent disagreement — see the moduledoc.
+
+      * every `constant` whose attribute names a column the **twin declares**.
+        A constant means "no legacy source for this value", so most of them
+        write nowhere and are correctly absent from the plan. One that *does*
+        name a twin column is the transitional state of an expand step: the
+        column has been added, the twin regenerated, and the value has yet to be
+        put in it. Once the backfill is done that `constant` becomes a `map` and
+        the entry disappears from the plan on its own.
+
+  Every derived expression is row-functional, which is what makes re-running a
+  batch harmless — see the moduledoc's note on the interlock.
+
+  ## Options
+
+    * `:store_key` — the legacy column to store the derived key in. Refused for
+      `strategy: :identity`, where `key from:` already names a stored column and
+      there is nothing to derive its value *from*.
+    * `:set` — extra assignments, as a keyword list. An entry for a column the
+      derivation also produced replaces it, so an operator can correct one
+      column without abandoning the rest of the plan.
+    * anything else `run/2` takes (`:batch_size`, `:progress`, `:max_batches`,
+      `:flag_column`, `:total`) is passed straight through.
+  """
+  @spec plan(Ash.Resource.t(), keyword()) :: keyword()
+  def plan(resource, opts \\ []) do
+    source =
+      Info.source(resource) ||
+        raise ArgumentError, """
+        #{inspect(resource)} has no strangler `source`, so there is no mapping to derive a backfill from.
+
+        Pass the backfill explicitly if you are populating a table no resource
+        describes -- which is the case this module's hand-passed form exists for:
+
+            AshStrangler.Backfill.run(MyApp.Repo,
+              relation: "legacy.users",
+              key: "id",
+              set: [tenant_id: "'0f0e…'::uuid"]
+            )
+        """
+
+    key =
+      Info.key(resource) ||
+        raise ArgumentError,
+              "#{inspect(resource)}'s source declares no `key`, so a backfill has nothing to paginate on"
+
+    twin = source.twin
+    frame = Printer.bare_frame(twin)
+
+    {store_key, opts} = Keyword.pop(opts, :store_key)
+    {extra, opts} = Keyword.pop(opts, :set, [])
+
+    set =
+      extra
+      |> Enum.concat(key_set(resource, key, frame, store_key))
+      |> Enum.concat(constant_set(resource, twin, frame))
+      # First wins, and `extra` is first: an explicit entry replaces the derived
+      # one rather than joining it. Two assignments to one column is a hard error
+      # from PostgreSQL, so this is not a preference.
+      |> Enum.uniq_by(fn {column, _expression} -> to_string(column) end)
+
+    Keyword.merge(
+      [relation: Info.relation(resource), key: Twin.column!(twin, key.from), set: set],
+      opts
+    )
+  end
+
+  defp key_set(_resource, _key, _frame, nil), do: []
+
+  defp key_set(_resource, %Key{strategy: :identity}, _frame, store_key) do
+    raise ArgumentError, """
+    store_key: #{inspect(store_key)}, but the key strategy is `:identity`.
+
+    `:identity` means the legacy table already holds the modern key and the view
+    reads it unchanged, so there is no expression to derive a value from -- the
+    column named by `key from:` IS the stored key. Populating it is a choice about
+    what those uuids should be, which no mapping states:
+
+        AshStrangler.Backfill.run(MyApp.Repo,
+          AshStrangler.Backfill.plan(MyApp.Accounts.User,
+            set: [row_uuid: "gen_random_uuid()"]
+          )
+        )
+    """
+  end
+
+  # `to_string`, so a derived plan is uniformly string-keyed however the option was
+  # spelled -- the constants beside it come from `Twin.column!/2`, which is already
+  # a string, and a plan an operator reads before running it should not be half
+  # atoms.
+  defp key_set(resource, key, frame, store_key) do
+    [{to_string(store_key), View.key_expression(resource, key, frame)}]
+  end
+
+  # A constant with nowhere to go is skipped rather than raising, because having
+  # nowhere to go is what `constant` usually means -- the value lives in the view's
+  # SELECT list and in no column at all. The twin is the record of which columns
+  # the legacy table actually has, so it is the thing asked.
+  defp constant_set(resource, twin, frame) do
+    lenses = Lens.by_attribute(resource)
+
+    resource
+    |> Info.constants()
+    |> Enum.flat_map(fn %Constant{attribute: attribute} ->
+      with column when not is_nil(column) <- twin_column(twin, attribute),
+           %Lens{forward: forward} when not is_nil(forward) <- Map.get(lenses, attribute) do
+        [{column, Printer.to_sql(forward, ref: frame)}]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  defp twin_column(twin, attribute) do
+    if Ash.Resource.Info.attribute(twin, attribute), do: Twin.column!(twin, attribute)
+  end
 
   @doc """
   Adds the `#{@flag_column}` column to `relation`.
@@ -184,7 +442,9 @@ defmodule AshStrangler.Backfill do
       every row in the batch. The expressions are interpolated verbatim, not
       bound: this is a SQL generator, and the whole point is to push the work
       into the database. They are evaluated against the row being updated, so
-      `[counter: "counter + 1"]` is legal and means what it says.
+      `[counter: "counter + 1"]` is legal and means what it says. `plan/2`
+      derives these from a resource's mapping, and is the form to prefer
+      whenever there is a mapping to derive them from.
     * `:batch_size` — default `#{@batch_size}`.
     * `:flag_column` — default `#{@flag_column}`.
     * `:progress` — `(done, total -> any)`, called after each non-empty batch.
@@ -350,7 +610,7 @@ defmodule AshStrangler.Backfill do
         # `:savepoint` for the same reason as the DDL below: a backfill invoked
         # from inside an enclosing transaction must still get one unit of work
         # per batch.
-        mode: :savepoint
+        mode: transaction_mode(repo)
       )
 
     List.flatten(rows)
@@ -484,7 +744,7 @@ defmodule AshStrangler.Backfill do
         # turns nested transactions into savepoints on its own, so a test suite
         # cannot tell the two apart. The guarantee has to be written down here,
         # because it cannot be asserted from inside a sandbox.
-        mode: :savepoint
+        mode: transaction_mode(repo)
       )
 
     value

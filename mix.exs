@@ -117,6 +117,7 @@ defmodule AshStrangler.MixProject do
       extras: [
         {"README.md", title: "Home"},
         "documentation/topics/how-it-works.md",
+        "documentation/topics/the-transform-layer.md",
         "documentation/topics/phases.md",
         "documentation/topics/what-it-refuses.md",
         "documentation/topics/backfill-and-reconciliation.md",
@@ -138,15 +139,24 @@ defmodule AshStrangler.MixProject do
       ],
       groups_for_modules: [
         Dsl: [
-          AshStrangler.Resource
+          AshStrangler.Resource,
+          AshStrangler.Twin
+        ],
+        "The transform layer": [
+          AshStrangler.Lens,
+          AshStrangler.Obligations,
+          AshStrangler.Mechanism,
+          AshStrangler.Sql.Printer,
+          AshStrangler.Expr
         ],
         Introspection: [
           AshStrangler.Info
         ],
-        Diagrams: [
+        Lineage: [
+          AshStrangler.Lineage,
           AshStrangler.Diagram.Mapping,
           AshStrangler.Diagram.Overview,
-          AshStrangler.Diagram.Sql
+          AshStrangler.Lineage.OpenLineage
         ],
         Internals: ~r/.*/
       ],
