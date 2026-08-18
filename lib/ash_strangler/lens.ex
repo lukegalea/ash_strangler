@@ -700,12 +700,25 @@ defmodule AshStrangler.Lens do
     Ash.Filter.hydrate_refs(forward, %{resource: twin, public?: false})
   end
 
+  # `Ash.Query.Ref` carries a `defstruct` but declares no `@type t/0`, so writing
+  # `Ref.t()` in a spec is an *unknown* type rather than a loose one: dialyzer
+  # runs with `warnings: [:unknown]` under ash-project's shared CI workflow and
+  # fails the build instead of degrading it to `any()`.
+  #
+  # The alias below says the same thing in a form both tools accept. It cannot be
+  # written inline as `%Ref{}` in the `@spec` -- that is dialyzer-clean but trips
+  # `Credo.Check.Warning.SpecWithStruct`, which only inspects `@spec`. Declaring
+  # the struct once here keeps both gates green, and the day Ash publishes its own
+  # `Ash.Query.Ref.t/0` this becomes a one-line delegation.
+  @typedoc false
+  @type ref :: %Ref{}
+
   @doc false
-  @spec column_ref(atom()) :: Ref.t()
+  @spec column_ref(atom()) :: ref()
   def column_ref(column), do: %Ref{attribute: column, relationship_path: [], resource: nil}
 
   @doc false
-  @spec attr_ref(atom()) :: Ref.t()
+  @spec attr_ref(atom()) :: ref()
   def attr_ref(attribute), do: %Ref{attribute: attribute, relationship_path: [], resource: nil}
 
   defp not_expr(inner), do: %Ash.Query.Not{expression: inner}

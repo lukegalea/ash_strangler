@@ -7,6 +7,7 @@ spark_locals_without_parens = [
   affine: 1,
   affine: 2,
   as: 1,
+  backfill_interlock?: 1,
   because: 1,
   coalesce: 1,
   coalesce: 2,
