@@ -30,8 +30,7 @@ defmodule AshStrangler.ListenerTest.NotifiedUser do
   @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
 
   use Ash.Resource,
-    domain: nil,
-    validate_domain_inclusion?: false,
+    domain: AshStrangler.ListenerTest.Domain,
     data_layer: AshPostgres.DataLayer,
     notifiers: [AshStrangler.ListenerTest.Notifier],
     extensions: [AshStrangler.Resource]
@@ -54,6 +53,104 @@ defmodule AshStrangler.ListenerTest.NotifiedUser do
 
   strangler do
     phase :dual_write
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :login, from: :login
+    end
+  end
+end
+
+defmodule AshStrangler.ListenerTest.Domain do
+  @moduledoc "Domain for the read-model fixtures. `Ash.get/3` needs one to resolve."
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    allow_unregistered? true
+  end
+end
+
+defmodule AshStrangler.ListenerTest.ReadOnlyNotifiedUser do
+  @moduledoc """
+  A `:read_from_legacy` read model -- which is to say, no create, update or
+  destroy action, because nothing writes at that phase.
+
+  This is the shape the bridge exists for. The legacy application is the only
+  writer, so every notification the resource will ever see comes from the
+  trigger, and there is no Ash action to attribute any of them to.
+  """
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: AshStrangler.ListenerTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    notifiers: [AshStrangler.ListenerTest.Notifier],
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "dual_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :login, from: :login
+    end
+  end
+end
+
+defmodule AshStrangler.ListenerTest.ForbiddenUser do
+  @moduledoc """
+  The same read model behind an authorizer that permits nothing, so the
+  listener's re-read is forbidden unless it is told how to read.
+  """
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: AshStrangler.ListenerTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer],
+    notifiers: [AshStrangler.ListenerTest.Notifier],
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "dual_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  policies do
+    policy always() do
+      forbid_if always()
+    end
+  end
+
+  strangler do
+    phase :read_from_legacy
 
     source AshStrangler.Test.Legacy.Users do
       key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
@@ -86,7 +183,9 @@ defmodule AshStrangler.ListenerTest do
   use AshStrangler.DataCase, async: false
 
   alias AshStrangler.Listener
+  alias AshStrangler.ListenerTest.ForbiddenUser
   alias AshStrangler.ListenerTest.NotifiedUser
+  alias AshStrangler.ListenerTest.ReadOnlyNotifiedUser
   alias AshStrangler.Sql.Notify
   alias AshStrangler.Test.DualWriteUser
 
@@ -225,6 +324,68 @@ defmodule AshStrangler.ListenerTest do
     test "a vanished row on insert/update is ignored rather than raising" do
       assert :ok =
                Listener.notify(%{resource: DualWriteUser, legacy_id: 999_999, op: :insert}, [])
+    end
+
+    test "a read model with no write actions still dispatches, under a synthesized action" do
+      # This used to log "has no primary create action, skipping" and dispatch
+      # nothing -- which made the bridge inert on exactly the resource shape it
+      # is most useful for. A `:read_from_legacy` read model declares no create,
+      # update or destroy action BY DEFINITION, and it is the phase in which the
+      # legacy application is the only writer.
+      legacy_id = insert_legacy_user!(%{login: "readonly-#{System.unique_integer([:positive])}"})
+
+      Listener.notify(
+        %{resource: ReadOnlyNotifiedUser, legacy_id: legacy_id, op: :insert},
+        authorize?: false
+      )
+
+      assert_receive {:notification, notification}
+
+      assert notification.action.name == :legacy_write
+      assert notification.action.type == :create
+      assert notification.data.login =~ "readonly-"
+    end
+
+    test "the synthesized action names no real action, because none ran" do
+      # `publish_all :create, [...]` matches on the action's TYPE, so it fires.
+      # `publish :register, [...]` matches on its NAME, and must not -- naming a
+      # real action that did not run would put a lie in the notification.
+      refute :legacy_write in Enum.map(Ash.Resource.Info.actions(ReadOnlyNotifiedUser), & &1.name)
+    end
+
+    test "a resource's own action is preferred over the synthesized one" do
+      legacy_id = insert_legacy_user!(%{login: "real-#{System.unique_integer([:positive])}"})
+
+      Listener.notify(%{resource: NotifiedUser, legacy_id: legacy_id, op: :delete}, [])
+
+      assert_receive {:notification, notification}
+      assert notification.action.name == :destroy
+    end
+
+    test "the re-read is forbidden without read options, and silently dispatches nothing" do
+      # The listener is not acting for a person. With no actor and no
+      # `authorize?`, `Ash.get/3` on a policy-protected resource is forbidden,
+      # `record/4` returns `:error`, and `notify/2` returns `:ok` having done
+      # nothing -- the same shape of silent failure the dispatch test above
+      # exists to catch.
+      legacy_id = insert_legacy_user!(%{login: "forbidden-#{System.unique_integer([:positive])}"})
+
+      assert :ok =
+               Listener.notify(%{resource: ForbiddenUser, legacy_id: legacy_id, op: :insert}, [])
+
+      refute_receive {:notification, _}
+    end
+
+    test "read options are threaded into the re-read" do
+      legacy_id = insert_legacy_user!(%{login: "allowed-#{System.unique_integer([:positive])}"})
+
+      Listener.notify(
+        %{resource: ForbiddenUser, legacy_id: legacy_id, op: :insert},
+        authorize?: false
+      )
+
+      assert_receive {:notification, notification}
+      assert notification.resource == ForbiddenUser
     end
   end
 

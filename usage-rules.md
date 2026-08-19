@@ -367,6 +367,20 @@ incomplete backfill produces missing rows, not an error.
     PostgreSQL collapses duplicates within a transaction. `LISTEN` does not work
     under pgbouncer transaction pooling.
 
+29. **Give `AshStrangler.Listener` read options if the resource has policies.**
+    The listener re-reads the affected row through `Ash.get/3`, and it is not
+    acting for a person — a legacy write has no Ash actor behind it. With no
+    `:actor` and no `:authorize?` the read is forbidden, `notify/2` returns `:ok`
+    having dispatched nothing, and the only symptom is a page that stops
+    updating. `authorize?: false` is usually right: the notification announces
+    that a row changed, and consumers re-read under their own actor.
+
+30. **A `:read_from_legacy` resource's notifications carry a synthesized
+    `:legacy_write` action.** There is no real one to name — nothing writes at
+    that phase — so `publish_all :create, [...]`, which matches on the action's
+    *type*, fires; `publish :some_action, [...]`, which matches on its *name*,
+    does not. Write publications for a strangled read model with `publish_all`.
+
 ---
 
 ## What the verifiers cannot check

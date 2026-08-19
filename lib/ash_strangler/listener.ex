@@ -83,6 +83,14 @@ defmodule AshStrangler.Listener do
       choice and is what you want in production.
     * `:channel` — defaults to `AshStrangler.Info.default_notify_channel/0`.
     * `:name` — GenServer name.
+    * `:actor`, `:tenant`, `:authorize?` — passed to the `Ash.get/3` that
+      re-reads the affected row. **A policy-protected resource needs one of
+      these.** The listener is not acting for a person: a legacy write has no
+      Ash actor behind it, so with the default of nobody every read of a
+      resource carrying policies is forbidden, `notify/2` returns `:ok` having
+      dispatched nothing, and the only symptom is a page that stops updating.
+      Pass `authorize?: false` (the notification is a system event; consumers
+      re-read under their own actor), or a system actor if you have one.
   """
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -103,7 +111,8 @@ defmodule AshStrangler.Listener do
        repo: repo,
        channel: channel,
        notifications: notifications,
-       allowed: opts |> Keyword.get(:resources) |> allowed_set()
+       allowed: opts |> Keyword.get(:resources) |> allowed_set(),
+       read_opts: Keyword.take(opts, [:actor, :tenant, :authorize?])
      }}
   end
 
@@ -111,7 +120,7 @@ defmodule AshStrangler.Listener do
   def handle_info({:notification, _pid, _ref, _channel, payload}, state) do
     case decode(payload, state.allowed) do
       {:ok, decoded} ->
-        notify(decoded, [])
+        notify(decoded, state.read_opts)
 
       {:error, reason} ->
         # Never crash the listener on a payload it does not understand. A
@@ -191,30 +200,49 @@ defmodule AshStrangler.Listener do
   end
 
   defp dispatch(resource, record, action_type, legacy_id) do
-    case Ash.Resource.Info.primary_action(resource, action_type) do
-      nil ->
-        # `Ash.Notifier` dereferences `notification.action.name` unconditionally,
-        # so an atom -- or a nil -- crashes the dispatch rather than degrading.
-        Logger.warning(
-          "AshStrangler.Listener: #{inspect(resource)} has no primary #{action_type} action, skipping"
-        )
+    %Ash.Notifier.Notification{
+      resource: resource,
+      domain: Ash.Resource.Info.domain(resource),
+      action: action(resource, action_type),
+      data: record,
+      changeset: synthesized_changeset(resource, record, action_type),
+      metadata: %{ash_strangler: %{origin: :legacy, legacy_id: legacy_id}}
+    }
+    |> Ash.Notifier.notify()
 
-        :ok
-
-      action ->
-        %Ash.Notifier.Notification{
-          resource: resource,
-          domain: Ash.Resource.Info.domain(resource),
-          action: action,
-          data: record,
-          changeset: synthesized_changeset(resource, record, action_type),
-          metadata: %{ash_strangler: %{origin: :legacy, legacy_id: legacy_id}}
-        }
-        |> Ash.Notifier.notify()
-
-        :ok
-    end
+    :ok
   end
+
+  # The resource's own action when it has one -- so a `publish :some_action`
+  # template keeps naming something real, and a `:dual_write` resource's
+  # notifications are indistinguishable from Ash's own.
+  #
+  # Otherwise a synthesized one, for the same reason the changeset above is
+  # synthesized: `Ash.Notifier` dereferences `notification.action.name`
+  # unconditionally, so an atom or a nil crashes the dispatch rather than
+  # degrading. This used to log and skip, which meant the whole bridge was
+  # inert on exactly the resource shape it is most useful for -- a
+  # `:read_from_legacy` read model, which by definition declares no create,
+  # update or destroy action, and which is the phase where the legacy
+  # application is the ONLY writer.
+  #
+  # `:legacy_write` rather than a borrowed name because no Ash action ran. A
+  # `publish_all :create, [...]` matches on the action's TYPE and therefore
+  # still fires; a `publish :register, [...]` matches on its NAME and
+  # correctly does not, because `:register` did not happen.
+  defp action(resource, action_type) do
+    Ash.Resource.Info.primary_action(resource, action_type) ||
+      synthesized_action(action_type)
+  end
+
+  defp synthesized_action(:create),
+    do: %Ash.Resource.Actions.Create{name: :legacy_write, primary?: false}
+
+  defp synthesized_action(:update),
+    do: %Ash.Resource.Actions.Update{name: :legacy_write, primary?: false}
+
+  defp synthesized_action(:destroy),
+    do: %Ash.Resource.Actions.Destroy{name: :legacy_write, primary?: false}
 
   # Minimal on purpose -- see the moduledoc. Every field here exists because
   # `Ash.Notifier.PubSub` dereferences it for some topic template.
@@ -240,7 +268,8 @@ defmodule AshStrangler.Listener do
 
   defp record(resource, legacy_id, _op, opts) do
     with {:ok, _attribute, id} <- derived_id(resource, legacy_id),
-         {:ok, record} <- Ash.get(resource, id, Keyword.take(opts, [:tenant, :actor])) do
+         {:ok, record} <-
+           Ash.get(resource, id, Keyword.take(opts, [:tenant, :actor, :authorize?])) do
       {:ok, record}
     else
       _ -> :error
