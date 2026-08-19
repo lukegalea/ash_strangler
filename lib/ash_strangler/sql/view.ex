@@ -26,6 +26,62 @@ defmodule AshStrangler.Sql.View do
   alias AshStrangler.Sql.Printer
 
   @doc """
+  The `CREATE SCHEMA` statement for the schema the view is declared in, or `nil`
+  when it lives in `public` (which always exists).
+
+  Separate from `build/1` because it is a property of the *schema* rather than
+  of any one resource: several strangler-mapped resources normally share one,
+  and `AshStrangler.Migration.render/2` collapses the duplicates.
+
+  Nothing created this schema before. Every test in this repository creates it
+  by hand in its setup (`test/support/legacy_schema.ex`), so the suite never
+  exercised a generated migration against a database that did not already have
+  it — and a first migration on a fresh database failed with
+  `ERROR 3F000 (invalid_schema_name)`.
+
+  The `down` drops the schema **only once it is empty**, checked rather than
+  asserted. `DROP SCHEMA ... RESTRICT` raises on a non-empty schema instead of
+  declining, and `CASCADE` would take another resource's view with it. Since
+  `render/2` reverses the statement order, by the time this runs the view and
+  the notify function this migration created are already gone; anything still
+  in there belongs to somebody else and is left alone.
+  """
+  @spec schema_statement(Ash.Resource.t() | Spark.Dsl.t()) ::
+          %{name: atom(), up: String.t(), down: String.t()} | nil
+  def schema_statement(resource_or_dsl) do
+    case AshPostgres.DataLayer.Info.schema(resource_or_dsl) do
+      nil -> nil
+      "public" -> nil
+      schema -> schema_statement_for(schema)
+    end
+  end
+
+  defp schema_statement_for(schema) do
+    %{
+      name: :"strangler_#{schema}_schema",
+      up: ~s(CREATE SCHEMA IF NOT EXISTS "#{schema}";),
+      down: """
+      DO $strangler$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = '#{schema}'
+        ) AND NOT EXISTS (
+          SELECT 1
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = '#{schema}'
+        ) THEN
+          EXECUTE 'DROP SCHEMA IF EXISTS "#{schema}"';
+        END IF;
+      END $strangler$;
+      """
+    }
+  end
+
+  @doc """
   Builds the view (and, where the key strategy needs one, the expression index)
   for `resource_or_dsl`.
 

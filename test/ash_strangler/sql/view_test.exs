@@ -290,10 +290,43 @@ defmodule AshStrangler.Sql.ViewTest do
   end
 
   describe "AshStrangler.Migration.statements/1" do
-    test "orders the view before its key index, so a migration runs top to bottom" do
+    test "orders the schema before the view before its key index, so a migration runs top to bottom" do
       names = UuidV5User |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
-      assert names == [:strangler_users_view, :strangler_users_key_index]
+      assert names == [
+               :strangler_strangler_schema,
+               :strangler_users_view,
+               :strangler_users_key_index
+             ]
+    end
+
+    test "creates the schema the view is declared in" do
+      # Nothing did, before. Every test in this repository creates `strangler`
+      # by hand in its setup (test/support/legacy_schema.ex), so the suite could
+      # not see that a generated migration run against a fresh database failed
+      # on its first statement with ERROR 3F000 (invalid_schema_name).
+      [schema | _] = AshStrangler.Migration.statements(UuidV5User)
+
+      assert schema.up == ~s(CREATE SCHEMA IF NOT EXISTS "strangler";)
+    end
+
+    test "the schema down drops it only once it holds nothing" do
+      # `DROP SCHEMA ... RESTRICT` raises on a non-empty schema rather than
+      # declining, and CASCADE would take another resource's view with it. So
+      # the drop is guarded by a check for any remaining relation or function.
+      [schema | _] = AshStrangler.Migration.statements(UuidV5User)
+
+      assert schema.down =~ "pg_class"
+      assert schema.down =~ "pg_proc"
+      assert schema.down =~ ~s(DROP SCHEMA IF EXISTS "strangler")
+      refute schema.down =~ "CASCADE"
+    end
+
+    test "no schema statement for a view living in public, which always exists" do
+      refute Enum.any?(
+               AshStrangler.Migration.statements(IdentityKeyThing),
+               &(&1.name == :strangler_public_schema)
+             )
     end
 
     test "returns nothing for a resource with the extension but no strangler mapping" do
@@ -326,6 +359,48 @@ defmodule AshStrangler.Sql.ViewTest do
         refute statement.up |> String.trim_trailing() |> String.trim_trailing(";") =~ ";",
                "#{statement.name} up carries more than one command:\n#{statement.up}"
       end
+    end
+  end
+
+  describe "AshStrangler.Migration.render/2" do
+    test "the rendered migration parses without a single compiler warning" do
+      # Every SQL line used to sit at column 0 inside a heredoc whose closing
+      # delimiter was indented, which Elixir 1.18 reports as "The current
+      # heredoc line is indented too little" -- once per statement, on every
+      # generated migration. A generated file that warns is unusable under
+      # --warnings-as-errors and teaches people to scroll past warnings.
+      source = AshStrangler.Migration.render("Elixir.RenderedMigrationTest", [UuidV5User])
+
+      {_ast, stderr} = with_io(:stderr, fn -> Code.string_to_quoted!(source) end)
+
+      assert stderr == "", "rendering emitted compiler diagnostics:\n#{stderr}"
+    end
+
+    test "the indentation the heredoc strips leaves the SQL byte-identical" do
+      source = AshStrangler.Migration.render("Elixir.RenderedMigrationTest", [UuidV5User])
+      {:ok, ast} = Code.string_to_quoted(source)
+
+      executed =
+        ast
+        |> Macro.prewalk([], fn
+          {:execute, _, [sql]} = node, acc when is_binary(sql) -> {node, [sql | acc]}
+          node, acc -> {node, acc}
+        end)
+        |> elem(1)
+
+      statements = AshStrangler.Migration.statements(UuidV5User)
+
+      expected =
+        Enum.map(statements, &String.trim(&1.up)) ++ Enum.map(statements, &String.trim(&1.down))
+
+      assert Enum.sort(Enum.map(executed, &String.trim/1)) == Enum.sort(expected)
+    end
+
+    test "resources sharing a schema emit one CREATE SCHEMA between them" do
+      source =
+        AshStrangler.Migration.render("Elixir.RenderedMigrationTest", [UuidV5User, UuidV5User])
+
+      assert source |> String.split("CREATE SCHEMA") |> length() == 2
     end
   end
 

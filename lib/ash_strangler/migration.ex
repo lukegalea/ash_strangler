@@ -51,7 +51,12 @@ defmodule AshStrangler.Migration do
           %{view: view, key_index: key_index} = Sql.View.build(resource)
           triggers = if phase == :dual_write, do: Sql.Triggers.build(resource), else: []
 
-          Enum.reject([view, key_index], &is_nil/1) ++ triggers ++ Sql.Notify.build(resource)
+          # The schema comes first, because everything after it is declared
+          # inside it. `:read_from_new` is exempt: the reverse view takes the
+          # legacy relation's own name, in a schema the legacy application
+          # already owns.
+          Enum.reject([Sql.View.schema_statement(resource), view, key_index], &is_nil/1) ++
+            triggers ++ Sql.Notify.build(resource)
       end
     else
       []
@@ -81,7 +86,14 @@ defmodule AshStrangler.Migration do
   """
   @spec render(String.t(), [Ash.Resource.t()]) :: String.t()
   def render(module_name, resources) do
-    statements = Enum.flat_map(resources, &statements/1)
+    # `uniq_by` the SQL rather than the name: resources sharing a schema each
+    # emit the same `CREATE SCHEMA IF NOT EXISTS`, and a statement whose text is
+    # byte-identical to one already in the list cannot do anything the first did
+    # not. Applied before the reverse so `down` stays the exact mirror of `up`.
+    statements =
+      resources
+      |> Enum.flat_map(&statements/1)
+      |> Enum.uniq_by(& &1.up)
 
     ups = Enum.map_join(statements, "\n", &render_execute(&1.up))
     downs = statements |> Enum.reverse() |> Enum.map_join("\n", &render_execute(&1.down))
@@ -109,11 +121,23 @@ defmodule AshStrangler.Migration do
     """
   end
 
+  # Every SQL line carries the closing delimiter's indentation. A heredoc line
+  # indented LESS than its closing `\"\"\"` is a compiler warning in Elixir 1.18
+  # ("The current heredoc line is indented too little"), and it fired on every
+  # statement of every generated migration — which makes the file unusable under
+  # `--warnings-as-errors` and trains people to ignore warnings in the ones that
+  # matter. Heredoc parsing strips exactly this indentation back off, so the SQL
+  # Postgres receives is unchanged.
   defp render_execute(sql) do
-    """
-        execute(\"\"\"
-    #{String.trim_trailing(sql)}
-        \"\"\")
-    """
+    body =
+      sql
+      |> String.trim_trailing()
+      |> String.split("\n")
+      |> Enum.map_join("\n", fn
+        "" -> ""
+        line -> "    " <> line
+      end)
+
+    "    execute(\"\"\"\n" <> body <> "\n    \"\"\")\n"
   end
 end
