@@ -188,7 +188,27 @@ children = [
 Supervisor.start_link(children, strategy: :one_for_one, name: MyApp.Supervisor)
 ```
 
-Options are `:repo` (required), `:resources`, `:channel` and `:name`.
+Options are `:repo` (required), `:resources`, `:channel`, `:name`, and the read
+options `:actor`, `:tenant` and `:authorize?`.
+
+**A policy-protected resource needs one of those last three**, and this is the
+first thing to check when a bridge that should be delivering is not. The listener
+is not acting for a person: a legacy write has no Ash actor behind it, so the
+`Ash.get/3` that re-reads the row runs as nobody, `Ash.Policy.Authorizer` refuses
+it, and `notify/2` returns `:ok` having dispatched nothing. There is no error
+anywhere — the only symptom is a page that stops updating.
+
+`authorize?: false` is usually right, and is not the loosening it looks like: the
+notification is a system event announcing that a row changed, and every consumer
+that renders it re-reads under its own actor. Pass a system actor instead if you
+have one and want the re-read itself filtered.
+
+```elixir
+{AshStrangler.Listener,
+ repo: MyApp.Repo,
+ resources: [MyApp.Accounts.User],
+ authorize?: false}
+```
 
 `:resources` is an allow-list. Omitted, the listener accepts any resource named in
 a payload that resolves to a loaded module with a strangler mapping. Naming them
@@ -235,11 +255,26 @@ would not raise, it would simply find no row.
 `:metadata` carries the origin, which is how a consumer that cares can tell a
 legacy write from an Ash one.
 
-The `:action` field is the action **struct**, looked up with
-`Ash.Resource.Info.primary_action/2`, because `Ash.Notifier` dereferences
-`notification.action.name` unconditionally — an atom, or a `nil`, crashes the
-dispatch rather than degrading. A resource with no primary action for the mapped
-type is logged and skipped rather than crashing the listener.
+The `:action` field is the action **struct**, not its name, because
+`Ash.Notifier` dereferences `notification.action.name` unconditionally — an atom,
+or a `nil`, crashes the dispatch rather than degrading.
+
+Where the resource has a primary action of the matching type it is used, so a
+`:dual_write` resource's notifications are indistinguishable from Ash's own and a
+`publish :some_action` template keeps naming something real. Where it does not,
+the listener synthesizes one named `:legacy_write`.
+
+That fallback is not a nicety. A `:read_from_legacy` read model declares no
+create, update or destroy action **by definition** — nothing writes at that phase
+— and it is precisely the phase in which the legacy application is the only
+writer. Skipping those, which is what this did before, left the bridge inert on
+the resource shape it is most useful for.
+
+`:legacy_write` rather than a borrowed name because no Ash action ran, and a
+notification that names one would be lying. The consequence is worth stating
+because it decides how you write publications: `publish_all :create, [...]`
+matches on the action's **type** and therefore fires; `publish :register, [...]`
+matches on its **name** and correctly does not.
 
 Two cases resolve differently:
 

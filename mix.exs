@@ -77,6 +77,14 @@ defmodule AshStrangler.MixProject do
       # asserts they still match.
       {:ash_diagram, "~> 0.2", optional: true},
       {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
+      # A SAT solver, so the suite can exercise a resource carrying real
+      # policies. This library's central claim about the notification bridge is
+      # that re-reading through Ash means "calculations are computed, field and
+      # row policies apply" -- and until this arrived nothing here had a policy
+      # on it, so the half of that sentence about policies was untested. It is
+      # test-only: a consumer already has a solver if they use `Ash.Policy`, and
+      # is not made to install one if they do not.
+      {:simple_sat, "~> 0.1", only: [:dev, :test]},
       # Required by Spark.Formatter, which formats the DSL blocks.
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
