@@ -77,7 +77,7 @@ defmodule AshStrangler.Sql.ReverseView do
     up = """
     CREATE OR REPLACE VIEW #{relation} AS
     SELECT
-    #{Enum.map_join(columns, ",\n", fn {expr, name} -> "  #{expr} AS #{name}" end)}
+    #{Enum.map_join(columns, ",\n", fn {expr, name} -> "  #{expr} AS #{Printer.quote_ident(name)}" end)}
     FROM #{new_relation};
     """
 
@@ -92,6 +92,9 @@ defmodule AshStrangler.Sql.ReverseView do
 
   # `{expression_over_the_new_table, legacy_column_name}` for every legacy column
   # the mapping can reconstruct, ordered by legacy column so the SQL is stable.
+  # The legacy column name is what the view's column ends up being called -- the
+  # old application queries it by exactly that spelling -- so it is emitted
+  # through `quote_ident/1` like every other source-column reference.
   defp reverse_columns!(resource) do
     key = Info.key(resource)
 

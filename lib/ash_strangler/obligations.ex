@@ -749,10 +749,14 @@ defmodule AshStrangler.Obligations do
 
   defp relation(%{twin: twin}), do: AshStrangler.Twin.relation(twin)
 
+  # The raw legacy column spelling, as the assertions spell it. These render into
+  # SQL that is *executed* against the legacy database -- an unquoted camelCase
+  # column would fold to lowercase and the assertion would report a column that
+  # does not exist rather than the rows it exists to find.
   defp column(%{twin: twin}, attribute) do
-    AshStrangler.Twin.column!(twin, attribute)
+    Printer.quote_ident(AshStrangler.Twin.column!(twin, attribute))
   rescue
-    _ -> to_string(attribute)
+    _ -> Printer.quote_ident(attribute)
   end
 
   defp one_of(twin, column) do

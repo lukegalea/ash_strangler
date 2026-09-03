@@ -60,7 +60,10 @@ defmodule AshStrangler.Sql.Printer do
   `literal/1` mirrors PostgreSQL's own `quote_literal()`: single quotes are
   doubled, and a value containing a backslash is emitted in `E'…'` form with
   backslashes escaped, so the result is correct whether or not
-  `standard_conforming_strings` is on.
+  `standard_conforming_strings` is on. Identifiers get the same treatment from
+  `quote_ident/1` — the one function that renders a name — because PostgreSQL
+  folds an *unquoted* identifier to lowercase and a legacy source column spelled
+  `createdAt` resolves to a nonexistent `createdat` otherwise.
 
   ## The closed node set
 
@@ -340,8 +343,9 @@ defmodule AshStrangler.Sql.Printer do
         # `ctx.ref`. On the right-hand side of `UPDATE ... SET` a bare column name is
         # the row's stored value, which is exactly what "preserve" means -- and it is
         # the one place in a write expression where a reference is NOT a resource
-        # attribute. See `AshStrangler.Lens.collapse_value/4`.
-        "(CASE WHEN #{old} IS DISTINCT FROM #{new} THEN now() ELSE #{column} END)"
+        # attribute. See `AshStrangler.Lens.collapse_value/4`. Quoted, because the
+        # stored column is a *source* column and may be camelCase.
+        "(CASE WHEN #{old} IS DISTINCT FROM #{new} THEN now() ELSE #{quote_ident(column)} END)"
     end
   end
 
@@ -543,6 +547,73 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # --- identifiers -------------------------------------------------------------
+
+  # PostgreSQL folds an unquoted identifier to lowercase at parse time. A legacy
+  # source column spelled `createdAt` therefore has to reach the SQL double-quoted
+  # or it silently resolves to a nonexistent `createdat` — ERROR 42703,
+  # undefined_column, in a view or trigger that compiled as far as the string was
+  # concerned. Only *source* columns can arrive camelCase: a twin's `source:`
+  # carries whatever the dump declares, while resource attribute names — view
+  # aliases, `NEW.`/`OLD.` references — are canonical and conventionally
+  # snake_case. Those go bare.
+  @plain_identifier ~r/^[a-z_][a-z0-9_$]*$/
+
+  @doc """
+  Renders an identifier — a column or relation name — as PostgreSQL SQL.
+
+  A name that is already a plain lowercase identifier is emitted **bare**, so
+  the generated SQL for the common snake_case case stays byte-identical to what
+  it was before quoting existed; anything else is double-quoted, with embedded
+  double quotes doubled. That mirrors PostgreSQL's own `quote_ident()`, and it
+  is the rule rather than an optimization: an unquoted identifier folds to
+  lowercase, so a source declared `source: :"createdAt"` must reach the SQL as
+  `"createdAt"` or the view reads a column that does not exist (ERROR 42703).
+
+  Input that is already fully quoted passes through unchanged, so a caller
+  holding a pre-quoted identifier composes rather than double-quotes.
+
+      iex> AshStrangler.Sql.Printer.quote_ident(:deleted_at)
+      "deleted_at"
+
+      iex> AshStrangler.Sql.Printer.quote_ident(:"createdAt") == ~s("createdAt")
+      true
+
+      iex> AshStrangler.Sql.Printer.quote_ident(~s("createdAt")) == ~s("createdAt")
+      true
+
+      iex> AshStrangler.Sql.Printer.quote_ident(~s(what"a"column)) == ~s("what""a""column")
+      true
+  """
+  @spec quote_ident(atom() | String.t()) :: String.t()
+  def quote_ident(name) when is_atom(name), do: name |> Atom.to_string() |> quote_ident()
+
+  def quote_ident(name) when is_binary(name) do
+    cond do
+      already_quoted?(name) ->
+        name
+
+      Regex.match?(@plain_identifier, name) ->
+        name
+
+      true ->
+        ~s(") <> String.replace(name, ~s("), ~s("")) <> ~s(")
+    end
+  end
+
+  def quote_ident(other) do
+    raise ArgumentError, """
+    #{inspect(other)} cannot be rendered as a SQL identifier.
+
+    `quote_ident/1` takes the column or relation name as an atom or a string —
+    the forms `source:`, `key from:` and `AshStrangler.Twin.column!/2` produce.
+    """
+  end
+
+  defp already_quoted?(name) do
+    byte_size(name) >= 2 and String.starts_with?(name, ~s(")) and String.ends_with?(name, ~s("))
+  end
+
   # --- types -------------------------------------------------------------------
 
   # The Ash types whose PostgreSQL spelling is not their `Ash.Type.storage_type/2`.
@@ -681,12 +752,12 @@ defmodule AshStrangler.Sql.Printer do
   @spec new_frame() :: ref_fun()
   def new_frame, do: fn {_path, attribute} -> "NEW.#{attribute}" end
 
-  defp column_name(nil, _path, attribute), do: to_string(attribute)
+  defp column_name(nil, _path, attribute), do: quote_ident(attribute)
 
   defp column_name(twin, path, attribute) do
     case AshStrangler.Twin.resource_at(twin, path) do
-      {:ok, resource} -> AshStrangler.Twin.column!(resource, attribute)
-      {:error, _} -> to_string(attribute)
+      {:ok, resource} -> quote_ident(AshStrangler.Twin.column!(resource, attribute))
+      {:error, _} -> quote_ident(attribute)
     end
   end
 

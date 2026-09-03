@@ -41,6 +41,7 @@ defmodule AshStrangler.Sql.Notify do
   """
 
   alias AshStrangler.{Info, Key, Source}
+  alias AshStrangler.Sql.Printer
 
   @doc """
   Builds the notify function and trigger for `resource_or_dsl`.
@@ -85,7 +86,7 @@ defmodule AshStrangler.Sql.Notify do
       -- the 7999-byte ceiling and abort the LEGACY application's transaction.
       PERFORM pg_notify('#{channel}', json_build_object(
         'resource', '#{resource_name}',
-        'legacy_id', affected.#{key.from},
+        'legacy_id', affected.#{Printer.quote_ident(key.from)},
         'op', lower(TG_OP)
       )::text);
 

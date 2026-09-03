@@ -225,6 +225,55 @@ defmodule AshStrangler.Sql.PrinterTest do
     end
   end
 
+  # --- identifiers -------------------------------------------------------------
+
+  describe "quote_ident/1 quotes exactly what PostgreSQL would fold" do
+    # A source column is whatever the legacy dump declares, and a dump may spell a
+    # column `createdAt`. PostgreSQL folds an UNQUOTED identifier to lowercase, so
+    # an unquoted rendering compiles fine and then reads a column that does not
+    # exist (42703). Snake_case stays bare so the generated SQL for the common case
+    # does not churn.
+
+    test "a plain lowercase identifier is emitted bare" do
+      assert Printer.quote_ident(:deleted_at) == "deleted_at"
+      assert Printer.quote_ident("created_at") == "created_at"
+      assert Printer.quote_ident(:_strangler_needs_backfill) == "_strangler_needs_backfill"
+    end
+
+    test "anything PostgreSQL would fold is double-quoted" do
+      assert Printer.quote_ident(:createdAt) == ~s("createdAt")
+      assert Printer.quote_ident("Order") == ~s("Order")
+      assert Printer.quote_ident("order by") == ~s("order by")
+    end
+
+    test "an embedded double quote is doubled, not escaped some other way" do
+      assert Printer.quote_ident(~s(what"a"column)) == ~s("what""a""column")
+    end
+
+    test "an already-quoted identifier passes through unchanged" do
+      # The backfill interlock carries its flag column pre-quoted so its SET
+      # fragment is byte-identical to `Backfill.interlock_assignment/0`; composing
+      # with the quoter must not double-quote it.
+      assert Printer.quote_ident(~s("createdAt")) == ~s("createdAt")
+    end
+
+    test "the frames route source columns through it" do
+      # `bare_frame/0` has no twin to ask, so an attribute name IS the column name
+      # -- and a camelCase attribute name must arrive quoted for the same reason a
+      # camelCase `source:` must.
+      assert Printer.to_sql(expr(createdAt), ref: Printer.bare_frame()) == ~s("createdAt")
+
+      assert Printer.to_sql(expr(createdAt), ref: Printer.qualified_frame(nil, "users")) ==
+               ~s(users."createdAt")
+    end
+
+    test "a non-name is refused rather than coerced" do
+      assert_raise ArgumentError, ~r/cannot be rendered as a SQL identifier/, fn ->
+        Printer.quote_ident(42)
+      end
+    end
+  end
+
   # --- reference frames --------------------------------------------------------
 
   describe "the reference frame is a parameter, which is the point of the module" do

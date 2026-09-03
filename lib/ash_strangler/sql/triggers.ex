@@ -111,7 +111,11 @@ defmodule AshStrangler.Sql.Triggers do
       schema: schema,
       view: view,
       relation: Info.relation(resource_or_dsl),
+      # The legacy key is a *source* column and may be camelCase, so every place
+      # the trigger SQL spells it -- the UPDATE/DELETE predicates and the
+      # plpgsql record reads off `stored` -- goes through the quoter.
       legacy_key: key.from,
+      quoted_legacy_key: Printer.quote_ident(key.from),
       on_update: Info.on_update(resource_or_dsl),
       backfill_interlock?: Info.backfill_interlock?(resource_or_dsl),
       lenses: lenses,
@@ -218,7 +222,12 @@ defmodule AshStrangler.Sql.Triggers do
 
   defp function_body(ctx, :insert) do
     writable = writable_targets(ctx, :insert)
-    columns = Enum.map_join(writable, ", ", fn {column, _} -> to_string(column) end)
+
+    # Every target is a source column, and a source column may be camelCase --
+    # `source: :"createdAt"` is the dump's spelling. Unquoted, PostgreSQL folds
+    # the INSERT list to `createdat` and the statement fails with 42703. The
+    # interlock's entry arrives pre-quoted and passes through unchanged.
+    columns = Enum.map_join(writable, ", ", fn {column, _} -> Printer.quote_ident(column) end)
     values = Enum.map_join(writable, ", ", fn {_, expression} -> expression end)
 
     """
@@ -234,7 +243,7 @@ defmodule AshStrangler.Sql.Triggers do
       -- with an INSTEAD OF trigger reports whatever this function returns, so
       -- returning NEW would report NULL for every derived column -- silently,
       -- including the primary key.
-      SELECT * INTO NEW FROM #{ctx.view} WHERE __legacy_id = stored.#{ctx.legacy_key};
+      SELECT * INTO NEW FROM #{ctx.view} WHERE __legacy_id = stored.#{ctx.quoted_legacy_key};
 
       RETURN NEW;
     END $strangler$ LANGUAGE plpgsql;
@@ -246,7 +255,11 @@ defmodule AshStrangler.Sql.Triggers do
       ctx
       |> writable_targets(:update)
       |> Enum.map_join(",\n        ", fn {column, expression} ->
-        "#{column} = #{assignment(ctx, column, expression)}"
+        # Quoted once and used for both the SET target and the `:changed_columns`
+        # guard, where the same spelling reads the row's stored value.
+        quoted = Printer.quote_ident(column)
+
+        "#{quoted} = #{assignment(ctx, quoted, expression)}"
       end)
 
     """
@@ -259,14 +272,14 @@ defmodule AshStrangler.Sql.Triggers do
       -- another place for the two sides to disagree.
       UPDATE #{ctx.relation}
       SET #{assignments}
-      WHERE #{ctx.legacy_key} = OLD.__legacy_id
+      WHERE #{ctx.quoted_legacy_key} = OLD.__legacy_id
       RETURNING * INTO stored;
 
       IF NOT FOUND THEN
         RAISE EXCEPTION 'row % no longer exists in #{ctx.relation}', OLD.__legacy_id;
       END IF;
 
-      SELECT * INTO NEW FROM #{ctx.view} WHERE __legacy_id = stored.#{ctx.legacy_key};
+      SELECT * INTO NEW FROM #{ctx.view} WHERE __legacy_id = stored.#{ctx.quoted_legacy_key};
 
       RETURN NEW;
     END $strangler$ LANGUAGE plpgsql;
@@ -277,7 +290,7 @@ defmodule AshStrangler.Sql.Triggers do
     """
     CREATE OR REPLACE FUNCTION #{function_name(ctx, :delete)}() RETURNS trigger AS $strangler$
     BEGIN
-      DELETE FROM #{ctx.relation} WHERE #{ctx.legacy_key} = OLD.__legacy_id;
+      DELETE FROM #{ctx.relation} WHERE #{ctx.quoted_legacy_key} = OLD.__legacy_id;
 
       -- OLD, not NULL: returning NULL from an INSTEAD OF trigger reports
       -- "0 rows affected" even though the row is gone, which Ecto surfaces as
