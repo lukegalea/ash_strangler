@@ -123,6 +123,7 @@ defmodule AshStrangler.Source do
     on_update: :full_row,
     backfill_interlock?: false,
     notify?: false,
+    ledger?: false,
     mappings: [],
     keys: []
   ]

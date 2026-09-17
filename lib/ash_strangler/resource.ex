@@ -73,7 +73,8 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifyNoUpserts,
       AshStrangler.Verifiers.VerifyReverseMappable,
       AshStrangler.Verifiers.VerifyIdentitiesBacked,
-      AshStrangler.Verifiers.VerifyPhaseTransition
+      AshStrangler.Verifiers.VerifyPhaseTransition,
+      AshStrangler.Verifiers.VerifyLedger
     ]
 
   # Only when `:ash_diagram` is there to define the behaviour. Declaring it

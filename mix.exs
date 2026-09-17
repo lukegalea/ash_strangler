@@ -130,6 +130,7 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/what-it-refuses.md",
         "documentation/topics/backfill-and-reconciliation.md",
         "documentation/topics/notifications.md",
+        "documentation/topics/the-change-ledger.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},

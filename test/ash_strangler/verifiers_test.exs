@@ -989,4 +989,85 @@ defmodule AshStrangler.VerifiersTest do
       )
     end
   end
+
+  # --- the change ledger -------------------------------------------------------
+
+  describe "VerifyLedger" do
+    test "refuses `ledger?` without `notify?`, because the record without the wake is half a feature" do
+      message =
+        assert_rejected_by(
+          Verifiers.VerifyLedger,
+          """
+          attributes do
+            attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+            attribute :email, :string, public?: true
+          end
+
+          strangler do
+            phase :read_from_legacy
+            source #{@twin} do
+              #{@key}
+              ledger? true
+              map :email, from: :email
+            end
+          end
+          """,
+          "`ledger? true` requires `notify? true`"
+        )
+
+      # The reason the two are one option: the ledger is the durable record and
+      # the notify is what wakes the drain that processes it -- without the
+      # wake, ingestion is only as prompt as the periodic sweep.
+      assert message =~ "backlog"
+      assert message =~ "sweep"
+    end
+
+    test "accepts `ledger?` beside `notify?`, which is the shape it exists for" do
+      assert_accepted("""
+      attributes do
+        attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+        attribute :email, :string, public?: true
+      end
+
+      strangler do
+        phase :read_from_legacy
+        source #{@twin} do
+          #{@key}
+          notify? true
+          ledger? true
+          map :email, from: :email
+        end
+      end
+      """)
+    end
+
+    test "refuses `ledger?` past cutover, where the relation is a view no trigger can attach to" do
+      message =
+        assert_rejected_by(
+          Verifiers.VerifyLedger,
+          """
+          attributes do
+            attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+            attribute :email, :string, public?: true
+          end
+
+          strangler do
+            phase :read_from_new
+            source #{@twin} do
+              #{@key}
+              notify? true
+              ledger? true
+              map :email, from: :email
+            end
+          end
+          """,
+          "phase :read_from_new"
+        )
+
+      # PostgreSQL's refusal, not this package's: row-level AFTER triggers on
+      # a view are rejected outright, so emitting the statement would produce
+      # a migration that cannot run.
+      assert message =~ "row-level AFTER triggers"
+    end
+  end
 end

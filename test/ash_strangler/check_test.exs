@@ -223,6 +223,36 @@ defmodule AshStrangler.CheckTest do
     end
   end
 
+  # --- the ledger ---------------------------------------------------------
+
+  describe "the ledger" do
+    test "reports the unprocessed backlog per relation for a ledger-backed source" do
+      # The ledger fixture lives in the round-trip domain, whose repo this
+      # sandbox transaction already owns, and whose DDL the harness installed
+      # at boot. The backlog line is informational by design -- a number
+      # growing between sweeps is the drain's pulse, not a failed assertion --
+      # so this asserts the shape of the report rather than a zero.
+      # The setup's `on_exit` restores the domain env this swaps out.
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.Test.Domain])
+
+      {_result, output} = check(["--domain", "AshStrangler.Test.Domain"])
+
+      assert output =~ "ledger backlog"
+      assert output =~ ~r/legacy\.users — \d+ unprocessed event\(s\)/
+    end
+
+    test "says so rather than guessing when the events table does not exist" do
+      # "Could not be measured" and "measured clean" are different answers.
+      TestRepo.query!("DROP TABLE legacy_change_events")
+
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.Test.Domain])
+
+      {_result, output} = check(["--domain", "AshStrangler.Test.Domain"])
+
+      assert output =~ "does not exist yet"
+    end
+  end
+
   # --- running the task --------------------------------------------------
 
   defp check(args \\ []) do

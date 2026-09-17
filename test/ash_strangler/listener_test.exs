@@ -1,3 +1,25 @@
+defmodule AshStrangler.ListenerTest.Drain do
+  @moduledoc """
+  Records drain nudges by sending to whichever process registered this
+  module's name — the same trick `AshStrangler.ListenerTest.Notifier` uses,
+  for the wake path instead of the notification path.
+
+  `nudge/1` is called synchronously in the listener's process, so a test that
+  registers itself first can assert on its own mailbox.
+  """
+
+  def drain(ledger_id) do
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> send(pid, {:drain_nudge, ledger_id})
+    end
+  end
+
+  def broken(_ledger_id) do
+    raise "the drain is on fire"
+  end
+end
+
 defmodule AshStrangler.ListenerTest.Notifier do
   @moduledoc """
   Forwards every notification to the process registered under this module's name.
@@ -246,6 +268,72 @@ defmodule AshStrangler.ListenerTest do
       assert {:error, _} = Listener.decode("{not json")
       assert {:error, {:unexpected_payload, _}} = Listener.decode(JSON.encode!(%{"a" => 1}))
     end
+
+    test "decodes the ledger's wake payload to the event id" do
+      # `wake:<event id>` replaces the JSON envelope on a `ledger?` source:
+      # there is no resource named and no row to re-read, only a durable event
+      # asking to be drained.
+      assert {:ok, %{wake: 4711}} = Listener.decode("wake:4711")
+    end
+
+    test "a malformed wake is an error, not a crash" do
+      # Falls through to the JSON path and comes back as a decode error, which
+      # the GenServer logs and drops like any other payload it cannot use.
+      assert {:error, _} = Listener.decode("wake:")
+      assert {:error, _} = Listener.decode("wake:not-a-number")
+      assert {:error, _} = Listener.decode("wake:0")
+    end
+  end
+
+  describe "nudge_drain/1" do
+    setup do
+      previous = Application.get_env(:ash_strangler, :ledger_drain)
+
+      on_exit(fn ->
+        if previous == :absent do
+          Application.delete_env(:ash_strangler, :ledger_drain)
+        else
+          Application.put_env(:ash_strangler, :ledger_drain, previous)
+        end
+      end)
+
+      :ok
+    end
+
+    test "calls the configured {module, fun} with the ledger event id" do
+      Process.register(self(), AshStrangler.ListenerTest.Drain)
+
+      Application.put_env(
+        :ash_strangler,
+        :ledger_drain,
+        {AshStrangler.ListenerTest.Drain, :drain}
+      )
+
+      assert :ok = Listener.nudge_drain(4711)
+      assert_receive {:drain_nudge, 4711}
+    end
+
+    test "is a no-op when no drain is configured" do
+      # Unset, behaviour is unchanged: the periodic sweep drains eventually,
+      # which is the recovery net the ledger design rests on. A wake nobody is
+      # configured to receive is silence, not an error.
+      Application.delete_env(:ash_strangler, :ledger_drain)
+
+      assert :ok = Listener.nudge_drain(4711)
+    end
+
+    test "a drain that raises is logged and dropped, not propagated" do
+      # The nudge runs in the listener's process. A misconfigured drain must
+      # not take the notification bridge down with it -- the sweep still
+      # drains, so the cost is promptness, not delivery.
+      Application.put_env(
+        :ash_strangler,
+        :ledger_drain,
+        {AshStrangler.ListenerTest.Drain, :broken}
+      )
+
+      assert :ok = Listener.nudge_drain(4711)
+    end
   end
 
   describe "notify/2" do
@@ -452,6 +540,138 @@ defmodule AshStrangler.ListenerTest do
         refute payload =~ "xxxx"
       after
         Postgrex.query!(conn, "DELETE FROM legacy.users WHERE login = $1", [login])
+        GenServer.stop(notifications)
+        GenServer.stop(conn)
+      end
+    end
+  end
+
+  describe "the ledger trigger, end to end" do
+    # Own committed connection, outside the sandbox, for the same reason the
+    # notify tests do: both the event row and the wake are transactional with
+    # the legacy write, and a sandbox transaction always rolls back. The test
+    # listens on the ledger fixture's own channel, because a wake payload
+    # replaces the JSON envelope there and sharing it with the envelope tests
+    # would make `assert_receive` grab whichever trigger spoke first.
+    @ledger_channel "ash_strangler_ledger_test"
+
+    @tag :integration
+    test "a committed write lands one event row and one wake, carrying the envelope" do
+      config = Listener.connection_opts(AshStrangler.TestRepo)
+      {:ok, conn} = Postgrex.start_link(config)
+      {:ok, notifications} = Postgrex.Notifications.start_link(config)
+      {:ok, _ref} = Postgrex.Notifications.listen(notifications, @ledger_channel)
+
+      login = "ledger-#{System.unique_integer([:positive])}"
+
+      try do
+        %Postgrex.Result{rows: [[legacy_id]]} =
+          Postgrex.query!(
+            conn,
+            "INSERT INTO legacy.users (login, state) VALUES ($1, 'active') RETURNING id",
+            [login]
+          )
+
+        assert_receive {:notification, _pid, _ref, _channel, payload}, 5_000
+        assert {:ok, %{wake: event_id}} = Listener.decode(payload)
+        assert is_integer(event_id) and event_id > 0
+
+        assert %Postgrex.Result{rows: [[event]]} =
+                 Postgrex.query!(
+                   conn,
+                   "SELECT row_to_json(t) FROM (SELECT * FROM legacy_change_events WHERE id = $1) t",
+                   [event_id]
+                 )
+
+        assert event["source_schema"] == "legacy"
+        assert event["source_table"] == "users"
+        assert event["operation"] == "insert"
+
+        # The mapped key column, as jsonb -- the same id the listener and the
+        # ingester derive the modern primary key from.
+        assert event["primary_key"] == %{"id" => legacy_id}
+
+        # An insert has no before-image, and everything is a change.
+        assert event["old_row"] == nil
+        assert event["new_row"]["login"] == login
+        assert event["changed_columns"] == event["new_row"]
+
+        # One id per legacy transaction, so a multi-row write is
+        # reconstructable; and the trigger fills only what the database knows.
+        assert is_integer(event["transaction_id"])
+
+        # row_to_json serialises the timestamptz; parse it back rather than
+        # assert on a rendering.
+        assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(event["transaction_timestamp"])
+        assert event["processed_at"] == nil
+        assert event["source_user"] == nil
+        assert event["actor_confidence"] == nil
+      after
+        Postgrex.query!(conn, "DELETE FROM legacy.users WHERE login = $1", [login])
+
+        Postgrex.query!(
+          conn,
+          "DELETE FROM legacy_change_events WHERE source_schema = 'legacy' AND source_table = 'users'"
+        )
+
+        GenServer.stop(notifications)
+        GenServer.stop(conn)
+      end
+    end
+
+    @tag :integration
+    test "an update records the before-image and only the changed columns" do
+      config = Listener.connection_opts(AshStrangler.TestRepo)
+      {:ok, conn} = Postgrex.start_link(config)
+      {:ok, notifications} = Postgrex.Notifications.start_link(config)
+      {:ok, _ref} = Postgrex.Notifications.listen(notifications, @ledger_channel)
+
+      login = "ledger-upd-#{System.unique_integer([:positive])}"
+
+      try do
+        %Postgrex.Result{rows: [[legacy_id]]} =
+          Postgrex.query!(
+            conn,
+            "INSERT INTO legacy.users (login, state, email) VALUES ($1, 'active', 'before@example.com') RETURNING id",
+            [login]
+          )
+
+        assert_receive {:notification, _pid, _ref, _channel, _payload}, 5_000
+
+        Postgrex.query!(
+          conn,
+          "UPDATE legacy.users SET email = 'after@example.com' WHERE id = $1",
+          [
+            legacy_id
+          ]
+        )
+
+        assert_receive {:notification, _pid, _ref, _channel, payload}, 5_000
+        assert {:ok, %{wake: event_id}} = Listener.decode(payload)
+
+        %Postgrex.Result{rows: [[event]]} =
+          Postgrex.query!(
+            conn,
+            "SELECT row_to_json(t) FROM (SELECT * FROM legacy_change_events WHERE id = $1) t",
+            [event_id]
+          )
+
+        assert event["operation"] == "update"
+        assert event["old_row"]["email"] == "before@example.com"
+        assert event["new_row"]["email"] == "after@example.com"
+
+        # A column the UPDATE never assigned does not appear as changed -- and
+        # one written back with its current value would, because PostgreSQL
+        # cannot tell those apart, and neither can this.
+        assert event["changed_columns"] == %{"email" => "after@example.com"}
+      after
+        Postgrex.query!(conn, "DELETE FROM legacy.users WHERE login = $1", [login])
+
+        Postgrex.query!(
+          conn,
+          "DELETE FROM legacy_change_events WHERE source_schema = 'legacy' AND source_table = 'users'"
+        )
+
         GenServer.stop(notifications)
         GenServer.stop(conn)
       end

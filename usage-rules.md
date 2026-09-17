@@ -381,6 +381,22 @@ incomplete backfill produces missing rows, not an error.
     *type*, fires; `publish :some_action, [...]`, which matches on its *name*,
     does not. Write publications for a strangled read model with `publish_all`.
 
+31. **`ledger?: true` is the durable half, and it needs the ingester to be
+    real.** It turns every legacy write into a row in `legacy_change_events`,
+    committed *with* the legacy transaction, plus a `wake:<event id>` notify
+    that replaces the JSON envelope — so a ledger source's listeners hear
+    wakes, not changes; downstream consumers hear about the write when the
+    generated ingestion performs ordinary Ash actions, which fire Ash's own
+    notifiers. Requires `notify? true` (the wake is what makes ingestion prompt
+    instead of merely eventual) and is refused past cutover, where the relation
+    is a view no row trigger can attach to. Generate the drain with `mix
+    ash_strangler.gen.ingester`, wire `config :ash_strangler, ledger_drain:
+    {Worker, :nudge}`, and keep the cron sweep — a missed wake costs delay, not
+    delivery, *only* while the sweep exists. `mix ash_strangler.check` reports
+    the backlog per relation; watch it. And before turning this on, say the
+    trade out loud: the legacy application's writes now fail if the ledger
+    table cannot accept an insert.
+
 ---
 
 ## What the verifiers cannot check

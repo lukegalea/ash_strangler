@@ -80,6 +80,11 @@ defmodule AshStrangler.Test.LegacySchema do
     # for -- and here it is also what lets `AshStrangler.MechanismTest` compare a
     # trigger-backed view against an auto-updatable one over the same rows.
     install_resource!(MixedUser)
+    # The ledger fixture. Its statements create `legacy_change_events` and the
+    # combined ledger-plus-wake trigger -- so if the generated ledger DDL does
+    # not run against a real server, the suite fails to start, which is the
+    # same blast radius every other fixture's DDL has.
+    install_resource!(AshStrangler.Test.LedgerUser)
 
     :ok
   end

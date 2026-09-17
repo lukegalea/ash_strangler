@@ -124,6 +124,46 @@ summarised from the commit history.
   distinguishes "absent from the `SET` clause" from "set to its current value".
   There is no third option that is right, only a documented choice.
 
+### Features:
+
+- **The change ledger** — `ledger? true` beside `notify? true` on a source
+  records every legacy write durably and drains it. One trigger on the legacy
+  relation, in the legacy write's own transaction, inserts an event into a
+  shared `legacy_change_events` table (full row before/after as jsonb, changed
+  columns, `txid_current()`, the mapped primary key) and then notifies
+  `wake:<event id>` — the wake replaces the JSON envelope on a ledger source,
+  because the consumer of a ledger write is the drain, which re-reads the
+  durable row anyway.
+
+  `notify?` alone is at-most-once: a listener that is down misses writes with
+  nothing to recover from. The ledger flips the guarantee to **at-least-once**
+  — the event commits with the legacy write or not at all — at the price every
+  synchronous audit trigger pays: the legacy application's write path now
+  depends on the ledger's health. One ledger table serves every relation, keyed
+  by `source_schema`/`source_table`, and the trigger names derive from
+  `schema.table`, so resources mapping the same twin share it by construction.
+
+  The table ships as plain DDL and stays plain: no Ash resource over it, on
+  purpose. The drain policy — which events matter, who acts, what happens on
+  failure — is host code, and the package generates its skeleton instead.
+
+- **`mix ash_strangler.gen.ingester MyApp.Resource`** generates that skeleton
+  into the host's `lib/`: an ingestion module performing ordinary Ash actions
+  with `actor:` from a `resolve_actor/1` stub (`{:ok, actor} | :unattributed`)
+  and `metadata:` carrying the source envelope, plus an idempotent Oban worker
+  draining the ledger by cursor (`WHERE processed_at IS NULL ... FOR UPDATE
+  SKIP LOCKED`, `processed_at` marked on success). The wake nudges the worker
+  through `config :ash_strangler, ledger_drain: {Worker, :nudge}`; the periodic
+  cron sweep documented in the worker's moduledoc is the recovery net for
+  missed wakes. The insert/update branch of the ingestion raises rather than
+  guessing which legacy column becomes which action input — the one fact no
+  generator can derive.
+
+- `mix ash_strangler.check` reports the unprocessed ledger backlog per relation
+  when any mapped source carries `ledger? true`. A backlog is not a failure —
+  it is the drain's pulse, and a number growing between sweeps is the early
+  warning that it has stopped keeping up.
+
 ### Features (0.1):
 
 - `AshStrangler.Resource`, a Spark DSL extension for describing how an Ash

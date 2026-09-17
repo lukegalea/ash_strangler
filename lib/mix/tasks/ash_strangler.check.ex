@@ -47,6 +47,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   | twin freshness | the twin's columns against `information_schema.columns` |
   | twin identities | the twin's unique sets against `pg_index` |
   | a relationship-derived join | row counts through the join, for fan-out |
+  | a `ledger?` source | unprocessed `legacy_change_events` rows per relation |
 
   Two of those deserve their own note.
 
@@ -84,7 +85,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   use Mix.Task
 
-  alias AshStrangler.{Info, Lens, Mechanism, Obligations, Twin}
+  alias AshStrangler.{Info, Lens, Mechanism, Obligations, Sql.Ledger, Twin}
   alias AshStrangler.Sql.{Printer, View}
 
   @requirements ["app.config"]
@@ -292,7 +293,10 @@ defmodule Mix.Tasks.AshStrangler.Check do
   end
 
   defp run_checks(repo, group) do
-    Enum.sum(Enum.map(group, &measure_resource(repo, &1)) ++ measure_twins(repo, group))
+    Enum.sum(
+      Enum.map(group, &measure_resource(repo, &1)) ++
+        measure_twins(repo, group) ++ [ledger_backlog(repo, group)]
+    )
   end
 
   defp unavailable(repo, reason) do
@@ -749,6 +753,53 @@ defmodule Mix.Tasks.AshStrangler.Check do
   end
 
   defp list(columns), do: columns |> Enum.sort() |> Enum.map_join(", ", &inspect/1)
+
+  # --- the ledger ---------------------------------------------------------
+
+  # Informational, and deliberately never a failure: a backlog between drains
+  # is the ledger working as designed, not an assertion that failed. What the
+  # number is for is noticing the drain has stopped keeping up — which is why
+  # it is reported per relation, where "which legacy table is piling up" is
+  # readable, rather than as one global count that hides the pile-up behind
+  # the quiet relations.
+  defp ledger_backlog(repo, group) do
+    group
+    |> Enum.filter(&Info.ledger?/1)
+    |> Enum.map(&Info.relation/1)
+    |> Enum.uniq()
+    |> Enum.each(&ledger_backlog_for(repo, &1))
+
+    0
+  end
+
+  defp ledger_backlog_for(repo, relation) do
+    {schema, table} = relation_parts_of(relation)
+
+    sql = """
+    SELECT count(*) FROM #{Ledger.events_table()}
+    WHERE processed_at IS NULL AND source_schema = $1 AND source_table = $2
+    """
+
+    case query(repo, sql, [schema, table]) do
+      {:ok, %{rows: [[count]]}} ->
+        emit(@ok, "ledger backlog", "#{relation} — #{count} unprocessed event(s)")
+
+      {:error, message} ->
+        emit(
+          @unrun,
+          "ledger backlog",
+          "#{relation} — #{message}. The events table does not exist yet, or the " <>
+            "migration that creates it has not run."
+        )
+    end
+  end
+
+  defp relation_parts_of(relation) do
+    case String.split(relation, ".", parts: 2) do
+      [schema, table] -> {schema, table}
+      [table] -> {"public", table}
+    end
+  end
 
   # --- rendering and running ---------------------------------------------
 

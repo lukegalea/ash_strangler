@@ -550,6 +550,32 @@ defmodule AshStrangler.Dsl do
         from a compile-time DSL literal cannot carry an injection.
         """
       ],
+      ledger?: [
+        type: :boolean,
+        default: false,
+        doc: """
+        Record every write to the legacy relation durably, in a
+        `legacy_change_events` table the migration also emits, and have the same
+        trigger wake the drain with a `wake:<event id>` `pg_notify`. See
+        `AshStrangler.Sql.Ledger` and `mix ash_strangler.gen.ingester`.
+
+        Requires `notify? true`. The ledger is the durable record, but a record
+        nobody is woken for is a backlog, and the wake is what makes ingestion
+        prompt; the verifier refuses one without the other.
+
+        This is the durable half of what `notify?` cannot give you: a `pg_notify`
+        is at-most-once and in-memory, so a listener that is down misses writes
+        with nothing to recover from. The ledger flips that to **at-least-once**
+        — an event is committed with the legacy write or not at all, and the
+        drain re-reads whatever is unprocessed — at the cost every synchronous
+        audit trigger pays: the legacy application's write now depends on the
+        ledger table accepting its row.
+
+        Off by default for the same reason `notify?` is, and harder to take back:
+        once the trigger exists the legacy application writes through it, so
+        removing it is a migration against the old system, not a flag flip.
+        """
+      ],
       backfill_interlock?: [
         type: :boolean,
         default: false,
