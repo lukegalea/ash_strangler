@@ -767,6 +767,7 @@ systems** — which is the most valuable thing here.
 | **`mix ash_strangler.gen.twin`** | Reads a legacy relation out of the database and writes it as a read-only Ash resource — columns, types, unique indexes, foreign keys as relationships, and `CHECK ... IN (...)` constraints as declared value sets. The legacy schema gets *read*, not retyped. |
 | **`mix ash_strangler.check`** | Runs your new model's assertions against the *legacy data*. NULLs where you declared `allow_nil? false`; duplicates under your new identity — grouped by the mapping's own expression, so a `:ci_string` attribute is checked case-insensitively even where the legacy index is not; values that will not cast; and every obligation the compiler could not decide, re-emitted as SQL and run against the real rows. It also diffs each twin against `information_schema` and each twin identity against `pg_index`, because a twin is a snapshot and snapshots go stale. Exits non-zero on failure so it can gate CI; `--no-data` skips the phase that needs a database. |
 | **`mix ash_strangler.gen.diagram`** | Draws the mapping from the declaration — per resource, or `--type overview` for the whole application. `--format md` for a README, `svg`/`png`/`pdf` for everywhere else. A generated picture cannot drift from the mapping the way one in a wiki does. |
+| **`mix ash_strangler.gen.ingester`** | Generates the ledger drain into your `lib/` — an ingestion module performing ordinary Ash actions with actor and source-envelope metadata, and an idempotent Oban worker draining `legacy_change_events` by cursor. The column-to-input mapping raises rather than guessing. |
 | **Backfill** | Batched and resumable, built not to take the database down: keyset pagination, one transaction per batch, and a flag column rather than a predicate that cannot terminate. Derived from the mapping, so it cannot backfill something other than what the view projects. |
 | **Reconciler** | Counts and per-batch checksums across both shapes. Both sides are rendered from the *same* declaration and normalised by the Ash type — because Ash's own types transform values on write, and without that the first run is a wall of false positives. |
 
@@ -797,6 +798,41 @@ right for cache invalidation and live views, and wrong for an audit trail.
 
 ---
 
+## The change ledger
+
+Notifications are at-most-once, and a listener that is down misses writes with
+nothing to recover from. When a legacy write has to be *ingested*, not just
+heard about, that is the wrong guarantee — and `ledger? true` swaps it:
+
+```elixir
+# on the source, beside notify? true (the verifier requires both)
+ledger? true
+```
+
+One trigger on the legacy table now does two things inside the legacy write's
+own transaction: it inserts an event row into a shared `legacy_change_events`
+table — committing **with** the legacy write or not at all — and then sends a
+tiny `wake:<event id>` notify. The guarantee flips to **at-least-once**: a drain
+that was down for a week has not missed anything, it has deferred everything to
+rows it can still read, and a periodic sweep is the recovery net for wakes that
+were missed.
+
+`mix ash_strangler.gen.ingester MyApp.Accounts.User` generates the drain into
+your app: an ingestion module that performs ordinary Ash actions with `actor:`
+and the source envelope in `metadata:`, and an idempotent Oban worker that
+empties the ledger by cursor (`FOR UPDATE SKIP LOCKED`, `processed_at` marked on
+success).
+
+This is a real trade, stated plainly: the legacy application's write now
+includes an insert into your table, so its write path depends on the ledger's
+health. That is what "lossless" costs. The table is deliberately plain
+infrastructure — no Ash resource ships over it, because the drain policy
+belongs to the host.
+
+→ [The change ledger in full](documentation/topics/the-change-ledger.md)
+
+---
+
 ## Installation
 
 ```elixir
@@ -823,6 +859,8 @@ Requires PostgreSQL 14+ and `ash_postgres`.
 - [What it refuses to generate](documentation/topics/what-it-refuses.md) — every check and the failure it prevents
 - [Backfill and reconciliation](documentation/topics/backfill-and-reconciliation.md)
 - [Notifications](documentation/topics/notifications.md)
+- [The change ledger](documentation/topics/the-change-ledger.md) — durable capture of every
+  legacy write, the at-least-once drain, and why the table is infrastructure not a resource
 - [The transform layer](documentation/topics/the-transform-layer.md) — why a SQL string was the
   wrong centre for this DSL, the combinator grammar and the proof obligations that replaced it,
   and the PostgreSQL measurements behind mechanism tiering

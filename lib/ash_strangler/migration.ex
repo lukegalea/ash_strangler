@@ -55,8 +55,14 @@ defmodule AshStrangler.Migration do
           # inside it. `:read_from_new` is exempt: the reverse view takes the
           # legacy relation's own name, in a schema the legacy application
           # already owns.
+          #
+          # The ledger comes before the notify statements, and at most one of
+          # the two is non-empty: a `ledger?` source's trigger writes the
+          # durable event and then notifies `wake:<id>` itself, so
+          # `Sql.Notify` stands down for it. See `AshStrangler.Sql.Ledger` --
+          # "One trigger, not two".
           Enum.reject([Sql.View.schema_statement(resource), view, key_index], &is_nil/1) ++
-            triggers ++ Sql.Notify.build(resource)
+            triggers ++ Sql.Ledger.build(resource) ++ Sql.Notify.build(resource)
       end
     else
       []

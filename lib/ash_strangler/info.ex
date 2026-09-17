@@ -201,6 +201,10 @@ defmodule AshStrangler.Info do
   @spec notify?(Spark.Dsl.t() | Ash.Resource.t()) :: boolean()
   def notify?(resource), do: match?(%{notify?: true}, source(resource))
 
+  @doc "True when the resource opted into the durable change ledger."
+  @spec ledger?(Spark.Dsl.t() | Ash.Resource.t()) :: boolean()
+  def ledger?(resource), do: match?(%{ledger?: true}, source(resource))
+
   @doc """
   Every relationship path any mapping reads through, and the joins each needs.
 

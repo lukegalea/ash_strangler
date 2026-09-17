@@ -65,6 +65,28 @@ defmodule AshStrangler.Listener do
   outside a transaction silently does nothing, so suppression would force a
   transaction on every write to work at all. A duplicate is harmless to a
   consumer that re-reads; a missing write is not.
+
+  ## The wake payload, when a resource carries a ledger
+
+  A source with `ledger?: true` replaces this listener's JSON envelope with
+  `wake:<event id>` — the ledger's trigger writes the durable event and then
+  notifies from the same function. See `AshStrangler.Sql.Ledger`. On a wake
+  payload there is no resource named and no row to re-read, so the listener
+  does the one thing a wake is for: it nudges the drain.
+
+  The drain is configured, not injected — this module must stay dependency-free
+  of any job library:
+
+      config :ash_strangler, ledger_drain: {MyApp.Ledger.UserDrainWorker, :nudge}
+
+  `{module, fun}` is applied with the ledger event id as its single argument and
+  is called synchronously, in this process: the contract is that it *enqueues*
+  — cheaply — and returns. The actual drain happens in the worker. When the
+  config is unset, a wake is a no-op: the periodic sweep drains it eventually,
+  which is the recovery net the ledger design rests on. A drain that raises is
+  logged and dropped rather than crashing the listener — a broken drain config
+  is a reason to look at the configuration, not to stop delivering every
+  subsequent notification.
   """
 
   use GenServer
@@ -119,6 +141,9 @@ defmodule AshStrangler.Listener do
   @impl true
   def handle_info({:notification, _pid, _ref, _channel, payload}, state) do
     case decode(payload, state.allowed) do
+      {:ok, %{wake: ledger_id}} ->
+        nudge_drain(ledger_id)
+
       {:ok, decoded} ->
         notify(decoded, state.read_opts)
 
@@ -133,6 +158,35 @@ defmodule AshStrangler.Listener do
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  @doc """
+  Nudges the configured drain for one ledger event id.
+
+  Reads `Application.get_env(:ash_strangler, :ledger_drain)` as `{module,
+  fun}` and applies it with the id. Unset, it is a no-op — the sweep drains
+  eventually. Raise, it is logged and dropped: see the moduledoc.
+  """
+  @spec nudge_drain(pos_integer()) :: :ok
+  def nudge_drain(ledger_id) do
+    case Application.get_env(:ash_strangler, :ledger_drain) do
+      {module, fun} when is_atom(module) and is_atom(fun) ->
+        apply(module, fun, [ledger_id])
+        :ok
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      # Same philosophy as the malformed-payload branch in handle_info: a
+      # misconfigured drain must not take the notification bridge down with
+      # it. The sweep still drains, so the cost is promptness, not delivery.
+      Logger.warning(
+        "AshStrangler.Listener drain nudge failed: #{Exception.format(:error, error)}"
+      )
+
+      :ok
+  end
 
   @doc """
   Connection options for a dedicated `LISTEN` connection, from a repo's config.
@@ -165,20 +219,48 @@ defmodule AshStrangler.Listener do
 
   Separated from the GenServer so it can be tested directly, and so a
   consumer already running `ecto_watch` can feed it whatever that delivers.
+
+  Two payload shapes arrive, and the channel cannot tell them apart:
+
+    * the JSON envelope `AshStrangler.Sql.Notify` builds — decoded to
+      `%{resource:, legacy_id:, op:}`;
+    * `wake:<event id>`, sent by `AshStrangler.Sql.Ledger`'s trigger instead of
+      the envelope for a `ledger?` source — decoded to `%{wake: id}`.
   """
   @spec decode(String.t(), MapSet.t() | nil) ::
-          {:ok, %{resource: module(), legacy_id: term(), op: atom()}} | {:error, term()}
+          {:ok, %{resource: module(), legacy_id: term(), op: atom()}}
+          | {:ok, %{wake: pos_integer()}}
+          | {:error, term()}
   def decode(payload, allowed \\ nil) do
-    with {:ok, %{"resource" => name, "legacy_id" => legacy_id, "op" => op}} <-
-           JSON.decode(payload),
-         {:ok, resource} <- resolve(name, allowed),
-         {:ok, op} <- operation(op) do
-      {:ok, %{resource: resource, legacy_id: legacy_id, op: op}}
-    else
-      {:ok, other} -> {:error, {:unexpected_payload, other}}
-      {:error, reason} -> {:error, reason}
+    case wake_id(payload) do
+      {:ok, ledger_id} ->
+        {:ok, %{wake: ledger_id}}
+
+      :error ->
+        with {:ok, %{"resource" => name, "legacy_id" => legacy_id, "op" => op}} <-
+               JSON.decode(payload),
+             {:ok, resource} <- resolve(name, allowed),
+             {:ok, op} <- operation(op) do
+          {:ok, %{resource: resource, legacy_id: legacy_id, op: op}}
+        else
+          {:ok, other} -> {:error, {:unexpected_payload, other}}
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
+
+  # `wake:<id>` is checked before JSON decoding, because it is not JSON. A
+  # malformed wake — `wake:` with no number behind it — falls through to the
+  # JSON path and comes back as a decode error, which the GenServer logs and
+  # drops like any other payload it cannot use.
+  defp wake_id("wake:" <> digits) do
+    case Integer.parse(digits) do
+      {id, ""} when id > 0 -> {:ok, id}
+      _ -> :error
+    end
+  end
+
+  defp wake_id(_payload), do: :error
 
   @doc """
   Re-reads the affected row and dispatches an `Ash.Notifier.Notification`.

@@ -48,10 +48,16 @@ defmodule AshStrangler.Sql.Notify do
   Returns `[]` unless the source opted in with `notify? true` — notifications
   cost the legacy application a `pg_notify` on every write, so they are not
   imposed by default.
+
+  Also returns `[]` when the source declared `ledger? true`: the ledger's
+  trigger already writes the event row and then notifies `wake:<event id>` on
+  this channel, and a second trigger would double every legacy write's
+  `pg_notify` while announcing the same fact twice. See
+  `AshStrangler.Sql.Ledger` — "One trigger, not two".
   """
   def build(resource_or_dsl) do
     case AshStrangler.Info.source(resource_or_dsl) do
-      %Source{notify?: true, keys: [%Key{} = key]} ->
+      %Source{notify?: true, ledger?: false, keys: [%Key{} = key]} ->
         do_build(resource_or_dsl, key)
 
       _ ->
