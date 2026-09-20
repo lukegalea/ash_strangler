@@ -120,6 +120,8 @@ defmodule AshStrangler.Listener do
 
   @impl true
   def init(opts) do
+    # Observable in :observer and process listings (OTP 26+ process labels).
+    :proc_lib.set_label(:strangler_listener)
     repo = Keyword.fetch!(opts, :repo)
     channel = Keyword.get(opts, :channel, AshStrangler.Info.default_notify_channel())
 
