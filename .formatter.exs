@@ -24,6 +24,7 @@ spark_locals_without_parens = [
   hit_policy: 1,
   key: 1,
   key: 2,
+  ledger?: 1,
   map: 1,
   map: 2,
   multiply: 1,
