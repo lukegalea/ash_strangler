@@ -411,3 +411,44 @@ replacement — and where the answer is a counterexample rather than a verdict, 
 prints the counterexample. See
 [what it refuses to generate](documentation/topics/what-it-refuses.md) for every
 check and the failure it prevents.
+
+---
+
+## The iron laws and the judge
+
+Agent work here is also governed by the **26 Iron Laws** — adapted from the
+phxagents project (phxagents.dev/iron-laws, MIT), codified in the
+`ash_agent_tools` package with a deterministic judge (`mix ash_agent.laws`).
+This package adds **no dependency** for that: run the judge from any checkout
+that has it, or judge a snippet in-VM with `AshAgentTools.judge_laws/1`.
+
+    mix ash_agent.laws                            # the law registry as JSON
+    mix ash_agent.laws FILE [FILE...]             # judge files
+    mix ash_agent.laws --code 'SNIPPET'           # judge a snippet
+    git diff main | mix ash_agent.laws - --diff   # judge only added lines
+
+The laws with the most teeth *for this codebase*:
+
+- **#5 — pin external values with `^`.** Everything this package generates
+  (view DDL, trigger bodies, backfill plan, reconciler comparison)
+  interpolates schema content into SQL. In an Ash or Ecto query, pin the
+  value; in generated DDL, quote identifiers and parameterize data — never
+  string-build a value the legacy table holds.
+- **#10 — no `String.to_atom` on data at runtime.** Column, index and
+  constraint names come out of `pg_attribute`, `pg_index` and
+  `pg_constraint`, which is database input by any definition that matters.
+  The twin generator's `to_atom/1` calls run once, at codegen, over a bounded
+  catalog read; the runtime paths use `String.to_existing_atom/1` and a fixed
+  allow-list (`AshStrangler.Listener`). A new runtime conversion of a
+  catalog-derived name is a bug, not a shortcut.
+- **#20 — wrap the third-party surface once.** The Postgres features this
+  package leans on — `LISTEN`/`NOTIFY`, the 7999-byte `pg_notify` ceiling,
+  catalog reads — each have one home (`AshStrangler.Listener`,
+  `AshStrangler.Sql.Notify`, the twin generator). Keep it that way; a second
+  call site is where the pgbouncer caveat gets forgotten.
+- **#23 — mix tasks start only what they need.** `ash_strangler.check` runs
+  through `Ecto.Migrator.with_repo/2` rather than `app.start` on purpose.
+  The `gen.*` tasks read catalogs and print artifacts; none should boot a
+  repo, a listener, or a job queue on the way.
+- **#22 — verify before claiming done.** Compile, run the suite, and run
+  `mix ash_strangler.check` against a real database. Show the output.
