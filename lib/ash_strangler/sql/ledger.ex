@@ -61,6 +61,28 @@ defmodule AshStrangler.Sql.Ledger do
   querying it as domain data when its only job is to be drained. A host that
   does want to query it can wrap it — the schema is plain and stable.
 
+  ## Which schema: the migrator's, decided when the migration runs
+
+  The table, its index and the trigger function carry **no schema
+  qualifier**. They land in the migrating session's `current_schema()` --
+  the first existing schema on its `search_path` -- which is where a host
+  that owns a non-`public` schema already points its migrations (the same
+  schema Ecto's `migration_default_prefix` names). A host on the default
+  layout gets `public`, exactly as before.
+
+  A literal schema here would be decided at *generation* time and written into
+  the migration, which is the portability bug in miniature: correct on the
+  machine that generated it and wrong in every other layout. Resolving at
+  migration time is the same rule as `prefix: prefix()` in an Ecto migration.
+
+  The function is created with `SET search_path FROM CURRENT`, which pins the
+  migrator's `search_path` onto the function. The trigger fires inside the
+  *legacy* application's transaction, whose `search_path` is its own and knows
+  nothing of this schema; with the pin, the unqualified `INSERT` resolves to
+  the ledger the migration created, whoever's session writes the legacy row.
+  The drain and the check task read the table unqualified through the host's
+  repo, whose `search_path` leads with the same owned schema.
+
   One consequence of that derivation deserves stating: the function and
   trigger names come from the *relation*, so two resources sharing a twin must
   also share a `notify_channel`. With two channels, both migrations are
@@ -101,7 +123,7 @@ defmodule AshStrangler.Sql.Ledger do
 
   alias AshStrangler.{Info, Key, Source}
 
-  @events_table ~s("public"."legacy_change_events")
+  @events_table ~s("legacy_change_events")
 
   @doc """
   The qualified name of the ledger table every relation's events land in.
@@ -110,6 +132,8 @@ defmodule AshStrangler.Sql.Ledger do
   counts its backlog and the generated drain worker that empties it — a table
   name spelled twice is a migration that creates one and a drain that empties
   nothing.
+
+  Unqualified on purpose: see "Which schema" in the moduledoc.
   """
   @spec events_table() :: String.t()
   def events_table, do: @events_table
@@ -138,7 +162,7 @@ defmodule AshStrangler.Sql.Ledger do
     channel = Info.notify_channel(resource_or_dsl)
     key_column = Atom.to_string(key.from)
 
-    function = ~s("public"."strangler_ledger_#{schema}_#{table}")
+    function = ~s("strangler_ledger_#{schema}_#{table}")
     trigger = ~s("strangler_ledger_#{schema}_#{table}")
 
     [
@@ -150,11 +174,11 @@ defmodule AshStrangler.Sql.Ledger do
       %{
         name: :strangler_ledger_events_index,
         up: index_up(),
-        down: "DROP INDEX IF EXISTS \"public\".\"legacy_change_events_unprocessed_idx\";"
+        down: "DROP INDEX IF EXISTS \"legacy_change_events_unprocessed_idx\";"
       },
       %{
         name: :"strangler_ledger_#{schema}_#{table}_function",
-        up: function_up(schema, table, channel, key_column),
+        up: function_up(function, channel, key_column),
         # Functions drop CASCADE so a trigger that outlived its function by a
         # rollback cannot block the drop.
         down: "DROP FUNCTION IF EXISTS #{function}() CASCADE;"
@@ -211,9 +235,11 @@ defmodule AshStrangler.Sql.Ledger do
     """
   end
 
-  defp function_up(schema, table, channel, key_column) do
+  defp function_up(function, channel, key_column) do
     """
-    CREATE OR REPLACE FUNCTION "public"."strangler_ledger_#{schema}_#{table}"() RETURNS trigger AS $strangler$
+    CREATE OR REPLACE FUNCTION #{function}() RETURNS trigger
+    SET search_path FROM CURRENT
+    AS $strangler$
     DECLARE
       event_id bigint;
       affected record;

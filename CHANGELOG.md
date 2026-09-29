@@ -49,6 +49,18 @@ summarised from the commit history.
   `as:`. A resource written against 0.1 does not compile, and the error names its
   replacement.
 
+### Bug Fixes:
+
+- **The ledger follows the host's owned schema instead of `public`.** The
+  `legacy_change_events` table, its index and the ledger trigger function were
+  written as `"public".…` literals, so a host migrating into its own schema
+  still got a ledger in `public`. They are now unqualified and land in the
+  migrating session's `current_schema()`, and the function is created with
+  `SET search_path FROM CURRENT` so the trigger keeps inserting there from the
+  legacy application's session. A host on the default layout still gets
+  `public`. An existing deployment keeps its table where it is: no migration
+  moves it, and the unqualified reads find it through `search_path`.
+
 ### Features:
 
 - **The legacy relation is a resource.** `mix ash_strangler.gen.twin` introspects

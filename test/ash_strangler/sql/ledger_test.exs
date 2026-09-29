@@ -182,7 +182,7 @@ defmodule AshStrangler.Sql.LedgerTest do
   alias AshStrangler.Sql.{Ledger, Notify}
   alias AshStrangler.Sql.LedgerTest.{AlsoLedgeredUser, LedgeredUser, NotifyOnlyUser}
 
-  @table ~s("public"."legacy_change_events")
+  @table ~s("legacy_change_events")
 
   describe "build/1" do
     test "emits nothing for a resource that did not opt in" do
@@ -265,14 +265,16 @@ defmodule AshStrangler.Sql.LedgerTest do
              """
 
       assert index.down ==
-               "DROP INDEX IF EXISTS \"public\".\"legacy_change_events_unprocessed_idx\";"
+               "DROP INDEX IF EXISTS \"legacy_change_events_unprocessed_idx\";"
     end
 
     test "the function writes the event and wakes the drain, transactionally", %{
       statements: [_table, _index, function | _]
     } do
       assert function.up == """
-             CREATE OR REPLACE FUNCTION "public"."strangler_ledger_legacy_users"() RETURNS trigger AS $strangler$
+             CREATE OR REPLACE FUNCTION "strangler_ledger_legacy_users"() RETURNS trigger
+             SET search_path FROM CURRENT
+             AS $strangler$
              DECLARE
                event_id bigint;
                affected record;
@@ -325,14 +327,14 @@ defmodule AshStrangler.Sql.LedgerTest do
              """
 
       assert function.down ==
-               "DROP FUNCTION IF EXISTS \"public\".\"strangler_ledger_legacy_users\"() CASCADE;"
+               "DROP FUNCTION IF EXISTS \"strangler_ledger_legacy_users\"() CASCADE;"
     end
 
     test "the trigger attaches to the relation the twin names", %{trigger: trigger} do
       assert trigger.up == """
              CREATE OR REPLACE TRIGGER "strangler_ledger_legacy_users"
                AFTER INSERT OR UPDATE OR DELETE ON legacy.users
-               FOR EACH ROW EXECUTE FUNCTION "public"."strangler_ledger_legacy_users"();
+               FOR EACH ROW EXECUTE FUNCTION "strangler_ledger_legacy_users"();
              """
 
       # The legacy table is not ours to assume still exists.
