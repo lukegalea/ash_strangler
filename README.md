@@ -894,6 +894,8 @@ DSL will still change — pin an exact version. See [CHANGELOG.md](CHANGELOG.md)
 Issues and pull requests welcome. The suite runs against a real PostgreSQL: `mix
 test` with a server on `localhost:5432`, or set `DB_HOST` and `PGPORT`.
 
+Agents: read [AGENTS.md](AGENTS.md) before you change this repository. It links the agent constitution (`AGENT_PRINCIPLES.md`).
+
 ## License
 
 MIT.
