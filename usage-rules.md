@@ -290,6 +290,16 @@ incomplete backfill produces missing rows, not an error.
     needs `ALTER TABLE` against the legacy table. `AshStrangler.Mechanism.report/1`
     prints both columns, so the gap is visible rather than assumed.
 
+    What an `INSTEAD OF UPDATE` trigger writes back is the `source` option
+    `on_update`, and it is a choice because PostgreSQL makes the difference
+    undetectable: `NEW` arrives fully populated, so "not in the `SET` clause"
+    and "set to its current value" look the same. `:full_row` (the default)
+    assigns every writable column every time, which bumps a legacy `updated_at`
+    and fires legacy column triggers nobody asked for. `:changed_columns`
+    assigns only columns whose value differs, and so misses the one write that
+    sets a column back to the value it already held. Pick it per resource
+    knowing which legacy triggers care.
+
 18. **`oauth2` and `oidc` cannot be strangled with triggers.** Their
     `ash_authentication` transformer requires `upsert? true`; it is not
     configurable. The `password` strategy is fine.
@@ -375,6 +385,16 @@ incomplete backfill produces missing rows, not an error.
     aborts the *legacy application's* transaction. Never use them to count writes —
     PostgreSQL collapses duplicates within a transaction. `LISTEN` does not work
     under pgbouncer transaction pooling.
+
+    `notify_channel` names the `pg_notify` channel (default `"ash_strangler"`,
+    one channel for every resource, the resource named in the payload). It is a
+    compile-time literal on purpose; never derive it from runtime input. A
+    non-default channel must also be passed to `AshStrangler.Listener` as
+    `channel:`, or the listener hears nothing. **One relation, one channel:**
+    two resources sharing a twin must share a `notify_channel`. With `ledger?`
+    on, the ledger trigger and function names come from the relation, so with
+    two channels both migrations are emitted, the names collide, and the later
+    migration silently wins. No verifier catches this.
 
 29. **Give `AshStrangler.Listener` read options if the resource has policies.**
     The listener re-reads the affected row through `Ash.get/3`, and it is not
