@@ -206,16 +206,17 @@ incomplete backfill produces missing rows, not an error.
    strangler-backed resource is therefore a schema change: regenerate.
 
 10. **Do not put a `zone:` on an already-aware column**, and **do state `zone:`
-    whenever a naive legacy `timestamp` feeds an aware attribute.** The first is
-    refused: `AT TIME ZONE` on a `timestamptz` converts it *back* to naive, which
-    is the opposite of the intent. The second is not yet refused and needs
-    discipline — a bare `map :archived_at, from: :deleted_at` between a
-    `:naive_datetime` twin column and a `:utc_datetime_usec` attribute derives
-    `(deleted_at)::timestamptz`, which reads the value as wall-clock time in the
-    **session's** `TimeZone`. Measured at 10.5 hours of drift between two
-    connections reading the same row, with no error anywhere. Which zone a naive
-    column is recorded in is a fact about the *old application*; there is nothing
-    in the database to read it from, so state it.
+    whenever a naive legacy `timestamp` feeds an aware attribute.** Both are
+    refused. `AT TIME ZONE` on a `timestamptz` converts it *back* to naive, which
+    is the opposite of the intent. A bare `map :archived_at, from: :deleted_at`
+    between a `:naive_datetime` twin column and a `:utc_datetime_usec` attribute
+    would derive `(deleted_at)::timestamptz`, which reads the value as wall-clock
+    time in the **session's** `TimeZone`, so `VerifyTimestampZones` refuses it
+    (and the mirror case, an aware column feeding a naive attribute). Measured
+    at 10.5 hours of drift between two connections reading the same row, with
+    no error anywhere. Which zone a naive column is recorded in is a fact about
+    the *old application*; there is nothing in the database to read it from, so
+    state it.
 
 11. **Never restate what the twin already says.** `cast:` is gone — the cast is
     derived by comparing the twin's column type to the attribute's type. An
@@ -289,6 +290,16 @@ incomplete backfill produces missing rows, not an error.
     needs `ALTER TABLE` against the legacy table. `AshStrangler.Mechanism.report/1`
     prints both columns, so the gap is visible rather than assumed.
 
+    What an `INSTEAD OF UPDATE` trigger writes back is the `source` option
+    `on_update`, and it is a choice because PostgreSQL makes the difference
+    undetectable: `NEW` arrives fully populated, so "not in the `SET` clause"
+    and "set to its current value" look the same. `:full_row` (the default)
+    assigns every writable column every time, which bumps a legacy `updated_at`
+    and fires legacy column triggers nobody asked for. `:changed_columns`
+    assigns only columns whose value differs, and so misses the one write that
+    sets a column back to the value it already held. Pick it per resource
+    knowing which legacy triggers care.
+
 18. **`oauth2` and `oidc` cannot be strangled with triggers.** Their
     `ash_authentication` transformer requires `upsert? true`; it is not
     configurable. The `password` strategy is fine.
@@ -331,6 +342,12 @@ incomplete backfill produces missing rows, not an error.
     not an error: every pass does real work and reports real progress, and the job
     simply never finishes.
 
+    With `backfill_interlock? true` on the `source`, the `INSTEAD OF` triggers
+    clear `AshStrangler.Backfill.flag_column/0` on every row they write, so the
+    backfill does not re-derive a row a trigger already handled. It assigns to
+    the flag column, so add the column before turning it on and turn it off
+    before dropping the column.
+
 24. **There is no `{:sql, template}` normalizer.** The reconciler derives its
     normalizers from the attribute's own Ash type (`:ci_string`, `:downcase`,
     `:trim`), and a time zone is part of the forward expression rather than a
@@ -356,7 +373,9 @@ incomplete backfill produces missing rows, not an error.
 
 27. **Never hand-draw a diagram of a mapping.** `mix ash_strangler.gen.diagram`
     renders it from the declaration — per resource, or `--type overview` for the
-    whole application, `--format json` for OpenLineage. A drawing made by hand is a
+    whole application. For OpenLineage, call
+    `AshStrangler.Lineage.OpenLineage.datasets/2` or `encode!/2`; the task's
+    formats are `plain`, `md`, `svg`, `pdf` and `png`. A drawing made by hand is a
     second description of the mapping with nothing keeping it honest, which is the
     exact failure the `strangler` block exists to prevent. If a diagram in a README
     or a document is wrong, regenerate it; do not edit the picture.
@@ -366,6 +385,16 @@ incomplete backfill produces missing rows, not an error.
     aborts the *legacy application's* transaction. Never use them to count writes —
     PostgreSQL collapses duplicates within a transaction. `LISTEN` does not work
     under pgbouncer transaction pooling.
+
+    `notify_channel` names the `pg_notify` channel (default `"ash_strangler"`,
+    one channel for every resource, the resource named in the payload). It is a
+    compile-time literal on purpose; never derive it from runtime input. A
+    non-default channel must also be passed to `AshStrangler.Listener` as
+    `channel:`, or the listener hears nothing. **One relation, one channel:**
+    two resources sharing a twin must share a `notify_channel`. With `ledger?`
+    on, the ledger trigger and function names come from the relation, so with
+    two channels both migrations are emitted, the names collide, and the later
+    migration silently wins. No verifier catches this.
 
 29. **Give `AshStrangler.Listener` read options if the resource has policies.**
     The listener re-reads the affected row through `Ash.get/3`, and it is not
@@ -393,9 +422,13 @@ incomplete backfill produces missing rows, not an error.
     ash_strangler.gen.ingester`, wire `config :ash_strangler, ledger_drain:
     {Worker, :nudge}`, and keep the cron sweep — a missed wake costs delay, not
     delivery, *only* while the sweep exists. `mix ash_strangler.check` reports
-    the backlog per relation; watch it. And before turning this on, say the
-    trade out loud: the legacy application's writes now fail if the ledger
-    table cannot accept an insert.
+    the backlog per relation; watch it. The table, its index and the trigger
+    function are created unqualified, in the migrating session's
+    `current_schema()`, and the function pins that `search_path`; the drain and
+    `check` find the table through the host repo's `search_path`, so run the
+    migration with the schema you want first on it. And before turning this
+    on, say the trade out loud: the legacy application's writes now fail if the
+    ledger table cannot accept an insert.
 
 ---
 
@@ -448,7 +481,8 @@ The laws with the most teeth *for this codebase*:
   call site is where the pgbouncer caveat gets forgotten.
 - **#23 — mix tasks start only what they need.** `ash_strangler.check` runs
   through `Ecto.Migrator.with_repo/2` rather than `app.start` on purpose.
-  The `gen.*` tasks read catalogs and print artifacts; none should boot a
-  repo, a listener, or a job queue on the way.
+  `gen.twin` reads catalogs, and so opens its repo the same way; the other
+  `gen.*` tasks print artifacts from compiled code and open none. None should
+  boot a listener or a job queue on the way.
 - **#22 — verify before claiming done.** Compile, run the suite, and run
   `mix ash_strangler.check` against a real database. Show the output.

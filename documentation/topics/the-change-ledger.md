@@ -99,7 +99,11 @@ end
 function, and the trigger. The table is **shared infrastructure** — one table
 for every relation, with `source_schema`/`source_table` naming where an event
 came from, and the function and trigger names derived from `schema.table` so
-two resources mapping the same twin share one ledger by construction.
+two resources mapping the same twin share one ledger by construction. The
+table, index and function carry no schema qualifier: they land in the
+migrating session's `current_schema()`, and the function is created with
+`SET search_path FROM CURRENT` so the trigger's insert reaches that ledger from
+the legacy application's session too.
 
 `notify?` is not optional beside `ledger?`, and the verifier refuses the
 combination. The ledger is the record; the wake is what gets the record

@@ -459,7 +459,7 @@ and the write path cannot disagree about a mapping:
 | `-->` | a column feeding a transform | — |
 
 The vocabulary is OpenLineage's `columnLineage` facet rather than one invented
-here, which is why `mix ash_strangler.gen.diagram --format json` produces something
+here, which is why `AshStrangler.Lineage.OpenLineage.encode!/2` produces something
 existing lineage tooling can read. For a tool whose job is proving to somebody that
 nothing was lost, that is the point rather than a nicety.
 
