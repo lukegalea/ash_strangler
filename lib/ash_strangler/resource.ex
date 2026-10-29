@@ -69,6 +69,7 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifySingleSource,
       AshStrangler.Verifiers.VerifyCompleteMapping,
       AshStrangler.Verifiers.VerifyExtension,
+      AshStrangler.Verifiers.VerifyKeyAllocation,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyNotRedundant,
       AshStrangler.Verifiers.VerifyTimestampZones,

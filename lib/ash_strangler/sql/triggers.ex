@@ -112,6 +112,7 @@ defmodule AshStrangler.Sql.Triggers do
       view: view,
       relation: Info.relation(resource_or_dsl),
       legacy_key: key.from,
+      key: key,
       on_update: Info.on_update(resource_or_dsl),
       backfill_interlock?: Info.backfill_interlock?(resource_or_dsl),
       lenses: lenses,
@@ -156,16 +157,36 @@ defmodule AshStrangler.Sql.Triggers do
   defp writable_targets(ctx, operation) do
     touch = touch_mode(operation)
 
-    ctx.lenses
-    |> Enum.flat_map(fn lens ->
-      Enum.map(Lens.writes(lens), fn {column, expression} ->
-        {column, Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
+    targets =
+      ctx.lenses
+      |> Enum.flat_map(fn lens ->
+        Enum.map(Lens.writes(lens), fn {column, expression} ->
+          {column, Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
+        end)
       end)
-    end)
-    |> Enum.uniq_by(fn {column, _sql} -> column end)
+      |> Enum.uniq_by(fn {column, _sql} -> column end)
+
+    targets
+    |> identity_key_target(ctx, operation)
     |> Enum.sort_by(fn {column, _sql} -> to_string(column) end)
     |> interlock(ctx)
   end
+
+  # An `:identity` key is the legacy key itself, so a host-created row mints
+  # the canonical id and the INSERT must pass `NEW.<pk>` into the legacy key
+  # column -- the sequence (or default) that allocates keys for a `:uuid_v5`
+  # mapping must not run here, or the legacy row would carry a key the host's
+  # id does not name, and the id the client asked for would be silently
+  # replaced by the view's projection of a row it did not create.
+  #
+  # UPDATE and DELETE need nothing: both key off `__legacy_id`, which the
+  # insert stored.
+  defp identity_key_target(targets, %{key: %{strategy: :identity} = key}, :insert) do
+    [{key.from, "NEW.#{key.attribute}"} | targets]
+    |> Enum.uniq_by(fn {column, _sql} -> column end)
+  end
+
+  defp identity_key_target(targets, _ctx, _operation), do: targets
 
   # pgroll's interlock: the writer declares the row done, so a backfill running
   # concurrently never re-derives a row this trigger already handled.
