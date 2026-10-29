@@ -281,6 +281,7 @@ defmodule AshStrangler.Sql.LedgerTest do
                old_row jsonb;
                new_row jsonb;
                changed jsonb;
+               actor_confidence text;
              BEGIN
                affected := COALESCE(NEW, OLD);
 
@@ -302,17 +303,36 @@ defmodule AshStrangler.Sql.LedgerTest do
                  );
                END IF;
 
+               -- Attribution: whatever the enclosing transaction declared through
+               -- AshStrangler.Context (custom GUCs, transaction-local). Absent context
+               -- stays absent -- current_setting's `true` yields NULL and the slot
+               -- stays empty, which is the honest value. Capture itself is never
+               -- suppressed: the context decorates the event, it does not gate it.
+               actor_confidence := CASE
+                 WHEN nullif(current_setting('ash_strangler.origin', true), '') IS NOT NULL
+                   OR nullif(current_setting('ash_strangler.correlation_id', true), '') IS NOT NULL
+                   OR nullif(current_setting('ash_strangler.causation_id', true), '') IS NOT NULL
+                   OR nullif(current_setting('ash_strangler.actor', true), '') IS NOT NULL
+                 THEN 'asserted' ELSE NULL END;
+
                -- Committed WITH the legacy write or not at all: that is the whole
                -- guarantee the ledger exists for, and it is why this is a synchronous
                -- insert rather than a queue.
                INSERT INTO #{@table}
                  (source_schema, source_table, operation, primary_key, old_row, new_row,
-                  changed_columns, transaction_id, transaction_timestamp)
+                  changed_columns, transaction_id, transaction_timestamp,
+                  source_system, source_correlation_id, source_request_id, source_user,
+                  actor_confidence)
                VALUES
                  (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
                   jsonb_build_object('id', affected.id),
                   old_row, new_row, changed,
-                  txid_current(), transaction_timestamp())
+                  txid_current(), transaction_timestamp(),
+                  nullif(current_setting('ash_strangler.origin', true), ''),
+                  nullif(current_setting('ash_strangler.correlation_id', true), ''),
+                  nullif(current_setting('ash_strangler.causation_id', true), ''),
+                  nullif(current_setting('ash_strangler.actor', true), ''),
+                  actor_confidence)
                RETURNING id INTO event_id;
 
                -- The wake, key-only. The event id is a bigint, so the payload is a
