@@ -94,6 +94,13 @@ defmodule AshStrangler.MixProject do
       # asserts they still match.
       {:ash_diagram, "~> 0.2", optional: true},
       {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
+      # Luke's fork, pinned to match Keystone's mix.lock (d71f6d0). Optional:
+      # only the AshEvents replay guard and the events-bridge fixture touch it.
+      {:ash_events,
+       github: "lukegalea/ash_events",
+       branch: "temporal-as-of-support-0.7",
+       only: [:dev, :test],
+       optional: true},
       # A SAT solver, so the suite can exercise a resource carrying real
       # policies. This library's central claim about the notification bridge is
       # that re-reading through Ash means "calculations are computed, field and
