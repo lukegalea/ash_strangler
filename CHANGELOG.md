@@ -83,6 +83,12 @@ conventions. Baseline tag `v0.1.0` remains the pre-expansion reference point.
   without changing `processed`/`verified`. Migration: review every `set:` that
   relied on omission meaning NULL and write `column: nil` explicitly.
 
+- **Security dependency floors.** Ash now requires at least `3.37.2` and
+  AshPostgres at least `2.15.2`, which contain upstream fixes for tenant-scope
+  bypasses in upserts and relationship loading. Migration: run
+  `mix deps.update ash ash_postgres`; projects pinned below these versions must
+  raise their constraints.
+
 ### Bug Fixes:
 
 - **The ledger follows the host's owned schema instead of `public`.** The
