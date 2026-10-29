@@ -72,6 +72,7 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifyKeyAllocation,
       AshStrangler.Verifiers.VerifyTenancy,
       AshStrangler.Verifiers.VerifyCollapseRepresentation,
+      AshStrangler.Verifiers.VerifyStateMachineBacked,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyNotRedundant,
       AshStrangler.Verifiers.VerifyTimestampZones,
