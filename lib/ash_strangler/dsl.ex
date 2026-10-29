@@ -239,12 +239,18 @@ defmodule AshStrangler.Dsl do
         touches, so the backward direction is total and canonical by construction.
         There is no "which of the four do I write" question left to get wrong.
 
-        Values are literals, `nil`, or `touch()` — the explicit
-        timestamp-preservation marker. `touch()` writes `now()` only on an actual
-        transition and preserves the stored value otherwise, which is what real
-        triggers do and is the one declared `PutPut` violation in the whole design.
-        Round-tripping cannot recover the original instant, so the alternative to
-        declaring the loss is pretending it does not happen.
+        Values are literals, `nil`, `expr(...)` — e.g. `expr(now())`, what an
+        `archive` transition stamps a legacy timestamp with — or `touch()` — the
+        explicit timestamp-preservation marker. `touch()` writes `now()` only on
+        an actual transition and preserves the stored value otherwise, which is
+        what real triggers do and is the one declared `PutPut` violation in the
+        whole design. Round-tripping cannot recover the original instant, so the
+        alternative to declaring the loss is pretending it does not happen.
+
+        An `expr(...)` value is a **backward-side derivation**, not an inverse:
+        it renders through the trigger frame like every write expression, and it
+        makes no invertibility claim — `linearity` and the round-trip obligations
+        are unchanged.
         """
       ]
     ]
