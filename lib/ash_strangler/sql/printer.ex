@@ -267,6 +267,29 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # An extension-state condition: the forward read of a `{:extension, _}`
+  # state. `ext.` is the alias `Sql.View.from_clause/1` binds for the
+  # resource's extension table — the same assumption the `:strangler_ext`
+  # node makes, owned by the same function.
+  defp print(%Call{name: :strangler_ext_state, args: [column, value]}, _ref) do
+    ~s(ext.") <> to_string(column) <> ~s(" = ) <> literal(value)
+  end
+
+  # The legacy-side arm of an extension state's backward CASE. An UPDATE of a
+  # row sitting in an extension state must HOLD its legacy columns: the bare
+  # column name on the right of `SET` is the stored value, exactly as a
+  # `touch()`'s preserve branch reads it. An INSERT has no prior row to hold,
+  # so the node renders the fallback assignment — the `:otherwise` state's
+  # value for that column — which is what a newly-created row in an extension
+  # state should store (the legacy flags of a fresh row, not a derivation
+  # from a row that does not exist).
+  defp print(%Call{name: :strangler_hold, args: [column, fallback]}, ctx) do
+    case ctx.touch do
+      :now -> print(fallback, ctx)
+      {:preserve, _frame} -> to_string(column)
+    end
+  end
+
   # A `decode`'s value table, as SQL's *simple* `CASE subject WHEN … THEN … END`.
   #
   # A fold over the table into nested `if`s renders correctly and is unreadable —

@@ -55,7 +55,12 @@ end
 
 defmodule AshStrangler.Collapse.State do
   @moduledoc "One clause of a `collapse`: a forward guard and a backward assignment."
-  defstruct [:value, :when, :set, :__spark_metadata__]
+
+  # `representation` is the normalised shape from
+  # `AshStrangler.Dsl.Combinators.representation/1`: `{:extension, column}`,
+  # `{:refuse, reason}` or `{:lossy, to, loss}` — tuples, not keyword lists,
+  # so every consumer matches one shape.
+  defstruct [:value, :when, :set, :representation, :__spark_metadata__, derived: false]
   @type t :: %__MODULE__{}
 end
 

@@ -84,6 +84,47 @@ defmodule AshStrangler.Dsl.Combinators do
   def constant_expression(value) when is_binary(value), do: {:ok, value}
   def constant_expression(value), do: expression(value)
 
+  # The declared answer for a state the legacy schema cannot represent. Three
+  # shapes, and the error text carries the grammar because this option is the
+  # one place a mapping author decides what a write to an unrepresentable
+  # state DOES.
+  @spec representation(term()) :: {:ok, term()} | {:error, String.t()}
+  def representation({:extension, column}) when is_atom(column), do: {:ok, {:extension, column}}
+
+  def representation({:refuse, opts}) when is_list(opts) do
+    case Keyword.fetch(opts, :reason) do
+      {:ok, reason} when is_binary(reason) -> {:ok, {:refuse, reason}}
+      {:ok, other} -> {:error, "expected `reason:` to be a string, got: #{inspect(other)}"}
+      :error -> {:error, "expected `{:refuse, reason: \"...\"}` -- the reason is the 3am message"}
+    end
+  end
+
+  def representation({:lossy, opts}) when is_list(opts) do
+    with {:ok, to} when is_atom(to) <- Keyword.fetch(opts, :to),
+         {:ok, loss} when is_binary(loss) <- Keyword.fetch(opts, :loss) do
+      {:ok, {:lossy, to, loss}}
+    else
+      :error ->
+        {:error, "expected `{:lossy, to: :state, loss: \"...\"}` -- both parts are required"}
+
+      {:ok, other} ->
+        {:error, "expected an atom state or a string loss, got: #{inspect(other)}"}
+    end
+  end
+
+  def representation(other) do
+    {:error,
+     """
+     expected one of:
+
+         {:extension, :column}      -- the value lives in the extension table
+         {:refuse, reason: "..."}   -- writes to it abort, with the reason named
+         {:lossy, to: :state, loss: "..."}  -- reads collapse to the `to:` state
+
+     got: #{inspect(other)}
+     """}
+  end
+
   defp expression?(%Ash.Query.Call{}), do: true
   defp expression?(%Ash.Query.Ref{}), do: true
   defp expression?(%Ash.Query.BooleanExpression{}), do: true

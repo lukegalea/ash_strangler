@@ -27,7 +27,7 @@ defmodule AshStrangler.Sql.Extension do
   migrating session owns, created where the compatibility layer itself lives.
   """
 
-  alias AshStrangler.Info
+  alias AshStrangler.{Info, Lens}
   alias AshStrangler.Sql.Printer
 
   @doc """
@@ -78,13 +78,28 @@ defmodule AshStrangler.Sql.Extension do
 
     pk_column = key_column!(key, attributes)
 
-    columns =
+    declared =
       source.extensions
       |> Enum.flat_map(& &1.attributes)
       |> Enum.map(fn attribute ->
         attr = Map.fetch!(attributes, attribute)
         ~s("#{attribute}" #{Printer.pg_type!(attr.type)})
       end)
+
+    # A `{:extension, :column}` state adds its column implicitly, typed by the
+    # collapse attribute's own Ash type — `lifecycle_state :atom` is `text`, the
+    # same typing the view's forward conditions read.
+    implicit =
+      source.mappings
+      |> Enum.filter(&is_struct(&1, AshStrangler.Collapse))
+      |> Enum.flat_map(&Lens.extension_state_columns/1)
+      |> Enum.uniq()
+      |> Enum.map(fn column ->
+        attr = Map.fetch!(attributes, collapse_attribute(source, column))
+        ~s("#{column}" #{Printer.pg_type!(attr.type)})
+      end)
+
+    columns = declared ++ implicit
 
     up = """
     CREATE TABLE IF NOT EXISTS #{relation(resource_or_dsl)} (
@@ -99,6 +114,15 @@ defmodule AshStrangler.Sql.Extension do
         down: "DROP TABLE IF EXISTS #{relation(resource_or_dsl)};"
       }
     ]
+  end
+
+  defp collapse_attribute(source, column) do
+    source.mappings
+    |> Enum.find(fn mapping ->
+      is_struct(mapping, AshStrangler.Collapse) and
+        column in Lens.extension_state_columns(mapping)
+    end)
+    |> Map.get(:attribute)
   end
 
   defp table_statement_name(resource_or_dsl) do
