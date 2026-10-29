@@ -571,8 +571,14 @@ defmodule AshStrangler.Lens do
   #     assignment, because the row being created has no legacy flags to hold).
   #     The extension column itself is written by
   #     `extension_state_write/1` in the trigger's extension section.
-  #   * the `when:` states with their `set:`.
-  #   * `lossy` states, whose arm writes the `to:` state's `set:` values.
+  #   * the `when:` states with their `set:` -- and, where a state's `set:`
+  #     omits a column the table touches, a HOLD for that column. The
+  #     handoff's lifecycle declares `state :archived, set: [archived: ...]`:
+  #     archiving stamps one column and must not drag the flags anywhere. A
+  #     hold preserves the stored value on UPDATE and applies the fallback on
+  #     INSERT (a fresh row has nothing to preserve).
+  #   * `lossy` states, whose arm writes the `to:` state's `set:` values --
+  #     holding where the `to:` state omits the column, by the same rule.
   #   * refuse and derived states get NO arm: the trigger RAISEs before any
   #     write when the attribute carries one of them (`Sql.Triggers`), so the
   #     CASE never sees those values.
@@ -590,25 +596,19 @@ defmodule AshStrangler.Lens do
     pairs =
       Enum.flat_map(entry.states, fn
         %{representation: {:extension, _column}} = state ->
-          [
-            {state.value,
-             call(:strangler_hold, [legacy_column_name(context, column), fallback_value])}
-          ]
+          [{state.value, hold(context, column, fallback_value)}]
 
         %{representation: {:lossy, to, _loss}} = state ->
           case Enum.find(entry.states, &(&1.value == to)) do
             %{set: set} when set != nil ->
-              [{state.value, collapse_value(entry, context, Keyword.get(set, column), column)}]
+              [{state.value, set_or_hold(entry, context, set, column, fallback_value)}]
 
             _state ->
               []
           end
 
         %{representation: nil, derived: false, when: guard} = state when guard != :otherwise ->
-          [
-            {state.value,
-             collapse_value(entry, context, Keyword.get(state.set || [], column), column)}
-          ]
+          [{state.value, set_or_hold(entry, context, state.set || [], column, fallback_value)}]
 
         _state ->
           []
@@ -617,6 +617,20 @@ defmodule AshStrangler.Lens do
     default = if fallback == [], do: :none, else: fallback_value
 
     call(:strangler_case, [attr_ref(entry.attribute), pairs, default])
+  end
+
+  # A state that does not write this column holds it: the stored value on
+  # UPDATE, the fallback's value on INSERT (rendered by the `:strangler_hold`
+  # printer node).
+  defp hold(context, column, fallback_value) do
+    call(:strangler_hold, [legacy_column_name(context, column), fallback_value])
+  end
+
+  defp set_or_hold(entry, context, set, column, fallback_value) do
+    case Keyword.fetch(set, column) do
+      {:ok, value} -> collapse_value(entry, context, value, column)
+      :error -> hold(context, column, fallback_value)
+    end
   end
 
   # `touch()` becomes a marker node the printer turns into the preserve-or-bump

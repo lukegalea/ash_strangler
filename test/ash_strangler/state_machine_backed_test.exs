@@ -172,7 +172,7 @@ defmodule AshStrangler.StateMachineBackedTest do
     assert Exception.message(error) =~ ":cancelled"
   end
 
-  test "refuses a transition targeting a refused state" do
+  test "allows a transition targeting a refused state -- the abort IS the answer" do
     probe =
       define(
         ~S"""
@@ -201,11 +201,11 @@ defmodule AshStrangler.StateMachineBackedTest do
         [:cancelled, :draft]
       )
 
-    assert {:error, error} = verifier().verify(probe)
-    message = Exception.message(error)
-
-    assert message =~ "transition :cancel [:draft] -> :cancelled"
-    assert message =~ "aborts the transaction by declaration"
+    # The command COMPILES: the refusal is delivered at runtime by the
+    # trigger's P0001 with the declared reason -- that is what a refused
+    # state means. (The Contract fixture's cancel test proves the runtime
+    # half against the real database.)
+    assert :ok = verifier().verify(probe)
   end
 
   test "refuses a transition targeting a derived state" do
@@ -268,7 +268,9 @@ defmodule AshStrangler.StateMachineBackedTest do
           state :draft, when: :otherwise, set: [deleted_at: nil]
         end
         """,
-        [:archived, :cancelled], default: :cancelled)
+        [:archived, :cancelled],
+        default: :cancelled
+      )
 
     assert {:error, error} = verifier().verify(probe)
     message = Exception.message(error)

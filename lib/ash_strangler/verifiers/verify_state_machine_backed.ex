@@ -13,11 +13,15 @@ defmodule AshStrangler.Verifiers.VerifyStateMachineBacked do
     * every machine state must have a collapse clause. A machine state with no
       clause is a state the view reads as NULL — the machine would believe a
       transition stuck, and nothing would report why.
-    * no transition may target a `derived:` or `{:refuse, _}` state. A derived
-      target could never stick (the state is a function of the data, not a
-      stored value — the trigger refuses the write); a refused target aborts
-      the transaction by declaration. The machine layer's guard and the
-      trigger's guard would disagree about which one is the reason.
+    * no transition may target a `derived:` state. A derived target could
+      never stick: the state is a function of the data, not a stored value,
+      so the machine's guard would say yes and the trigger would say no.
+      Transitions to `{:refuse, _}` states are deliberately NOT refused
+      here — the refusal IS the declared answer, delivered at runtime by the
+      trigger's P0001 with its reason quoted; a cancel command that compiles
+      and aborts transactionally is the operator-facing shape of "refused
+      while legacy is authoritative". (An initial refused state is still
+      refused: every create failing is never useful.)
     * `initial_states` must not include a refused state: every create would
       fail, in the trigger, after the machine had already said yes.
 
@@ -137,20 +141,7 @@ defmodule AshStrangler.Verifiers.VerifyStateMachineBacked do
     |> Enum.find_value(fn {transition, target} ->
       state = by_value[target]
 
-      refuses? =
-        match?(%{representation: {:refuse, _}}, state) or
-          match?(%{derived: true, representation: nil}, state)
-
-      if refuses? do
-        reason =
-          case state do
-            %{representation: {:refuse, _}} ->
-              "a refused target aborts the transaction by declaration"
-
-            _derived ->
-              "a derived target could never stick: the state is a function of the data, not a stored value"
-          end
-
+      if match?(%{derived: true, representation: nil}, state) do
         {:error,
          Spark.Error.DslError.exception(
            module: module,
@@ -158,10 +149,11 @@ defmodule AshStrangler.Verifiers.VerifyStateMachineBacked do
            message: """
            the transition #{inspect(transition.action)} \
            #{inspect(transition.from)} -> #{inspect(target)} targets a \
-           state no write can store: #{reason}.
+           derived state: a derived target could never stick, because the \
+           state is a function of the data, not a stored value. The \
+           machine's guard would say yes and the trigger would say no, and \
+           the two answers would disagree about which one is the reason.
 
-           The machine's guard would say yes and the trigger would say no,
-           and the two answers would disagree about which one is the reason.
            Retarget the transition, or change the state's declaration.
            """
          )}
