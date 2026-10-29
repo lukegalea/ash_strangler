@@ -51,6 +51,41 @@ defmodule AshStrangler.Test.LegacySchema do
   )
   """
 
+  # The shared-rows fixture schema: `clm_parties` carries the tenant column a
+  # contract derives from; `clm_contracts` is exactly the handoff §5 shape.
+  # The CHECK on `value` exists so a test can force a legacy-side constraint
+  # violation mid-command — the atomicity proof needs a failure that happens
+  # INSIDE the legacy write, after the transaction opened.
+  @clm_parties_table """
+  CREATE TABLE legacy.clm_parties (
+    id              uuid PRIMARY KEY,
+    name            text NOT NULL,
+    organization_id uuid NOT NULL
+  )
+  """
+
+  @clm_contracts_table """
+  CREATE TABLE legacy.clm_contracts (
+    id                       uuid PRIMARY KEY,
+    name                     text NOT NULL,
+    description              text,
+    effective_date           date,
+    expiry_date              date,
+    value                    numeric,
+    payment_term             text,
+    processed                boolean NOT NULL DEFAULT false,
+    verified                 boolean NOT NULL DEFAULT false,
+    archived                 timestamp,
+    created_at               timestamp NOT NULL DEFAULT now(),
+    service_provider_party_id uuid,
+    client_party_id          uuid,
+    renewal_start_date       date,
+    renewal_end_date         date,
+    metadata                 jsonb NOT NULL DEFAULT '{}',
+    CONSTRAINT clm_contracts_value_non_negative CHECK (value IS NULL OR value >= 0)
+  )
+  """
+
   @doc """
   Drops and recreates the fixture schemas, tables, and the generated view.
 
@@ -73,6 +108,8 @@ defmodule AshStrangler.Test.LegacySchema do
 
     execute!(@users_table)
     execute!("CREATE UNIQUE INDEX index_users_on_login ON legacy.users (login)")
+    execute!(@clm_parties_table)
+    execute!(@clm_contracts_table)
 
     install_resource!(LegacyUser)
     install_resource!(DualWriteUser)
@@ -89,6 +126,11 @@ defmodule AshStrangler.Test.LegacySchema do
     # and the extension `LEFT JOIN` in the view -- the same verbatim-install
     # guarantee, for storage this package owns beside the legacy rows.
     install_resource!(AshStrangler.Test.ExtendedUser)
+    # The shared-rows fixture: the entire mapping is a fragment (R1.1), the key
+    # is :identity (R1.3), the tenant derives through the client party (R1.4),
+    # and the extension table carries the columns the legacy schema has no
+    # room for (R1.2).
+    install_resource!(AshStrangler.Test.Contract)
 
     :ok
   end

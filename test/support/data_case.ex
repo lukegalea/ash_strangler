@@ -66,6 +66,68 @@ defmodule AshStrangler.DataCase do
   end
 
   @doc """
+  Inserts a party into `legacy.clm_parties` with raw SQL and returns its id.
+  """
+  def insert_legacy_party!(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    id = Map.get_lazy(attrs, :id, fn -> Ash.UUID.generate() end)
+    name = Map.get_lazy(attrs, :name, fn -> "party-#{System.unique_integer([:positive])}" end)
+
+    %Postgrex.Result{rows: [[raw_id]]} =
+      AshStrangler.TestRepo.query!(
+        """
+        INSERT INTO legacy.clm_parties (id, name, organization_id)
+        VALUES ($1, $2, $3)
+        RETURNING id
+        """,
+        [
+          Ecto.UUID.dump!(id),
+          name,
+          Ecto.UUID.dump!(Map.fetch!(attrs, :organization_id))
+        ]
+      )
+
+    {:ok, ^id} = Ecto.UUID.load(raw_id)
+    id
+  end
+
+  @doc """
+  Inserts a contract into `legacy.clm_contracts` with raw SQL and returns its
+  id. Raw SQL on purpose — the read-through test needs a row the legacy
+  application wrote, through a path this package never touches.
+  """
+  def insert_legacy_contract!(attrs \\ %{}) do
+    attrs = Map.new(attrs)
+
+    id = Map.get_lazy(attrs, :id, fn -> Ash.UUID.generate() end)
+
+    client_party_id = Map.fetch!(attrs, :client_party_id)
+    vendor_party_id = Map.get(attrs, :vendor_party_id)
+
+    %Postgrex.Result{rows: [[raw_id]]} =
+      AshStrangler.TestRepo.query!(
+        """
+        INSERT INTO legacy.clm_contracts
+          (id, name, description, value, payment_term, client_party_id, service_provider_party_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        """,
+        [
+          Ecto.UUID.dump!(id),
+          Map.get_lazy(attrs, :name, fn -> "contract-#{System.unique_integer([:positive])}" end),
+          Map.get(attrs, :description),
+          Map.get(attrs, :value),
+          Map.get(attrs, :payment_term),
+          Ecto.UUID.dump!(client_party_id),
+          if(vendor_party_id, do: Ecto.UUID.dump!(vendor_party_id), else: nil)
+        ]
+      )
+
+    {:ok, ^id} = Ecto.UUID.load(raw_id)
+    id
+  end
+
+  @doc """
   Every value the legacy `state` column actually ranges over.
 
   This list is the whole reason the round-trip property is worth running.

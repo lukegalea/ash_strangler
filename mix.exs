@@ -42,7 +42,19 @@ defmodule AshStrangler.MixProject do
 
   # test/support carries the real-Postgres harness: the test repo, the legacy
   # fixture schema, and the mapped resources the round-trip tests read through.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # The twin fixtures must compile BEFORE the resources whose mappings resolve
+  # through them at compile time: `contract.ex`'s fragment names
+  # `AshStrangler.Test.Legacy.ClmContracts`, and a Spark verifier runs while the
+  # file that declared it is still compiling. Glob order put `contract.ex`
+  # first; these two entries pin the twins ahead of the directory.
+  defp elixirc_paths(:test),
+    do: [
+      "lib",
+      "test/support/legacy_twins.ex",
+      "test/support/legacy_contracts.exs",
+      "test/support"
+    ]
+
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
