@@ -119,6 +119,26 @@ defmodule AshStrangler.Extension do
   @type t :: %__MODULE__{}
 end
 
+defmodule AshStrangler.Tenant do
+  @moduledoc """
+  The tenant attribute, derived from legacy data.
+
+      tenant :organization_id, derive: expr(client_party.organization_id)
+
+  The derive expression resolves on the twin through `belongs_to`/`has_one`
+  relationships — the same resolution machinery the mapping lenses use — and
+  the attribute is read-only by construction: the tenant comes from the legacy
+  rows, never from the host write.
+
+  ash_strangler does not configure Ash multitenancy; the host's resource
+  declares its own `multitenancy` block if it wants one. What the strangler
+  guarantees is the attribute's value — the same row reads the same tenant
+  through every path, because there is only one derivation of it.
+  """
+  defstruct [:attribute, :derive, :allow_unproven, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+end
+
 defmodule AshStrangler.Key do
   @moduledoc "How the modern primary key is derived from the legacy key."
   defstruct [:attribute, :from, :strategy, :__spark_metadata__]
@@ -141,6 +161,7 @@ defmodule AshStrangler.Source do
     ledger?: false,
     mappings: [],
     extensions: [],
+    tenants: [],
     keys: []
   ]
 

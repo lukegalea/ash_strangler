@@ -94,6 +94,30 @@ defmodule AshStrangler.Info do
   end
 
   @doc """
+  The tenant declaration, or `nil`.
+
+  One per source — the tenant attribute is a single fact about the resource,
+  and two derivations of it would be two answers to one question (the same
+  bug `VerifySingleSource` refuses for mappings).
+  """
+  @spec tenant(Spark.Dsl.t() | Ash.Resource.t()) :: AshStrangler.Tenant.t() | nil
+  def tenant(resource) do
+    case source(resource) do
+      nil -> nil
+      source -> Enum.find(source.tenants, &is_struct(&1, AshStrangler.Tenant))
+    end
+  end
+
+  @doc "The tenant attribute's name, or `nil` when the source declares no `tenant`."
+  @spec tenant_attr(Spark.Dsl.t() | Ash.Resource.t()) :: atom() | nil
+  def tenant_attr(resource) do
+    case tenant(resource) do
+      nil -> nil
+      %{attribute: attribute} -> attribute
+    end
+  end
+
+  @doc """
   The resource's single `key`, or `nil`.
 
   Raises when there are several: a view has one primary key expression, and
@@ -134,8 +158,9 @@ defmodule AshStrangler.Info do
         unmapped = for u <- source.mappings, is_struct(u, AshStrangler.Unmapped), do: u.attributes
         keys = for k <- source.keys, do: k.attribute
         extension = Enum.flat_map(source.extensions, & &1.attributes)
+        tenant = for t <- source.tenants, do: t.attribute
 
-        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys ++ extension)
+        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys ++ extension ++ tenant)
     end
   end
 

@@ -112,7 +112,40 @@ defmodule AshStrangler.Lens do
         []
 
       source ->
-        Enum.map(source.keys ++ source.mappings, &of(&1, source, resource_or_dsl))
+        lenses = Enum.map(source.keys ++ source.mappings, &of(&1, source, resource_or_dsl))
+        lenses ++ List.wrap(tenant_lens(resource_or_dsl))
+    end
+  end
+
+  @doc """
+  The tenant lens, or `nil`: the derive expression as a structural lens with
+  no write direction.
+
+  Included in `for_resource/1` — so the derive's relationship path discovers
+  its JOIN like any mapping's (`AshStrangler.Info.joins/1` reads sources), and
+  `VerifyTwin` resolves it with the same machinery — and appended to the view's
+  `SELECT` list by `AshStrangler.Sql.View`. `type: :masked` is deliberate: the
+  trigger's read-only guard raises on an attempt to write it, which is the
+  whole point — the tenant comes from the legacy rows, never from the host.
+  """
+  @spec tenant_lens(Spark.Dsl.t() | Ash.Resource.t()) :: t() | nil
+  def tenant_lens(resource_or_dsl) do
+    case AshStrangler.Info.tenant(resource_or_dsl) do
+      nil ->
+        nil
+
+      %AshStrangler.Tenant{attribute: attribute, derive: derive} = entry ->
+        %__MODULE__{
+          attribute: attribute,
+          entry: entry,
+          combinator: :tenant,
+          forward: derive,
+          writes: [],
+          invertible: :no,
+          type: :masked,
+          because: "the tenant comes from the legacy rows, never from the host write",
+          sources: Expr.refs(derive)
+        }
     end
   end
 

@@ -188,7 +188,25 @@ defmodule Mix.Tasks.AshStrangler.Check do
       mappings   #{length(mappings)} mapped, #{length(Info.constants(resource))} constant, #{unmapped_count(resource)} unmapped
       read-only  #{read_only_summary(read_only)}#{joins_summary(resource)}
       mechanism  #{mechanism_summary(resource)}#{upsert_warning(resource, Info.writes(resource))}\
+      #{tenant_summary(resource)}\
     """)
+  end
+
+  # An exemption is a decision on the record. The verifier carries it; this is
+  # where it is said out loud, because a check run that stays silent about the
+  # relationships a resource declined to prove is a check that cannot be used
+  # to audit them.
+  defp tenant_summary(resource) do
+    case Info.tenant(resource) do
+      nil ->
+        ""
+
+      %{allow_unproven: []} ->
+        ""
+
+      %{attribute: attribute, allow_unproven: allow_unproven} ->
+        "#{@continued}tenant      #{attribute}, unproven: #{Enum.map_join(allow_unproven, ", ", &":#{&1}")}"
+    end
   end
 
   defp joins_summary(resource) do

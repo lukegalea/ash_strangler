@@ -149,6 +149,7 @@ defmodule AshStrangler.Sql.View do
     frame = read_frame(resource_or_dsl)
     extension_lenses = Lens.extension_lenses(resource_or_dsl)
     extension_attrs = MapSet.new(extension_lenses, & &1.attribute)
+    tenant_attr = Info.tenant_attr(resource_or_dsl)
 
     # Extension columns are appended last, after every mapped column: the view's
     # column order is otherwise attribute-declaration order, and keeping the two
@@ -157,10 +158,12 @@ defmodule AshStrangler.Sql.View do
     extension_columns =
       Enum.map(extension_lenses, fn lens -> {forward_sql(lens, frame), lens.attribute} end)
 
+    excluded = MapSet.union(extension_attrs, MapSet.new(List.wrap(tenant_attr)))
+
     {rest, missing} =
       attributes
       |> Enum.reject(&(&1.name == key.attribute))
-      |> Enum.reject(&MapSet.member?(extension_attrs, &1.name))
+      |> Enum.reject(&MapSet.member?(excluded, &1.name))
       |> Enum.reduce({[], []}, fn attribute, {columns, missing} ->
         case Map.fetch(lenses, attribute.name) do
           {:ok, lens} ->
@@ -187,7 +190,13 @@ defmodule AshStrangler.Sql.View do
     key_column = {key_expression(resource_or_dsl, key, frame), key.attribute}
     legacy_id_column = {frame.({[], key.from}), :__legacy_id}
 
-    [key_column, legacy_id_column | Enum.reverse(rest)] ++ extension_columns
+    tenant_column =
+      case Lens.tenant_lens(resource_or_dsl) do
+        nil -> []
+        lens -> [{forward_sql(lens, frame), lens.attribute}]
+      end
+
+    ([key_column, legacy_id_column] ++ Enum.reverse(rest)) ++ tenant_column ++ extension_columns
   end
 
   # An `unmapped ..., as: :null` lens has no forward expression at all, which is

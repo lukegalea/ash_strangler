@@ -523,6 +523,56 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
+  @tenant %Spark.Dsl.Entity{
+    name: :tenant,
+    describe: """
+    The tenant attribute, derived from legacy data.
+
+        tenant :organization_id, derive: expr(client_party.organization_id)
+
+    `derive:` resolves on the twin through `belongs_to`/`has_one`
+    relationships — the same machinery a mapping's `expr(address.city)` uses —
+    and the attribute is read-only by construction: a structural lens with no
+    write direction, so the tenant comes from the legacy rows, never from the
+    host write. A host that tries to set it gets the trigger's read-only
+    guard, with no `because:` needed because the reason is structural.
+
+    ash_strangler does **not** configure Ash multitenancy. The host's resource
+    declares its own `multitenancy` block if it wants one; what this
+    declaration guarantees is the attribute's *value* — one derivation, shared
+    by every reader, host and legacy alike.
+    """,
+    examples: [
+      ~S|tenant :organization_id, derive: expr(client_party.organization_id)|
+    ],
+    target: AshStrangler.Tenant,
+    args: [:attribute],
+    imports: @expr_imports,
+    schema: [
+      attribute: [
+        type: :atom,
+        required: true,
+        doc: "The resource attribute carrying the tenant."
+      ],
+      derive: [
+        type: {:custom, Combinators, :expression, []},
+        required: true,
+        doc: "An expression over legacy columns, possibly through relationships."
+      ],
+      allow_unproven: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        Cross-tenant relationships this resource declines to prove: a
+        relationship to another strangled, tenanted resource whose tenant this
+        source's derive path cannot reach. Every entry is reported by
+        `mix ash_strangler.check` — an exemption is a decision on the record,
+        not a silence.
+        """
+      ]
+    ]
+  }
+
   @mapping_entities [
     @map,
     @decode,
@@ -559,6 +609,7 @@ defmodule AshStrangler.Dsl do
     entities: [
       mappings: @mapping_entities,
       extensions: [@extension],
+      tenants: [@tenant],
       keys: [@key]
     ],
     schema: [
