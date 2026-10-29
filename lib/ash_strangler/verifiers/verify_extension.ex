@@ -134,7 +134,7 @@ defmodule AshStrangler.Verifiers.VerifyExtension do
     declared = Enum.flat_map(source.extensions, & &1.attributes)
     resource = Verifier.get_persisted(dsl, :module)
 
-    by_name = Map.new(Ash.Resource.Info.attributes(resource) || [], &{&1.name, &1})
+    by_name = Map.new(Ash.Resource.Info.attributes(resource), &{&1.name, &1})
 
     declared
     |> Enum.map(fn attribute ->

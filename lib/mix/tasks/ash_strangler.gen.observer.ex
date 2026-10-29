@@ -31,8 +31,8 @@ defmodule Mix.Tasks.AshStrangler.Gen.Observer do
   def run(args) do
     case OptionParser.parse!(args, strict: []) do
       {[resource, repo], _} ->
-        module = Module.concat([resource])
-        repo_module = Module.concat([repo])
+        module = Module.concat([to_string(resource)])
+        repo_module = Module.concat([to_string(repo)])
 
         if not Code.ensure_loaded?(module) or not function_exported?(module, :spark_dsl_config, 0) do
           Mix.raise("#{resource} is not a compiled Ash resource")

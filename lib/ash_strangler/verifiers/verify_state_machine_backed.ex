@@ -55,13 +55,10 @@ defmodule AshStrangler.Verifiers.VerifyStateMachineBacked do
   end
 
   defp strangler_mapped_state?(dsl, module) do
-    # The generated accessor is typed {:ok, term()} — {:ok, nil} when the
-    # resource declares no state attribute — so nil is the unset case, not a
-    # shape to raise on.
-    case AshStateMachine.Info.state_machine_state_attribute(module) do
-      {:ok, attribute} when is_atom(attribute) -> mapped_attribute(dsl, attribute) != nil
-      _ -> false
-    end
+    # The accessor returns {:ok, atom()} — a resource the extension verified
+    # has already had its state attribute filled in by the machine extension.
+    {:ok, attribute} = AshStateMachine.Info.state_machine_state_attribute(module)
+    mapped_attribute(dsl, attribute) != nil
   end
 
   defp verify_machine(dsl) do

@@ -55,9 +55,6 @@ defmodule AshStrangler.Sql.Extension do
   (`:read_from_new` folds extension columns into the owned table before
   cutover; `:decommissioned` has nothing left to extend).
   """
-  @spec build(Ash.Resource.t() | Spark.Dsl.t()) :: [
-          %{name: atom(), up: String.t(), down: String.t()}
-        ]
   def build(resource_or_dsl) do
     case Info.source(resource_or_dsl) do
       %{extensions: [_ | _]} = source ->
