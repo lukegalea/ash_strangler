@@ -479,6 +479,50 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
+  @extension %Spark.Dsl.Entity{
+    name: :extension,
+    describe: """
+    Attributes this resource owns outright, kept in a table **beside** the
+    legacy one instead of inside it.
+
+        extension [:negotiating_notes, :governing_law]
+
+    The columns land in `"<view_schema>"."<table>_extension"`, keyed by the
+    canonical primary key; the view `LEFT JOIN`s that table in, and the
+    `INSTEAD OF` triggers keep it in step inside the same transaction as the
+    legacy write. One extension table per resource — one resource, one answer
+    to "where does this column live".
+
+    This is the shared-rows answer to the attributes the legacy schema has no
+    room for. It is deliberately not three things it can be mistaken for:
+
+    * it is not `unmapped` — an unmapped attribute is a NULL the legacy table
+      could have held; an extension attribute is real storage.
+    * it is not a `constant` — a constant is the same value for every row;
+      an extension column is written per row.
+    * it is not a `map` — there is no legacy column on the other side, and the
+      mapping DSL would be pretending there is.
+
+    A static literal default on the attribute reads back through `COALESCE`,
+    so pre-existing legacy rows — which have no extension row at all — read
+    the declared default. A function default (`&Ash.UUID.generate/0`) is
+    refused: the view definition would have to call it, and a view that calls
+    a random generator returns a different value on every read.
+    """,
+    examples: [
+      ~S|extension [:negotiating_notes, :governing_law]|
+    ],
+    target: AshStrangler.Extension,
+    args: [:attributes],
+    schema: [
+      attributes: [
+        type: {:list, :atom},
+        required: true,
+        doc: "The resource attributes stored in this resource's extension table."
+      ]
+    ]
+  }
+
   @mapping_entities [
     @map,
     @decode,
@@ -514,6 +558,7 @@ defmodule AshStrangler.Dsl do
     args: [:twin],
     entities: [
       mappings: @mapping_entities,
+      extensions: [@extension],
       keys: [@key]
     ],
     schema: [

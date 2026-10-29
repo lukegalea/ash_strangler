@@ -148,6 +148,79 @@ defmodule AshStrangler.Lens do
   end
 
   @doc """
+  One lens per extension attribute, in declared order.
+
+  Extension attributes are deliberately absent from `by_attribute/1`: they are
+  not mappings, and every consumer of `by_attribute/1` — the reconciler, the
+  backfill, the lineage graph — is asking about the *legacy* side. The view's
+  `SELECT` list, the view's `JOIN` and the triggers read these lenses
+  explicitly, which is the honest boundary: an extension column has no legacy
+  source to reconcile, backfill or draw.
+
+  The forward expression is the `:strangler_ext` printer node — `ext."<attr>"`,
+  or `COALESCE(ext."<attr>", <literal>)` when the attribute declares a static
+  literal default, which is how a pre-existing legacy row (no extension row at
+  all) reads the default. `writes: []` because there is no legacy column to
+  write; the extension table's own write path is `AshStrangler.Sql.Triggers`'.
+  """
+  @spec extension_lenses(Spark.Dsl.t() | Ash.Resource.t()) :: [t()]
+  def extension_lenses(resource_or_dsl) do
+    case AshStrangler.Info.source(resource_or_dsl) do
+      nil ->
+        []
+
+      source ->
+        context = %{
+          twin: source.twin,
+          resource: resource_or_dsl,
+          attributes: attribute_index(resource_or_dsl)
+        }
+
+        Enum.flat_map(source.extensions, fn extension ->
+          Enum.map(extension.attributes, &extension_lens(extension, &1, context))
+        end)
+    end
+  end
+
+  defp extension_lens(entry, attribute, context) do
+    %__MODULE__{
+      attribute: attribute,
+      entry: entry,
+      combinator: :extension,
+      forward: call(:strangler_ext, [attribute, static_default(context, attribute)]),
+      writes: [],
+      invertible: :no,
+      type: :structural,
+      sources: [],
+      because: nil
+    }
+  end
+
+  # A static literal default reads back through COALESCE; no default reads
+  # NULL; a function default is refused here in the same terms the verifier
+  # uses, because it would otherwise freeze a call into the view definition —
+  # one instant, or one random uuid, for every row that reads it.
+  defp static_default(context, attribute) do
+    case Map.get(context.attributes, attribute) do
+      %{default: default} when is_function(default) ->
+        raise ArgumentError, """
+        extension #{inspect(attribute)} declares a function default.
+
+        The view would have to call it, and a view that calls a generator —
+        `&Ash.UUID.generate/0`, `&DateTime.utc_now/0` — returns a different
+        value on every read. Give the attribute a static literal default, or
+        none and let the write path supply the value.
+        """
+
+      %{default: default} ->
+        default
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
   The lens for one mapping entity.
 
   `source` carries the twin, which is where column names and legacy types come

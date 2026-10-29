@@ -68,6 +68,7 @@ defmodule AshStrangler.Resource do
       # `Info.source/1` would take the first in silence.
       AshStrangler.Verifiers.VerifySingleSource,
       AshStrangler.Verifiers.VerifyCompleteMapping,
+      AshStrangler.Verifiers.VerifyExtension,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyNotRedundant,
       AshStrangler.Verifiers.VerifyTimestampZones,

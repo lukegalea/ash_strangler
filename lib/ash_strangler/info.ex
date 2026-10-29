@@ -74,6 +74,25 @@ defmodule AshStrangler.Info do
   @spec unmapped(Spark.Dsl.t() | Ash.Resource.t()) :: [AshStrangler.Unmapped.t()]
   def unmapped(resource), do: of_type(resource, AshStrangler.Unmapped)
 
+  @doc "Every `extension` declaration — at most one per source; see VerifyExtension."
+  @spec extensions(Spark.Dsl.t() | Ash.Resource.t()) :: [AshStrangler.Extension.t()]
+  def extensions(resource), do: of_type(resource, AshStrangler.Extension)
+
+  @doc """
+  The attributes stored in this resource's extension table, in declared order.
+
+  Empty when the source declares no `extension` block. These are the columns
+  `AshStrangler.Sql.Extension` creates, the view `LEFT JOIN`s in, and the
+  triggers write — owned storage beside the legacy relation, not a mapping.
+  """
+  @spec extension_attrs(Spark.Dsl.t() | Ash.Resource.t()) :: [atom()]
+  def extension_attrs(resource) do
+    case source(resource) do
+      nil -> []
+      source -> Enum.flat_map(source.extensions, & &1.attributes)
+    end
+  end
+
   @doc """
   The resource's single `key`, or `nil`.
 
@@ -114,8 +133,9 @@ defmodule AshStrangler.Info do
         mapped = for m <- source.mappings, Map.has_key?(m, :attribute), do: m.attribute
         unmapped = for u <- source.mappings, is_struct(u, AshStrangler.Unmapped), do: u.attributes
         keys = for k <- source.keys, do: k.attribute
+        extension = Enum.flat_map(source.extensions, & &1.attributes)
 
-        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys)
+        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys ++ extension)
     end
   end
 

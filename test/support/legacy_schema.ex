@@ -85,6 +85,10 @@ defmodule AshStrangler.Test.LegacySchema do
     # not run against a real server, the suite fails to start, which is the
     # same blast radius every other fixture's DDL has.
     install_resource!(AshStrangler.Test.LedgerUser)
+    # The extension-store fixture: its statements create the extension table
+    # and the extension `LEFT JOIN` in the view -- the same verbatim-install
+    # guarantee, for storage this package owns beside the legacy rows.
+    install_resource!(AshStrangler.Test.ExtendedUser)
 
     :ok
   end

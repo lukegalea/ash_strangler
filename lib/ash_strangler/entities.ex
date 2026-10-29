@@ -104,6 +104,21 @@ defmodule AshStrangler.Unmapped do
   @type t :: %__MODULE__{}
 end
 
+defmodule AshStrangler.Extension do
+  @moduledoc """
+  Attributes this resource owns outright, stored in the resource's own
+  extension table rather than anywhere in the legacy schema.
+
+  See `AshStrangler.Sql.Extension` for the table and
+  `AshStrangler.Verifiers.VerifyExtension` for what may be listed here. The
+  attributes are their own accounting category: they are not mapped, not
+  constant, not unmapped — there is nothing to account *for*, because the
+  legacy side has no opinion about them.
+  """
+  defstruct [:attributes, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+end
+
 defmodule AshStrangler.Key do
   @moduledoc "How the modern primary key is derived from the legacy key."
   defstruct [:attribute, :from, :strategy, :__spark_metadata__]
@@ -125,6 +140,7 @@ defmodule AshStrangler.Source do
     notify?: false,
     ledger?: false,
     mappings: [],
+    extensions: [],
     keys: []
   ]
 
