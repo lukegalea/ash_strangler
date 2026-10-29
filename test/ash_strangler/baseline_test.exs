@@ -116,6 +116,46 @@ defmodule AshStrangler.BaselineTest do
     assert baseline_after["name"] == "reconstructed"
   end
 
+  test "default run owns a transaction outside the sandbox" do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(TestRepo, fn ->
+      party_id = insert_legacy_party!(organization_id: Ash.UUID.generate())
+      id = insert_legacy_contract!(name: "baseline-repeatable-read", client_party_id: party_id)
+      group = Ash.UUID.generate()
+
+      try do
+        assert {:ok, %{group: ^group, count: count}} =
+                 Baseline.run(Contract, repo: TestRepo, group: group)
+
+        assert count >= 1
+
+        %Postgrex.Result{rows: rows} =
+          TestRepo.query!(
+            "SELECT record_id FROM #{@table} WHERE baseline_group = $1 AND resource = $2",
+            [Ecto.UUID.dump!(group), to_string(Contract)]
+          )
+
+        assert Enum.any?(rows, fn [record_id] -> record_id == to_string(id) end)
+      after
+        TestRepo.query!("DELETE FROM #{@table} WHERE baseline_group = $1", [
+          Ecto.UUID.dump!(group)
+        ])
+
+        TestRepo.query!("DELETE FROM legacy.clm_contracts WHERE id = $1", [
+          Ecto.UUID.dump!(id)
+        ])
+
+        TestRepo.query!(
+          "DELETE FROM \"legacy_change_events\" WHERE source_schema = $1 AND source_table = $2 AND primary_key ->> 'id' = $3",
+          ["legacy", "clm_contracts", to_string(id)]
+        )
+
+        TestRepo.query!("DELETE FROM legacy.clm_parties WHERE id = $1", [
+          Ecto.UUID.dump!(party_id)
+        ])
+      end
+    end)
+  end
+
   test "a resource without a ledger is refused -- a snapshot without a stream loses everything after it" do
     assert {:error, :no_ledger} = Baseline.run(AshStrangler.Test.LegacyUser, repo: TestRepo)
   end

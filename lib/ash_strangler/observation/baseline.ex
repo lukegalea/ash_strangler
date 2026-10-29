@@ -7,10 +7,11 @@ defmodule AshStrangler.Observation.Baseline do
   The baseline: a consistent snapshot of what the forward mapping reports
   NOW, taken at watch start.
 
-  `run/2` opens a `REPEATABLE READ` transaction, reads `max(id)` from the
-  ledger INSIDE that snapshot, keyset-scans the legacy relation, and projects
+  `run/2` opens a `REPEATABLE READ` transaction by default, reads `max(id)` from
+  the ledger INSIDE that snapshot, keyset-scans the legacy relation, and projects
   each row through the forward mapping into `:baseline` observations stamped
-  with one fresh `baseline_group` uuid and the current `mapping_version`.
+  with one fresh `baseline_group` uuid and the current `mapping_version`. Pass
+  `isolation: :caller` when an existing transaction owns the isolation level.
 
   Because the ledger trigger is already installed, every commit not visible
   in the snapshot arrives as an `:observation` — the handoff across the
@@ -45,14 +46,10 @@ defmodule AshStrangler.Observation.Baseline do
   """
   def run(resource, opts) do
     repo = Keyword.fetch!(opts, :repo)
+    isolation = Keyword.get(opts, :isolation, :repeatable_read)
 
     if Info.ledger?(resource) do
-      do_run(
-        resource,
-        repo,
-        Keyword.get(opts, :group),
-        Keyword.get(opts, :isolation, :repeatable_read)
-      )
+      do_run(resource, repo, Keyword.get(opts, :group), isolation)
     else
       {:error, :no_ledger}
     end
@@ -86,18 +83,15 @@ defmodule AshStrangler.Observation.Baseline do
     repo.transaction(
       fn ->
         # Must be the first statement in a transaction this function owns:
-        # the ledger max(id) and the keyset scan share one MVCC snapshot. The
+        # the ledger marker and keyset scan share one MVCC snapshot. The
         # explicit :caller mode is for an existing host transaction (e.g. the
         # SQL sandbox); that caller owns the isolation level.
-        if isolation == :repeatable_read do
-          repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", [])
-        end
+        set_isolation!(repo, isolation)
 
         # max(id) inside the snapshot: the handoff marker. Read but not used as
         # a fence -- the design explicitly rejects MAX(id) fencing (it would
         # drop exactly the rows committed between the snapshot and the fence).
         repo.query!("SELECT COALESCE(max(id), 0) FROM #{Ledger.events_table()}")
-
         stream(scan, nil, 0)
       end,
       timeout: :infinity
@@ -107,6 +101,11 @@ defmodule AshStrangler.Observation.Baseline do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp set_isolation!(repo, :repeatable_read),
+    do: repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", [])
+
+  defp set_isolation!(_repo, :caller), do: :ok
 
   # Keyset on the legacy key column, cast by its own type (bigint ids and
   # uuid ids both order and compare). An OFFSET-free scan that stays cheap at

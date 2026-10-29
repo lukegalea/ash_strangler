@@ -431,14 +431,22 @@ defmodule AshStrangler.Sql.Triggers do
 
     # The CASE references NEW.<attr>, which is in scope inside
     # DO UPDATE SET too -- the same spelling works in both positions.
+    attribute_sets =
+      Enum.map_join(ctx.extension_attrs, ", ", fn attribute ->
+        ~s("#{attribute}" = NEW.#{attribute})
+      end)
+
+    state_sets =
+      Enum.map_join(ctx.extension_state_values, ", ", fn {column, case_sql} ->
+        ~s("#{column}" = #{case_sql})
+      end)
+
     sets =
-      (Enum.map(ctx.extension_attrs, fn attribute ->
-         ~s("#{attribute}" = NEW.#{attribute})
-       end) ++
-         Enum.map(ctx.extension_state_values, fn {column, case_sql} ->
-           ~s("#{column}" = #{case_sql})
-         end))
-      |> Enum.join(", ")
+      case {attribute_sets, state_sets} do
+        {"", state_sets} -> state_sets
+        {attribute_sets, ""} -> attribute_sets
+        {attribute_sets, state_sets} -> attribute_sets <> ", " <> state_sets
+      end
 
     """
         INSERT INTO #{ctx.extension_relation} (#{columns})
