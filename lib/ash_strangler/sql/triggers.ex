@@ -380,9 +380,9 @@ defmodule AshStrangler.Sql.Triggers do
     values = [ctx.extension_pk_expr | Enum.map(ctx.extension_attrs, &"NEW.#{&1}")]
 
     sets =
-      ctx.extension_attrs
-      |> Enum.map(fn attribute -> ~s("#{attribute}" = NEW.#{attribute}) end)
-      |> Enum.join(", ")
+      Enum.map_join(ctx.extension_attrs, ", ", fn attribute ->
+        ~s("#{attribute}" = NEW.#{attribute})
+      end)
 
     """
         INSERT INTO #{ctx.extension_relation} (#{columns})
