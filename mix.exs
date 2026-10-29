@@ -101,6 +101,10 @@ defmodule AshStrangler.MixProject do
        branch: "temporal-as-of-support-0.7",
        only: [:dev, :test],
        optional: true},
+      # Keystone uses 2.0.x. The archival verifier's tests need the extension
+      # present in dev/test; the verifier itself is guarded by
+      # Code.ensure_loaded? so a consumer without archival never pays for it.
+      {:ash_archival, "~> 2.0", only: [:dev, :test]},
       # A SAT solver, so the suite can exercise a resource carrying real
       # policies. This library's central claim about the notification bridge is
       # that re-reading through Ash means "calculations are computed, field and
