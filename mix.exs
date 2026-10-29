@@ -59,7 +59,7 @@ defmodule AshStrangler.MixProject do
 
   defp deps do
     [
-      {:ash, "~> 3.0"},
+      {:ash, ">= 3.37.2 and < 4.0.0"},
       {:spark, "~> 2.0"},
       # The observation store serialises envelope maps to jsonb columns.
       # Already a non-optional dependency of ash, so this adds nothing to a
@@ -70,7 +70,7 @@ defmodule AshStrangler.MixProject do
       # the mapping rather than emitting SQL, so a consumer can adopt the
       # pre-flight tooling without this extension dragging a data layer into
       # their dependency tree. SQL generation (step 2) will need it.
-      {:ash_postgres, "~> 2.0", optional: true},
+      {:ash_postgres, ">= 2.15.2 and < 3.0.0", optional: true},
       # Rides in transitively via `ash`, but the round-trip property tests
       # depend on it directly -- so it is declared directly. A transitive
       # dependency that a test suite leans on is one `mix deps.update` away
