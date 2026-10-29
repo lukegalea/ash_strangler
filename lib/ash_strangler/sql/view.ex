@@ -162,8 +162,7 @@ defmodule AshStrangler.Sql.View do
 
     {rest, missing} =
       attributes
-      |> Enum.reject(&(&1.name == key.attribute))
-      |> Enum.reject(&MapSet.member?(excluded, &1.name))
+      |> Enum.reject(&(&1.name == key.attribute or MapSet.member?(excluded, &1.name)))
       |> Enum.reduce({[], []}, fn attribute, {columns, missing} ->
         case Map.fetch(lenses, attribute.name) do
           {:ok, lens} ->

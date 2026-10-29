@@ -592,8 +592,9 @@ defmodule AshStrangler.Obligations do
       |> MapSet.new(& &1.value)
 
     modern_values
-    |> Enum.reject(&MapSet.member?(produced, &1))
-    |> Enum.reject(&MapSet.member?(declared, &1))
+    |> Enum.reject(fn value ->
+      MapSet.member?(produced, value) or MapSet.member?(declared, value)
+    end)
     |> case do
       [] ->
         nil

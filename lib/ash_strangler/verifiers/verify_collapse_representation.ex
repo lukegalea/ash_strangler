@@ -133,10 +133,10 @@ defmodule AshStrangler.Verifiers.VerifyCollapseRepresentation do
           "state #{inspect(state.value)} declares a `representation:` and takes no `when:` -- there is no legacy encoding to guard on",
         else: nil
       ),
-      if(state.set not in [nil, []],
-        do:
-          "state #{inspect(state.value)} declares a `representation:` and takes no `set:` -- there is no legacy column to write",
-        else: nil
+      if(state.set in [nil, []],
+        do: nil,
+        else:
+          "state #{inspect(state.value)} declares a `representation:` and takes no `set:` -- there is no legacy column to write"
       )
     ]
     |> Enum.reject(&is_nil/1)
