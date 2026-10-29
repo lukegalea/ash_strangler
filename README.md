@@ -829,6 +829,15 @@ health. That is what "lossless" costs. The table is deliberately plain
 infrastructure — no Ash resource ships over it, because the drain policy
 belongs to the host.
 
+**Past cutover** (`:read_from_new`), the ledger trigger follows the **owned
+table** (v0.4.0 correction): the old application still writes through the
+reverse view, those writes fire no Ash notifier, and capture keeps covering
+them for as long as any compatibility writer exists. The claim "Ash's own
+events cover writes past cutover" is true only if every writer goes through
+Ash. `Sql.Notify` is refused in this phase (PostgreSQL rejects row-level
+triggers on a view); the ledger trigger is accepted, targeting the owned
+table.
+
 → [The change ledger in full](documentation/topics/the-change-ledger.md)
 
 ---

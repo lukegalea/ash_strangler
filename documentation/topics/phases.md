@@ -225,6 +225,14 @@ The cutover. A real Ash-owned table now holds the data, and the **legacy name
 becomes a view over it**, so the old application's `SELECT * FROM users` keeps
 working without a line of its SQL changing.
 
+A `ledger?` source stays valid here (v0.4.0 correction): the ledger trigger
+follows the **owned table** -- the reverse view's source -- for as long as any
+compatibility writer exists. The old application still writes through the
+reverse view, and those writes fire **no Ash notifier**; the claim that Ash's
+own events cover writes past cutover is true only if every writer goes through
+Ash. `Sql.Notify` (the compatibility announce) is still refused: PostgreSQL
+rejects row-level triggers on a view.
+
 ```mermaid
 flowchart TB
     subgraph before ["read_from_legacy and dual_write"]

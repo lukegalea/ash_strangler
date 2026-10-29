@@ -157,8 +157,25 @@ defmodule AshStrangler.Sql.Ledger do
   end
 
   defp do_build(resource_or_dsl, key) do
-    relation = Info.relation(resource_or_dsl)
-    {schema, table} = split_relation(relation)
+    # v0.4.0 correction: in :read_from_new the legacy relation is the reverse
+    # VIEW and the OWNED table is the resource's postgres table -- capture
+    # follows the authoritative base storage for as long as any compatibility
+    # writer exists (legacy writers through the reverse view fire no Ash
+    # notifier). Earlier phases write the legacy relation directly.
+    {target_relation, target_schema, target_table} =
+      if Info.strangler_phase!(resource_or_dsl) == :read_from_new do
+        schema = AshPostgres.DataLayer.Info.schema(resource_or_dsl) || "public"
+        table = AshPostgres.DataLayer.Info.table(resource_or_dsl)
+
+        {~s("#{schema}"."#{table}"), schema, table}
+      else
+        relation = Info.relation(resource_or_dsl)
+        {schema, table} = split_relation(relation)
+        {relation, schema, table}
+      end
+
+    {schema, table} = {target_schema, target_table}
+    relation = target_relation
     channel = Info.notify_channel(resource_or_dsl)
     key_column = Atom.to_string(key.from)
 
