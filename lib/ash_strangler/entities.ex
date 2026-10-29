@@ -164,6 +164,7 @@ defmodule AshStrangler.Source do
     backfill_interlock?: false,
     notify?: false,
     ledger?: false,
+    observers: [],
     mappings: [],
     extensions: [],
     tenants: [],

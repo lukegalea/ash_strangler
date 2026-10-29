@@ -103,6 +103,43 @@ defmodule AshStrangler.Observation do
     }
   end
 
+  @doc """
+  The forward mapping evaluated against ONE legacy row's jsonb image —
+  row-local legacy-backed attributes only, exactly as the projector would
+  read them. The baseline is this, stamped `category: :baseline`.
+  """
+  @spec evaluate_row(Ash.Resource.t(), map(), Ecto.Repo.t()) :: %{
+          attributes: map(),
+          unprojected_attributes: [atom()],
+          record_id: String.t() | nil
+        }
+  def evaluate_row(resource, row_json, repo) do
+    key = Info.key(resource)
+    {included, excluded} = split_projectable(resource)
+    frame = jsonb_frame(Info.twin(resource), "row")
+
+    selects =
+      Enum.map(included, fn lens ->
+        {lens.attribute, Printer.to_sql(lens.forward, ref: frame)}
+      end)
+
+    sql =
+      "SELECT " <>
+        Enum.map_join(selects, ", ", fn {attribute, sql} -> "(#{sql}) AS #{attribute}" end) <>
+        " FROM (SELECT $1::jsonb AS row) AS images"
+
+    %Postgrex.Result{columns: returned_columns, rows: [[values]]} =
+      repo.query!(sql, [row_json])
+
+    attributes = Enum.zip(returned_columns, values) |> Map.new()
+
+    %{
+      attributes: attributes,
+      unprojected_attributes: Enum.sort(Enum.map(excluded, & &1.attribute)),
+      record_id: record_id(key, Info.relation(resource), %{"id" => row_json[to_string(key.from)]})
+    }
+  end
+
   # `{attribute, new_sql, old_sql}` for every attribute the projector can
   # speak about exactly.
   defp projections(resource) do
@@ -110,12 +147,7 @@ defmodule AshStrangler.Observation do
     new_frame = jsonb_frame(twin, "new")
     old_frame = jsonb_frame(twin, "old")
 
-    projectable? = fn lens ->
-      lens.combinator not in [:key, :extension, :tenant] and
-        Enum.all?(lens.sources, fn {path, _attr} -> path == [] end)
-    end
-
-    {included, excluded} = Enum.split_with(Lens.for_resource(resource), projectable?)
+    {included, excluded} = split_projectable(resource)
 
     selects =
       Enum.map(included, fn lens ->
@@ -125,6 +157,15 @@ defmodule AshStrangler.Observation do
       end)
 
     {selects, Enum.map(excluded, & &1.attribute)}
+  end
+
+  defp split_projectable(resource) do
+    projectable? = fn lens ->
+      lens.combinator not in [:key, :extension, :tenant] and
+        Enum.all?(lens.sources, fn {path, _attr} -> path == [] end)
+    end
+
+    resource |> Lens.for_resource() |> Enum.split_with(projectable?)
   end
 
   defp project_sql(selects) do

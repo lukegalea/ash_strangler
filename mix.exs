@@ -61,6 +61,11 @@ defmodule AshStrangler.MixProject do
     [
       {:ash, "~> 3.0"},
       {:spark, "~> 2.0"},
+      # The observation store serialises envelope maps to jsonb columns.
+      # Already a non-optional dependency of ash, so this adds nothing to a
+      # dependency tree -- it makes the version THIS package is compiled
+      # against deliberate.
+      {:jason, "~> 1.4"},
       # Optional deliberately. Step 1 is checks and verifiers, which reason about
       # the mapping rather than emitting SQL, so a consumer can adopt the
       # pre-flight tooling without this extension dragging a data layer into

@@ -17,7 +17,7 @@ defmodule AshStrangler.Migration do
   with `42601 cannot insert multiple commands into a prepared statement`.
   """
 
-  alias AshStrangler.Sql
+  alias AshStrangler.{Observation, Sql}
 
   @doc """
   Every statement for `resource`, ordered so that running them in sequence
@@ -70,7 +70,10 @@ defmodule AshStrangler.Migration do
           (Enum.reject([Sql.View.schema_statement(resource)], &is_nil/1) ++
              List.flatten(Sql.Extension.build(resource)) ++
              Enum.reject([view, key_index], &is_nil/1)) ++
-            triggers ++ Sql.Ledger.build(resource) ++ Sql.Notify.build(resource)
+            triggers ++
+            Sql.Ledger.build(resource) ++
+            Sql.Notify.build(resource) ++
+            Observation.Store.statements()
       end
     else
       []

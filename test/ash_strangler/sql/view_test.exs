@@ -296,7 +296,13 @@ defmodule AshStrangler.Sql.ViewTest do
       assert names == [
                :strangler_strangler_schema,
                :strangler_users_view,
-               :strangler_users_key_index
+               :strangler_users_key_index,
+               # the observation store: infrastructure every strangled resource
+               # shares, deduplicated by the migration renderer
+               :strangler_observations_table,
+               :strangler_observations_event_index,
+               :strangler_observations_baseline_index,
+               :strangler_receipts_table
              ]
     end
 

@@ -251,6 +251,21 @@ defmodule AshStrangler.Info do
   def ledger?(resource), do: match?(%{ledger?: true}, source(resource))
 
   @doc """
+  The observation consumers declared on the source, in declaration order.
+
+  Each must implement the `AshStrangler.Observer` behaviour (the DSL's
+  `{:behaviour, _}` option enforces that at compile time) — `mix
+  ash_strangler.gen.observer` renders the Oban worker that drives them.
+  """
+  @spec observers(Spark.Dsl.t() | Ash.Resource.t()) :: [module()]
+  def observers(resource) do
+    case source(resource) do
+      nil -> []
+      source -> List.wrap(source.observers)
+    end
+  end
+
+  @doc """
   Every relationship path any mapping reads through, and the joins each needs.
 
   0.1 declared joins explicitly, with a relation name, an alias and an `on:`

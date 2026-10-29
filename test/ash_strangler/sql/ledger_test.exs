@@ -383,7 +383,13 @@ defmodule AshStrangler.Sql.LedgerTest do
       # One CREATE TABLE, one index, one function, one trigger -- render
       # deduplicates byte-identical statements, and byte-identical is what the
       # derivation guarantees.
-      assert source |> String.split("CREATE TABLE IF NOT EXISTS") |> length() == 2
+      # One CREATE TABLE for the ledger (the observation store contributes its
+      # own two tables, and render deduplicates byte-identical statements
+      # across the resources -- which is the "one table per relation" claim:
+      # byte-identical is what the derivation guarantees).
+      assert source
+             |> String.split(~s|CREATE TABLE IF NOT EXISTS "legacy_change_events"|)
+             |> length() == 2
 
       assert source
              |> String.split("CREATE OR REPLACE TRIGGER \"strangler_ledger_legacy_users\"")
