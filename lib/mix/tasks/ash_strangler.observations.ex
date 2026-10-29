@@ -24,7 +24,6 @@ defmodule Mix.Tasks.AshStrangler.Observations do
 
   use Mix.Task
 
-
   @requirements ["app.config"]
 
   @switches [

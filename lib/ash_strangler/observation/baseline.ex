@@ -7,10 +7,11 @@ defmodule AshStrangler.Observation.Baseline do
   The baseline: a consistent snapshot of what the forward mapping reports
   NOW, taken at watch start.
 
-  `run/2` opens a `REPEATABLE READ` transaction, reads `max(id)` from the
-  ledger INSIDE that snapshot, keyset-scans the legacy relation, and projects
+  `run/2` opens a `REPEATABLE READ` transaction by default, reads `max(id)` from
+  the ledger INSIDE that snapshot, keyset-scans the legacy relation, and projects
   each row through the forward mapping into `:baseline` observations stamped
-  with one fresh `baseline_group` uuid and the current `mapping_version`.
+  with one fresh `baseline_group` uuid and the current `mapping_version`. Pass
+  `isolation: :caller` when an existing transaction owns the isolation level.
 
   Because the ledger trigger is already installed, every commit not visible
   in the snapshot arrives as an `:observation` — the handoff across the
@@ -38,18 +39,22 @@ defmodule AshStrangler.Observation.Baseline do
   Returns `{:ok, %{group: uuid, count: n}}`, or `{:error, :no_ledger}` when
   the resource's source carries no ledger — a baseline without a stream to
   hand off to would silently miss everything after the snapshot.
+
+  Pass `isolation: :caller` when an existing transaction owns the isolation
+  level; the default starts a new repeatable-read transaction.
   """
   def run(resource, opts) do
     repo = Keyword.fetch!(opts, :repo)
+    isolation = Keyword.get(opts, :isolation, :repeatable_read)
 
     if Info.ledger?(resource) do
-      do_run(resource, repo, Keyword.get(opts, :group))
+      do_run(resource, repo, Keyword.get(opts, :group), isolation)
     else
       {:error, :no_ledger}
     end
   end
 
-  defp do_run(resource, repo, group) do
+  defp do_run(resource, repo, group, isolation) do
     group = group || Ash.UUID.generate()
     version = MappingVersion.hash(resource)
     relation = Info.relation(resource)
@@ -57,16 +62,30 @@ defmodule AshStrangler.Observation.Baseline do
 
     key = Info.key(resource)
     key_column = key.from
-    key_type = AshStrangler.Sql.Printer.pg_type!(Ash.Resource.Info.attribute(Info.twin(resource), key_column).type)
+
+    key_type =
+      AshStrangler.Sql.Printer.pg_type!(
+        Ash.Resource.Info.attribute(Info.twin(resource), key_column).type
+      )
+
+    scan = %{
+      repo: repo,
+      schema: schema,
+      table: table,
+      key_column: key_column,
+      key_type: key_type,
+      resource: resource,
+      group: group,
+      version: version
+    }
 
     repo.transaction(
       fn ->
-        # max(id) inside the snapshot: the handoff marker. Read but not used as
-        # a fence -- the design explicitly rejects MAX(id) fencing (it would
-        # drop exactly the rows committed between the snapshot and the fence).
+        # This must be first when this function owns the transaction: the
+        # ledger marker and keyset scan share one MVCC snapshot.
+        set_isolation!(repo, isolation)
         repo.query!("SELECT COALESCE(max(id), 0) FROM #{Ledger.events_table()}")
-
-        stream(repo, schema, table, key_column, key_type, nil, resource, group, version, 0)
+        stream(scan, nil, 0)
       end,
       timeout: :infinity
     )
@@ -76,14 +95,26 @@ defmodule AshStrangler.Observation.Baseline do
     end
   end
 
+  defp set_isolation!(repo, :repeatable_read),
+    do: repo.query!("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", [])
+
+  defp set_isolation!(_repo, :caller), do: :ok
+
   # Keyset on the legacy key column, cast by its own type (bigint ids and
   # uuid ids both order and compare). An OFFSET-free scan that stays cheap at
   # production volumes and holds the snapshot's repeatable-read view.
-  defp stream(_repo, _schema, _table, _key_column, _key_type, last_id, _resource, _group, _version, acc)
-       when last_id == :done,
-       do: acc
+  defp stream(state, last_id, acc) do
+    %{
+      repo: repo,
+      schema: schema,
+      table: table,
+      key_column: key_column,
+      key_type: key_type,
+      resource: resource,
+      group: group,
+      version: version
+    } = state
 
-  defp stream(repo, schema, table, key_column, key_type, last_id, resource, group, version, acc) do
     %Postgrex.Result{rows: rows} =
       repo.query!(
         """
@@ -111,11 +142,8 @@ defmodule AshStrangler.Observation.Baseline do
           end)
 
         max_seen = jsons |> Enum.map(& &1[to_string(key_column)]) |> Enum.max()
-
-        stream(repo, schema, table, key_column, key_type, max_seen, resource, group, version,
-          acc + inserted
-        )
-      end
+        stream(state, max_seen, acc + inserted)
+    end
   end
 
   defp observation(repo, resource, row_json, group, version) do
@@ -158,38 +186,38 @@ defmodule AshStrangler.Observation.Baseline do
   defp store(repo, observation) do
     %Postgrex.Result{rows: rows} =
       repo.query!(
-      """
-      INSERT INTO "strangler_observations"
-        (id, source_event_id, baseline_group, category, resource, record_id, operation,
-         before, after, changed_attributes, invalidated_attributes, origin, attribution,
-         correlation_id, causation_id, mapping_version, source, captured_at, recorded_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
-      ON CONFLICT (record_id, resource, baseline_group) WHERE category = 'baseline'
-      DO NOTHING
-      RETURNING id
-      """,
-      [
-        Ecto.UUID.dump!(observation.id),
-        nil,
-        Ecto.UUID.dump!(observation.baseline_group),
-        "baseline",
-        to_string(observation.resource),
-        # record_id is a TEXT column: the string id, never the dumped binary.
-        observation.record_id,
-        "insert",
-        nil,
-        dump_json(observation.after),
-        "[]",
-        "[]",
-        "unknown",
-        dump_json(observation.attribution),
-        nil,
-        nil,
-        observation.mapping_version,
-        dump_json(observation.source),
-        observation.captured_at
-      ]
-    )
+        """
+        INSERT INTO "strangler_observations"
+          (id, source_event_id, baseline_group, category, resource, record_id, operation,
+           before, after, changed_attributes, invalidated_attributes, origin, attribution,
+           correlation_id, causation_id, mapping_version, source, captured_at, recorded_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
+        ON CONFLICT (record_id, resource, baseline_group) WHERE category = 'baseline'
+        DO NOTHING
+        RETURNING id
+        """,
+        [
+          Ecto.UUID.dump!(observation.id),
+          nil,
+          Ecto.UUID.dump!(observation.baseline_group),
+          "baseline",
+          to_string(observation.resource),
+          # record_id is a TEXT column: the string id, never the dumped binary.
+          observation.record_id,
+          "insert",
+          nil,
+          dump_json(observation.after),
+          "[]",
+          "[]",
+          "unknown",
+          dump_json(observation.attribution),
+          nil,
+          nil,
+          observation.mapping_version,
+          dump_json(observation.source),
+          observation.captured_at
+        ]
+      )
 
     rows != []
   end
