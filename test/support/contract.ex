@@ -18,8 +18,16 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
     phase :dual_write
 
     source AshStrangler.Test.Legacy.ClmContracts do
-      # The legacy key IS the canonical id — clm_contracts was born with uuid
-      # primary keys — so the host mints the id on create and the INSERT
+      # The observation fixture: the durable ledger plus its observers. The
+      # channel is this fixture's own -- the wake payload on a shared channel
+      # would race whatever else listens on the default.
+      notify? true
+      ledger? true
+      notify_channel "ash_strangler_contract_observation"
+      observers([AshStrangler.Test.RecordingObserver])
+
+      # The legacy key IS the canonical id -- clm_contracts was born with uuid
+      # primary keys -- so the host mints the id on create and the INSERT
       # trigger passes it into the legacy key column. No lookup table, both
       # directions.
       key :id, from: :id, strategy: :identity

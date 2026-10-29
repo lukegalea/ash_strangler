@@ -43,24 +43,30 @@ defmodule AshStrangler.Observation.Baseline do
     repo = Keyword.fetch!(opts, :repo)
 
     if Info.ledger?(resource) do
-      do_run(resource, repo)
+      do_run(resource, repo, Keyword.get(opts, :group))
     else
       {:error, :no_ledger}
     end
   end
 
-  defp do_run(resource, repo) do
-    group = Ash.UUID.generate()
+  defp do_run(resource, repo, group) do
+    group = group || Ash.UUID.generate()
     version = MappingVersion.hash(resource)
     relation = Info.relation(resource)
     {schema, table} = split(relation)
 
+    key = Info.key(resource)
+    key_column = key.from
+    key_type = AshStrangler.Sql.Printer.pg_type!(Ash.Resource.Info.attribute(Info.twin(resource), key_column).type)
+
     repo.transaction(
       fn ->
-        %Postgrex.Result{rows: [[_max_id]]} =
-          repo.query!("SELECT COALESCE(max(id), 0) FROM #{Ledger.events_table()}")
+        # max(id) inside the snapshot: the handoff marker. Read but not used as
+        # a fence -- the design explicitly rejects MAX(id) fencing (it would
+        # drop exactly the rows committed between the snapshot and the fence).
+        repo.query!("SELECT COALESCE(max(id), 0) FROM #{Ledger.events_table()}")
 
-        stream(repo, schema, table, nil, resource, group, version, 0)
+        stream(repo, schema, table, key_column, key_type, nil, resource, group, version, 0)
       end,
       timeout: :infinity
     )
@@ -70,24 +76,25 @@ defmodule AshStrangler.Observation.Baseline do
     end
   end
 
-  # Keyset on the legacy id — a OFFSET-free scan that stays cheap at
+  # Keyset on the legacy key column, cast by its own type (bigint ids and
+  # uuid ids both order and compare). An OFFSET-free scan that stays cheap at
   # production volumes and holds the snapshot's repeatable-read view.
-  defp stream(_repo, _schema, _table, last_id, _resource, _group, _version, acc)
-       when last_id != nil and last_id == :done,
+  defp stream(_repo, _schema, _table, _key_column, _key_type, last_id, _resource, _group, _version, acc)
+       when last_id == :done,
        do: acc
 
-  defp stream(repo, schema, table, last_id, resource, group, version, acc) do
+  defp stream(repo, schema, table, key_column, key_type, last_id, resource, group, version, acc) do
     %Postgrex.Result{rows: rows} =
       repo.query!(
         """
         SELECT to_jsonb(t) AS row FROM (
           SELECT * FROM #{schema}.#{table}
-          WHERE ($1::bigint IS NULL OR id > $1)
-          ORDER BY id
+          WHERE ($1::text IS NULL OR #{key_column} > $1::#{key_type})
+          ORDER BY #{key_column}
           LIMIT #{@batch}
         ) t
         """,
-        [last_id]
+        [last_id && to_string(last_id)]
       )
 
     case rows do
@@ -95,19 +102,24 @@ defmodule AshStrangler.Observation.Baseline do
         acc
 
       rows ->
-        jsons = Enum.map(rows, fn [[json]] -> json end)
+        # to_jsonb arrives already decoded: the repo's jsonb extension is on.
+        jsons = Enum.map(rows, fn [json] -> json end)
 
-        Enum.each(jsons, fn json ->
-          store(repo, observation(repo, resource, json, group, version))
-        end)
+        inserted =
+          Enum.count(jsons, fn json ->
+            store(repo, observation(repo, resource, json, group, version))
+          end)
 
-        max_seen = jsons |> Enum.map(&Jason.decode!(&1)["id"]) |> Enum.max()
-        stream(repo, schema, table, max_seen, resource, group, version, acc + length(jsons))
+        max_seen = jsons |> Enum.map(& &1[to_string(key_column)]) |> Enum.max()
+
+        stream(repo, schema, table, key_column, key_type, max_seen, resource, group, version,
+          acc + inserted
+        )
       end
   end
 
   defp observation(repo, resource, row_json, group, version) do
-    evaluated = Observation.evaluate_row(resource, Jason.decode!(row_json), repo)
+    evaluated = Observation.evaluate_row(resource, row_json, repo)
 
     %Observation{
       id: Ash.UUID.generate(),
@@ -128,7 +140,7 @@ defmodule AshStrangler.Observation.Baseline do
       mapping_version: version,
       source: %{
         relation: Info.relation(resource),
-        primary_key: %{"id" => Jason.decode!(row_json)[to_string(Info.key(resource).from)]},
+        primary_key: %{"id" => row_json[to_string(Info.key(resource).from)]},
         transaction_id: nil,
         timestamp: nil,
         unprojected_attributes: evaluated.unprojected_attributes
@@ -141,8 +153,11 @@ defmodule AshStrangler.Observation.Baseline do
   # Baselines run inside the caller's transaction: the repo IS that
   # transaction's connection pool. The evaluate/store repo is passed through
   # the process dictionary-free route — the drain's repo, supplied once.
+  # Returns true when THIS call inserted the row -- a re-run with the same
+  # group counts zero, which is what makes the reported count honest.
   defp store(repo, observation) do
-    repo.query!(
+    %Postgrex.Result{rows: rows} =
+      repo.query!(
       """
       INSERT INTO "strangler_observations"
         (id, source_event_id, baseline_group, category, resource, record_id, operation,
@@ -151,6 +166,7 @@ defmodule AshStrangler.Observation.Baseline do
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
       ON CONFLICT (record_id, resource, baseline_group) WHERE category = 'baseline'
       DO NOTHING
+      RETURNING id
       """,
       [
         Ecto.UUID.dump!(observation.id),
@@ -158,21 +174,24 @@ defmodule AshStrangler.Observation.Baseline do
         Ecto.UUID.dump!(observation.baseline_group),
         "baseline",
         to_string(observation.resource),
+        # record_id is a TEXT column: the string id, never the dumped binary.
         observation.record_id,
         "insert",
         nil,
-        Jason.encode!(observation.after),
-        Jason.encode!([]),
-        Jason.encode!([]),
+        dump_json(observation.after),
+        "[]",
+        "[]",
         "unknown",
-        Jason.encode!(observation.attribution),
+        dump_json(observation.attribution),
         nil,
         nil,
         observation.mapping_version,
-        Jason.encode!(observation.source),
+        dump_json(observation.source),
         observation.captured_at
       ]
     )
+
+    rows != []
   end
 
   defp split(relation) do
@@ -181,4 +200,24 @@ defmodule AshStrangler.Observation.Baseline do
       [table] -> {"public", table}
     end
   end
+
+  # Projection values come out of typed casts — a `::uuid` arrives as a
+  # 16-byte binary — and the envelope is jsonb. Convert what JSON cannot say
+  # verbatim, recursively.
+  defp dump_json(%Decimal{} = d), do: Decimal.to_string(d)
+  defp dump_json(%_{} = struct), do: dump_json(Map.from_struct(struct))
+
+  defp dump_json(%{} = map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), dump_json(v)} end)
+
+  defp dump_json(list) when is_list(list), do: Enum.map(list, &dump_json/1)
+
+  defp dump_json(<<_::128>> = uuid) do
+    case Ecto.UUID.load(uuid) do
+      {:ok, string} -> string
+      :error -> uuid
+    end
+  end
+
+  defp dump_json(other), do: other
 end

@@ -58,7 +58,8 @@ defmodule AshStrangler.Observation.Processor do
 
       Enum.each(rows, fn row ->
         observation = Observation.project(resource, row, repo)
-        store_observation(repo, observation)
+        stored_id = store_observation(repo, observation)
+        observation = %{observation | id: stored_id}
 
         invalidations(repo, resource, row, scope)
 
@@ -115,8 +116,12 @@ defmodule AshStrangler.Observation.Processor do
     Enum.map(rows, fn row -> Map.new(Enum.zip(keys, row)) end)
   end
 
+  # Returns the STORED observation's id: on first insert the new one, on a
+  # replay the original -- receipts key on it, and a replay that regenerated
+  # the uuid would silently reset every consumer's attempts.
   defp store_observation(repo, observation) do
-    repo.query!(
+    %Postgrex.Result{rows: rows} =
+      repo.query!(
       """
       INSERT INTO "strangler_observations"
         (id, source_event_id, baseline_group, category, resource, record_id, operation,
@@ -124,7 +129,8 @@ defmodule AshStrangler.Observation.Processor do
          correlation_id, causation_id, mapping_version, source, captured_at, recorded_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
       ON CONFLICT (source_event_id, resource) WHERE category = 'observation'
-      DO NOTHING
+      DO UPDATE SET recorded_at = now()
+      RETURNING id
       """,
       [
         Ecto.UUID.dump!(observation.id),
@@ -147,6 +153,10 @@ defmodule AshStrangler.Observation.Processor do
         observation.captured_at
       ]
     )
+
+    case rows do
+      [[id]] -> Ecto.UUID.load(id) |> elem(1)
+    end
   end
 
   # An event on R invalidates every OTHER resource in scope that GATHERS from
@@ -218,7 +228,9 @@ defmodule AshStrangler.Observation.Processor do
 
   defp deliver(repo, observers, observation, max_attempts) do
     Enum.each(observers, fn observer ->
-      if receipt_state(repo, observer, observation.id) != "ok" do
+      # A closed receipt ("ok") never re-delivers; a quarantined one is
+      # re-delivered ONLY by replay (deleting the receipt), never by a drain.
+      if receipt_state(repo, observer, observation.id) in [nil, "error"] do
         case observer.handle_observation(observation, %{repo: repo}) do
           :ok ->
             write_receipt(repo, observer, observation.id, "ok", 0, nil)
@@ -272,8 +284,36 @@ defmodule AshStrangler.Observation.Processor do
     )
   end
 
-  defp dump_json(nil), do: nil
-  defp dump_json(value), do: Jason.encode!(value)
+  # Projection values come out of typed casts — a `::uuid` arrives as a
+  # 16-byte binary — and the envelope is jsonb. Convert what JSON cannot say
+  # verbatim, recursively.
+  defp dump_json(value) do
+    value
+    |> jsonable()
+    |> Jason.encode!()
+  end
+
+  # Jason encodes the calendar structs natively; route them before the
+  # generic struct clause, which would explode them into internals.
+  defp jsonable(%Date{} = d), do: d
+  defp jsonable(%Time{} = t), do: t
+  defp jsonable(%DateTime{} = d), do: d
+  defp jsonable(%NaiveDateTime{} = d), do: d
+  defp jsonable(%Decimal{} = d), do: Decimal.to_string(d)
+  defp jsonable(%_{} = struct), do: jsonable(Map.from_struct(struct))
+
+  defp jsonable(%{} = map),
+    do: Map.new(map, fn {k, v} -> {to_string(k), jsonable(v)} end)
+
+  defp jsonable(list) when is_list(list), do: Enum.map(list, &jsonable/1)
+  defp jsonable(<<_::128>> = uuid) do
+    case Ecto.UUID.load(uuid) do
+      {:ok, string} -> string
+      :error -> uuid
+    end
+  end
+
+  defp jsonable(other), do: other
 
   defp configured_resources do
     (Application.get_env(:ash, :ash_domains, []) ++

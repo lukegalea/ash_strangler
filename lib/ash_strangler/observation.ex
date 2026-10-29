@@ -128,7 +128,7 @@ defmodule AshStrangler.Observation do
         Enum.map_join(selects, ", ", fn {attribute, sql} -> "(#{sql}) AS #{attribute}" end) <>
         " FROM (SELECT $1::jsonb AS row) AS images"
 
-    %Postgrex.Result{columns: returned_columns, rows: [[values]]} =
+    %Postgrex.Result{columns: returned_columns, rows: [values]} =
       repo.query!(sql, [row_json])
 
     attributes = Enum.zip(returned_columns, values) |> Map.new()
@@ -136,7 +136,8 @@ defmodule AshStrangler.Observation do
     %{
       attributes: attributes,
       unprojected_attributes: Enum.sort(Enum.map(excluded, & &1.attribute)),
-      record_id: record_id(key, Info.relation(resource), %{"id" => row_json[to_string(key.from)]})
+      record_id:
+        record_id(key, Info.relation(resource), %{key.from => row_json[to_string(key.from)]})
     }
   end
 
@@ -162,11 +163,23 @@ defmodule AshStrangler.Observation do
   defp split_projectable(resource) do
     projectable? = fn lens ->
       lens.combinator not in [:key, :extension, :tenant] and
-        Enum.all?(lens.sources, fn {path, _attr} -> path == [] end)
+        Enum.all?(lens.sources, fn {path, _attr} -> path == [] end) and
+        not references_extension?(lens)
     end
 
     resource |> Lens.for_resource() |> Enum.split_with(projectable?)
   end
+
+  # A collapse with `{:extension, _}` states reads the extension table in its
+  # forward direction (`ext."column" = 'state'`) -- the ledger row carries no
+  # extension columns, so the projection cannot speak for it. The extension
+  # state's own write path is the trigger's; the observation envelope
+  # reports the attribute as unprojected rather than guessing.
+  defp references_extension?(%Lens{combinator: :collapse, entry: entry}) do
+    Lens.extension_state_columns(entry) != []
+  end
+
+  defp references_extension?(_lens), do: false
 
   defp project_sql(selects) do
     cols =
