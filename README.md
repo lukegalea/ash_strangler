@@ -798,6 +798,33 @@ right for cache invalidation and live views, and wrong for an audit trail.
 
 ---
 
+## Shared rows, extensions, and observations
+
+The compatibility view and the legacy relation are **the same PostgreSQL
+rows**, in one database and one transaction. Host-only attributes live beside
+them in one extension table per resource; the view LEFT JOINs it, and the
+INSTEAD OF trigger writes both stores atomically. A tenant is derived from the
+legacy row. A lifecycle is one `collapse` shared by the view, trigger and
+AshStateMachine -- each legacy-unrepresentable state declares its answer
+(extension / refuse / lossy / derived).
+
+The durable ledger can feed two distinct modes:
+
+- **Materialisation** (`mix ash_strangler.gen.ingester`): populate a distinct,
+  host-owned representation through ordinary Ash actions. The ingester does
+  not re-run an action to make a shared-row change "count".
+- **Observation** (`mix ash_strangler.gen.observer`): project the ledger's
+  before/after row images into a versioned envelope, with a baseline at watch
+  start, per-consumer receipts, retry/quarantine/replay, and joined-read
+  invalidations. Observations are facts about row changes, not replayable
+  actions.
+
+Both modes rely on one database transaction; cross-database guarantees are
+change data capture and out of scope. See the
+[`shared-rows`](documentation/topics/shared-rows.md),
+[`observations`](documentation/topics/observations.md), and
+[`platform conventions`](documentation/topics/platform-conventions.md) topics.
+
 ## The change ledger
 
 Notifications are at-most-once, and a listener that is down misses writes with
@@ -863,24 +890,29 @@ Requires PostgreSQL 14+ and `ash_postgres`.
 
 ## Documentation
 
-- [How it works](documentation/topics/how-it-works.md) — the mechanism from first principles
-- [The phase model](documentation/topics/phases.md) — what each phase generates, and how to move
-- [What it refuses to generate](documentation/topics/what-it-refuses.md) — every check and the failure it prevents
+- [How it works](documentation/topics/how-it-works.md) -- the mechanism from first principles
+- [Shared rows](documentation/topics/shared-rows.md) -- one database, two schemas, one transaction
+- [Out-of-resource mappings](documentation/topics/out-of-resource-mappings.md) -- Spark fragments
+- [Extension stores](documentation/topics/extension-stores.md) -- host-owned columns beside legacy rows
+- [State machines over collapse](documentation/topics/state-machines-over-collapse.md) -- one lifecycle answer
+- [Observations](documentation/topics/observations.md) -- envelope, baseline, receipts, replay, invalidations
+- [Integrating with an existing host](documentation/topics/integrating-with-a-host.md) -- literal walkthrough
+- [Platform conventions](documentation/topics/platform-conventions.md) -- provenance, archival, AshEvents
+- [The phase model](documentation/topics/phases.md) -- what each phase generates, and how to move
+- [What it refuses to generate](documentation/topics/what-it-refuses.md) -- every check and the failure it prevents
 - [Backfill and reconciliation](documentation/topics/backfill-and-reconciliation.md)
 - [Notifications](documentation/topics/notifications.md)
-- [The change ledger](documentation/topics/the-change-ledger.md) — durable capture of every
-  legacy write, the at-least-once drain, and why the table is infrastructure not a resource
-- [The transform layer](documentation/topics/the-transform-layer.md) — why a SQL string was the
-  wrong centre for this DSL, the combinator grammar and the proof obligations that replaced it,
-  and the PostgreSQL measurements behind mechanism tiering
+- [The change ledger](documentation/topics/the-change-ledger.md) -- durable capture of every legacy write
+- [The transform layer](documentation/topics/the-transform-layer.md) -- the typed grammar and proof obligations
 - [DSL reference](documentation/dsls/DSL-AshStrangler.Resource.md)
-- [`usage-rules.md`](usage-rules.md) — rules for AI coding agents editing a mapping
+- [`usage-rules.md`](usage-rules.md) -- rules for AI coding agents editing a mapping
 
 ## Status
 
-**Alpha (0.1).** All four phases generate SQL that is executed and tested against a
-real PostgreSQL server, including a full migrate → rollback → migrate cycle. The
-DSL will still change — pin an exact version. See [CHANGELOG.md](CHANGELOG.md).
+**Alpha (0.4.0; release pending human merge/tag).** The shared-rows, lifecycle,
+observation and platform-convention trains run against real PostgreSQL. The
+version is set for v0.4.0; human PR merges and the annotated release tag remain
+pending. See [CHANGELOG.md](CHANGELOG.md).
 
 > [!IMPORTANT]
 > The mapping DSL was rewritten and the string-based form is **gone, not
@@ -903,7 +935,7 @@ DSL will still change — pin an exact version. See [CHANGELOG.md](CHANGELOG.md)
 Issues and pull requests welcome. The suite runs against a real PostgreSQL: `mix
 test` with a server on `localhost:5432`, or set `DB_HOST` and `PGPORT`.
 
-Agents: read [AGENTS.md](AGENTS.md) before you change this repository. It links the agent constitution (`AGENT_PRINCIPLES.md`).
+Agents operating in the repository: read AGENTS.md before changing it; it links the agent constitution.
 
 ## License
 

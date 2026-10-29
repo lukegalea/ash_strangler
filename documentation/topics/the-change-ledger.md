@@ -111,12 +111,14 @@ processed before the sweep gets to it. A record nobody is woken for is a
 backlog with a timer on it, and "the drain runs when the cron says" is not what
 anyone enabling a change ledger asked for.
 
-The ledger is emitted only while the legacy relation is a real table —
-`:read_from_legacy` and `:dual_write`. At `:read_from_new` the legacy name is a
-*view*, PostgreSQL rejects row-level `AFTER` triggers on a view outright, and
-the verifier refuses `ledger?` there rather than emitting a migration that
-cannot run. Nothing is lost: past cutover the writes worth recording are Ash's
-own, and Ash's event log records them at their source.
+The ledger is emitted in `:read_from_legacy`, `:dual_write`, **and
+`:read_from_new`** (v0.4.0 correction). In `:read_from_new` the legacy name
+is the reverse *view*, so the trigger follows the **owned table** -- the
+reverse view's source -- instead. Compatibility writes through that reverse
+view fire no Ash notifier; capture continues for as long as any compatibility
+writer exists. The claim that Ash's own events cover writes past cutover is
+true only if every writer goes through Ash. `Sql.Notify` remains refused in
+this phase, because PostgreSQL rejects row-level triggers on a view.
 
 ---
 

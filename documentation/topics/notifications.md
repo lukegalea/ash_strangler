@@ -137,15 +137,18 @@ from a compile-time DSL literal and is never interpolated from anything supplied
 at runtime — Postgrex has had channel-name escaping CVEs, and a name that cannot
 vary cannot carry an injection.
 
-The relation the trigger is attached to is the **twin's** — read off its
-`postgres do table/schema end` rather than named a second time in the `strangler`
-block. So this mechanism belongs to the phases in which that relation is a real
-table: `:read_from_legacy` and `:dual_write`. At `:read_from_new` the migration
-generator emits no notify trigger even with `notify? true`, and it has to not:
-the legacy name is the reverse *view* by then, and PostgreSQL rejects a row-level
-`AFTER` trigger on a view, so emitting it would produce a migration that cannot
-run. Nothing is lost — past cutover the writes worth hearing about are Ash's own,
-and Ash's notifiers already cover them.
+The compatibility notification trigger is attached to the **twin's** relation
+— read off its `postgres do table/schema end` rather than named a second time in
+the `strangler` block. So it belongs to the phases in which that relation is a
+real table: `:read_from_legacy` and `:dual_write`. At `:read_from_new` the legacy
+name is the reverse *view*, and PostgreSQL rejects a row-level `AFTER` trigger
+on a view, so `Sql.Notify` is not emitted.
+
+The durable ledger is different (v0.4.0 correction): `ledger?` remains valid
+there and its trigger follows the **owned table**, the reverse view's source.
+Legacy writes through the reverse view fire no Ash notifier; the statement
+"Ash's notifiers cover writes after cutover" is true only if every writer goes
+through Ash. See [the change ledger](the-change-ledger.md#past-cutover-read_from_new).
 
 ---
 
