@@ -51,23 +51,39 @@ defmodule AshStrangler.Observation.Processor do
   def drain(repo, resource, observers, opts \\ []) do
     batch = opts[:batch] || 100
     scope = opts[:scope] || configured_resources()
-    max_attempts = Application.get_env(:ash_strangler, :observer_max_attempts, @max_attempts_default)
+
+    max_attempts =
+      Application.get_env(:ash_strangler, :observer_max_attempts, @max_attempts_default)
 
     repo.transaction(fn ->
       rows = claim(repo, resource, batch)
 
-      Enum.each(rows, fn row ->
-        observation = Observation.project(resource, row, repo)
-        stored_id = store_observation(repo, observation)
-        observation = %{observation | id: stored_id}
+      errors =
+        Enum.flat_map(rows, fn row ->
+          observation = Observation.project(resource, row, repo)
+          stored_id = store_observation(repo, observation)
+          observation = %{observation | id: stored_id}
 
-        invalidations(repo, resource, row, scope)
+          invalidations(repo, resource, row, scope)
 
-        deliver(repo, observers, observation, max_attempts)
-      end)
+          deliver(repo, observers, observation, max_attempts)
+        end)
 
-      length(rows)
+      {length(rows), errors}
     end)
+    |> case do
+      {:ok, {count, []}} ->
+        {:ok, count}
+
+      # Receipts have committed; return the observer error to the worker so
+      # Oban retries. Re-running the batch finds the same observation id and
+      # receipt, increments attempts, and never duplicates the projection.
+      {:ok, {_count, errors}} ->
+        {:error, {:observer_errors, errors}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp claim(repo, resource, batch) do
@@ -118,44 +134,55 @@ defmodule AshStrangler.Observation.Processor do
 
   # Returns the STORED observation's id: on first insert the new one, on a
   # replay the original -- receipts key on it, and a replay that regenerated
-  # the uuid would silently reset every consumer's attempts.
+  # the uuid would silently reset every consumer's attempts. ON CONFLICT is a
+  # true no-op; recorded_at is not changed by replay.
   defp store_observation(repo, observation) do
     %Postgrex.Result{rows: rows} =
       repo.query!(
-      """
-      INSERT INTO "strangler_observations"
-        (id, source_event_id, baseline_group, category, resource, record_id, operation,
-         before, after, changed_attributes, invalidated_attributes, origin, attribution,
-         correlation_id, causation_id, mapping_version, source, captured_at, recorded_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
-      ON CONFLICT (source_event_id, resource) WHERE category = 'observation'
-      DO UPDATE SET recorded_at = now()
-      RETURNING id
-      """,
-      [
-        Ecto.UUID.dump!(observation.id),
-        observation.source_event_id,
-        nil,
-        to_string(observation.category),
-        to_string(observation.resource),
-        observation.record_id,
-        to_string(observation.operation),
-        dump_json(observation.before),
-        dump_json(observation.after),
-        dump_json(observation.changed_attributes),
-        dump_json(observation.invalidated_attributes),
-        to_string(observation.origin),
-        dump_json(observation.attribution),
-        observation.correlation_id,
-        observation.causation_id,
-        observation.mapping_version,
-        dump_json(observation.source),
-        observation.captured_at
-      ]
-    )
+        """
+        INSERT INTO "strangler_observations"
+          (id, source_event_id, baseline_group, category, resource, record_id, operation,
+           before, after, changed_attributes, invalidated_attributes, origin, attribution,
+           correlation_id, causation_id, mapping_version, source, captured_at, recorded_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now())
+        ON CONFLICT (source_event_id, resource) WHERE category = 'observation'
+        DO NOTHING
+        RETURNING id
+        """,
+        [
+          Ecto.UUID.dump!(observation.id),
+          observation.source_event_id,
+          nil,
+          to_string(observation.category),
+          to_string(observation.resource),
+          observation.record_id,
+          to_string(observation.operation),
+          dump_json(observation.before),
+          dump_json(observation.after),
+          dump_json(observation.changed_attributes),
+          dump_json(observation.invalidated_attributes),
+          to_string(observation.origin),
+          dump_json(observation.attribution),
+          observation.correlation_id,
+          observation.causation_id,
+          observation.mapping_version,
+          dump_json(observation.source),
+          observation.captured_at
+        ]
+      )
 
     case rows do
-      [[id]] -> Ecto.UUID.load(id) |> elem(1)
+      [[id]] ->
+        Ecto.UUID.load!(id)
+
+      [] ->
+        %Postgrex.Result{rows: [[id]]} =
+          repo.query!(
+            ~s(SELECT id FROM "strangler_observations" WHERE source_event_id = $1 AND resource = $2 AND category = 'observation'),
+            [observation.source_event_id, to_string(observation.resource)]
+          )
+
+        Ecto.UUID.load!(id)
     end
   end
 
@@ -227,45 +254,73 @@ defmodule AshStrangler.Observation.Processor do
   end
 
   defp deliver(repo, observers, observation, max_attempts) do
-    Enum.each(observers, fn observer ->
-      # A closed receipt ("ok") never re-delivers; a quarantined one is
+    Enum.flat_map(observers, fn observer ->
+      # A closed receipt ("ok") never re-delivers; a quarantined receipt is
       # re-delivered ONLY by replay (deleting the receipt), never by a drain.
       if receipt_state(repo, observer, observation.id) in [nil, "error"] do
         case observer.handle_observation(observation, %{repo: repo}) do
           :ok ->
             write_receipt(repo, observer, observation.id, "ok", 0, nil)
+            []
 
           {:quarantine, reason} ->
             write_receipt(repo, observer, observation.id, "quarantined", 0, inspect(reason))
+            []
 
           {:error, reason} ->
-            attempts = attempts(repo, observer, observation.id) + 1
+            retryable? = attempts(repo, observer, observation.id) + 1 < max_attempts
 
-            if attempts >= max_attempts do
-              write_receipt(repo, observer, observation.id, "quarantined", attempts, inspect(reason))
+            if retryable? do
+              write_receipt(
+                repo,
+                observer,
+                observation.id,
+                "error",
+                attempts(repo, observer, observation.id) + 1,
+                inspect(reason)
+              )
+
+              [{observer, observation.source_event_id, reason}]
             else
-              write_receipt(repo, observer, observation.id, "error", attempts, inspect(reason))
+              write_receipt(
+                repo,
+                observer,
+                observation.id,
+                "quarantined",
+                max_attempts,
+                inspect(reason)
+              )
+
+              []
             end
         end
+      else
+        []
       end
     end)
   end
 
   defp receipt_state(repo, observer, observation_id) do
-    case repo.query!("SELECT state FROM \"strangler_receipts\" WHERE consumer = $1 AND observation_id = $2", [
-           to_string(observer),
-           Ecto.UUID.dump!(observation_id)
-         ]) do
+    case repo.query!(
+           "SELECT state FROM \"strangler_receipts\" WHERE consumer = $1 AND observation_id = $2",
+           [
+             to_string(observer),
+             Ecto.UUID.dump!(observation_id)
+           ]
+         ) do
       %Postgrex.Result{rows: [[state]]} -> state
       %Postgrex.Result{rows: []} -> nil
     end
   end
 
   defp attempts(repo, observer, observation_id) do
-    case repo.query!("SELECT attempts FROM \"strangler_receipts\" WHERE consumer = $1 AND observation_id = $2", [
-           to_string(observer),
-           Ecto.UUID.dump!(observation_id)
-         ]) do
+    case repo.query!(
+           "SELECT attempts FROM \"strangler_receipts\" WHERE consumer = $1 AND observation_id = $2",
+           [
+             to_string(observer),
+             Ecto.UUID.dump!(observation_id)
+           ]
+         ) do
       %Postgrex.Result{rows: [[attempts]]} -> attempts
       %Postgrex.Result{rows: []} -> 0
     end
@@ -306,6 +361,7 @@ defmodule AshStrangler.Observation.Processor do
     do: Map.new(map, fn {k, v} -> {to_string(k), jsonable(v)} end)
 
   defp jsonable(list) when is_list(list), do: Enum.map(list, &jsonable/1)
+
   defp jsonable(<<_::128>> = uuid) do
     case Ecto.UUID.load(uuid) do
       {:ok, string} -> string

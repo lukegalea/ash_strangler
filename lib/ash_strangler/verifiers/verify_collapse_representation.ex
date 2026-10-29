@@ -127,19 +127,21 @@ defmodule AshStrangler.Verifiers.VerifyCollapseRepresentation do
   end
 
   defp represented_errors(state) do
-    [
-      if(state.when != nil,
-        do:
-          "state #{inspect(state.value)} declares a `representation:` and takes no `when:` -- there is no legacy encoding to guard on",
-        else: nil
-      ),
-      if(state.set not in [nil, []],
-        do:
-          "state #{inspect(state.value)} declares a `representation:` and takes no `set:` -- there is no legacy column to write",
-        else: nil
-      )
-    ]
-    |> Enum.reject(&is_nil/1)
+    when_error =
+      if is_nil(state.when) do
+        nil
+      else
+        "state #{inspect(state.value)} declares a `representation:` and takes no `when:` -- there is no legacy encoding to guard on"
+      end
+
+    set_error =
+      if state.set in [nil, []] do
+        nil
+      else
+        "state #{inspect(state.value)} declares a `representation:` and takes no `set:` -- there is no legacy column to write"
+      end
+
+    Enum.reject([when_error, set_error], &is_nil/1)
   end
 
   defp lossy_errors(_entry, state, states_by_value) do

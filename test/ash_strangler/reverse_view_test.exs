@@ -171,7 +171,13 @@ defmodule AshStrangler.ReverseViewTest do
 
       names = resource |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
-      assert names == [:strangler_widgets_reverse_view]
+      assert names == [
+               :strangler_widgets_reverse_view,
+               :strangler_observations_table,
+               :strangler_observations_event_index,
+               :strangler_observations_baseline_index,
+               :strangler_receipts_table
+             ]
 
       refute Enum.any?(names, &(&1 |> to_string() |> String.contains?("notify")))
     end

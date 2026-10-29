@@ -229,7 +229,8 @@ defmodule AshStrangler.Observation do
   end
 
   defp record_id(key, relation, primary_key) do
-    KeyDerivation.derive(key, relation, Map.get(primary_key, key.from))
+    legacy_id = Map.get(primary_key, key.from) || Map.get(primary_key, to_string(key.from))
+    KeyDerivation.derive(key, relation, legacy_id)
   end
 
   defp origin(nil), do: :unknown

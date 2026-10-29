@@ -108,17 +108,14 @@ defmodule Mix.Tasks.AshStrangler.Gen.Observer do
       # observation store's partial unique index and the receipts carry
       # idempotence instead, which is what makes replay safe.
       defp drain_batch do
-        case #{inspect(repo)}.transaction(fn ->
-               AshStrangler.Observation.Processor.drain(
-                 #{inspect(repo)},
-                 #{inspect(resource)},
-                 @observers,
-                 batch: @batch_size
-               )
-             end) do
-          {:ok, count} -> {:ok, count}
-          {:error, reason} -> {:error, reason}
-        end
+        # Processor.drain owns the repo transaction: observer errors commit
+        # their receipts, then return an error so Oban retries the job.
+        AshStrangler.Observation.Processor.drain(
+          #{inspect(repo)},
+          #{inspect(resource)},
+          @observers,
+          batch: @batch_size
+        )
       end
     end
     """

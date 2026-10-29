@@ -10,11 +10,8 @@ defmodule AshStrangler.Context do
   trigger writes in that transaction carries WHO and WHY:
 
       AshStrangler.Context.set(Repo,
-        origin: :host,
-        actor: user.id,
-        correlation_id: correlation_id,
+        [origin: :host, actor: user.id, correlation_id: correlation_id],
         fn -> Ash.create!(Contract, params) end)
-
   The values travel in `ash_strangler.*` custom GUCs, set with
   `set_config(..., true)` — transaction-local, so they die with the
   transaction and cannot leak into a neighbour. The ledger trigger reads them
@@ -39,14 +36,12 @@ defmodule AshStrangler.Context do
     actor: "ash_strangler.actor"
   ]
 
-  def set(repo, opts, fun)
-
   def set(repo, opts, fun) when is_list(opts) and is_function(fun, 0) do
-    apply!(repo, Keyword.delete(opts, :do), fun)
+    case repo.transaction(fn -> apply!(repo, opts, fun) end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
   end
-
-  # Direct call form, no block.
-  def set(repo, opts) when is_list(opts), do: set(repo, Keyword.delete(opts, :do), opts[:do])
 
   @doc """
   For code that manages its own transaction: the `set_config` statements to

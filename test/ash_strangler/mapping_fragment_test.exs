@@ -165,8 +165,11 @@ defmodule AshStrangler.MappingFragmentTest do
   # --- the product --------------------------------------------------------------
 
   test "a fragment-declared mapping generates byte-identical DDL to the inline one" do
-    inline = AshStrangler.Migration.statements(AshStrangler.MappingFragmentTest.FragmentInlineUser)
-    via_fragment = AshStrangler.Migration.statements(AshStrangler.MappingFragmentTest.FragmentMappedUser)
+    inline =
+      AshStrangler.Migration.statements(AshStrangler.MappingFragmentTest.FragmentInlineUser)
+
+    via_fragment =
+      AshStrangler.Migration.statements(AshStrangler.MappingFragmentTest.FragmentMappedUser)
 
     assert via_fragment == inline
 
@@ -205,11 +208,15 @@ defmodule AshStrangler.MappingFragmentTest do
   # --- the target declaration ---------------------------------------------------
 
   test "verify_target accepts the fragment attached to its declared resource" do
-    assert :ok = AshStrangler.Mapping.verify_target(AshStrangler.MappingFragmentTest.FragmentMappedUser)
+    assert :ok =
+             AshStrangler.Mapping.verify_target(
+               AshStrangler.MappingFragmentTest.FragmentMappedUser
+             )
   end
 
   test "verify_target refuses the fragment attached to any other resource" do
-    assert {:error, message} = AshStrangler.Mapping.verify_target(AshStrangler.MappingFragmentTest.ProbeWrongTarget)
+    assert {:error, message} =
+             AshStrangler.Mapping.verify_target(AshStrangler.MappingFragmentTest.ProbeWrongTarget)
 
     assert message =~
              "mapping AshStrangler.Test.WrongTargetUsersMapping declares target " <>

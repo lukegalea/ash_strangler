@@ -41,26 +41,37 @@ defmodule Mix.Tasks.AshStrangler.Baseline do
         name -> Module.concat([name])
       end
 
-    {:ok, _} = repo.start_link([])
-
     run_opts =
       [repo: repo] ++ if(opts[:group], do: [group: Ecto.UUID.cast!(opts[:group])], else: [])
 
-    case AshStrangler.Observation.Baseline.run(resource, run_opts) do
-      {:ok, %{group: group, count: count}} ->
-        Mix.shell().info("baseline #{group}: #{count} observation(s) for #{inspect(resource)}")
+    with_repo(repo, fn repo ->
+      case AshStrangler.Observation.Baseline.run(resource, Keyword.put(run_opts, :repo, repo)) do
+        {:ok, %{group: group, count: count}} ->
+          Mix.shell().info("baseline #{group}: #{count} observation(s) for #{inspect(resource)}")
 
-      {:error, :no_ledger} ->
-        Mix.raise(
-          "#{inspect(resource)} has no `ledger? true` -- a baseline without the ledger trigger loses everything committed after the snapshot"
-        )
+        {:error, :no_ledger} ->
+          Mix.raise(
+            "#{inspect(resource)} has no `ledger? true` -- a baseline without the ledger trigger loses everything committed after the snapshot"
+          )
 
-      {:error, reason} ->
-        Mix.raise("baseline failed: #{inspect(reason)}")
-    end
+        {:error, reason} ->
+          Mix.raise("baseline failed: #{inspect(reason)}")
+      end
+    end)
   end
 
   defp repo_for(resource) do
     AshPostgres.DataLayer.Info.repo(resource)
+  end
+
+  defp with_repo(repo, fun) do
+    if Process.whereis(repo) do
+      fun.(repo)
+    else
+      case Ecto.Migrator.with_repo(repo, fun) do
+        {:ok, result, _apps} -> result
+        {:error, reason} -> Mix.raise("could not start #{inspect(repo)}: #{inspect(reason)}")
+      end
+    end
   end
 end

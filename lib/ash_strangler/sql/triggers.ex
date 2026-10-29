@@ -429,9 +429,9 @@ defmodule AshStrangler.Sql.Triggers do
     columns = extension_columns(ctx)
     values = extension_values(ctx)
 
+    # The CASE references NEW.<attr>, which is in scope inside
+    # DO UPDATE SET too -- the same spelling works in both positions.
     sets =
-      # The CASE references NEW.<attr>, which is in scope inside
-      # DO UPDATE SET too -- the same spelling works in both positions.
       (Enum.map(ctx.extension_attrs, fn attribute ->
          ~s("#{attribute}" = NEW.#{attribute})
        end) ++

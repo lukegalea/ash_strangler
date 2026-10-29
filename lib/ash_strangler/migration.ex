@@ -49,7 +49,8 @@ defmodule AshStrangler.Migration do
           # writers going through the reverse view, which fire NO Ash notifier.
           # The claim that Ash's own events cover writes past cutover is true
           # only if every writer goes through Ash.
-          Sql.ReverseView.build(resource) ++ Sql.Ledger.build(resource)
+          Sql.ReverseView.build(resource) ++
+            Sql.Ledger.build(resource) ++ Observation.Store.statements()
 
         phase ->
           %{view: view, key_index: key_index} = Sql.View.build(resource)
