@@ -7,10 +7,9 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
   The ENTIRE strangler mapping for `AshStrangler.Test.Contract`, declared
   outside the resource — the R1.1 proof shape this fixture exists in.
 
-  The resource file contains no `strangler` block and no `extensions:`; the
-  fragment carries both, and `mapping_fragment_test.exs` proved inline ==
-  fragment DDL byte-for-byte. This is the same arrangement, live against the
-  `legacy.clm_contracts` rows.
+  The lifecycle is the handoff §5 collapse: legacy encodes only `processed`,
+  `verified` and `archived`; everything else the contract can BE has a
+  declared answer (extension / refuse / lossy / derived).
   """
 
   use AshStrangler.Mapping, resource: AshStrangler.Test.Contract
@@ -33,12 +32,6 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
       map :renewal_end_date, from: :renewal_end_date
       map :value, from: :value
       map :payment_term, from: :payment_term
-      map :processed, from: :processed
-      map :verified, from: :verified
-
-      # Naive legacy timestamp, recorded in UTC — `zone:` bridges it, and its
-      # collapse clause (R2) stamps it through the write direction.
-      map :archived_at, from: :archived, zone: "UTC"
 
       map :vendor_party_id, from: :service_provider_party_id
       map :client_party_id, from: :client_party_id
@@ -54,6 +47,39 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
 
       # Tenancy is a fact about the client party's row, derived once.
       tenant :organization_id, derive: expr(client_party.organization_id)
+
+      # THE lifecycle. Clause order is declaration order; the extension state
+      # reads first, the fallback last. The `active`/`terminated` sets write
+      # the booleans so the backward direction is total and canonical: a
+      # transition INTO the state stamps the legacy encoding, and the
+      # legacy-encoded rows read back as the state they encode.
+      collapse :lifecycle_state do
+        hit_policy :first
+
+        state :negotiating, representation: {:extension, :lifecycle_state}
+        state :archived, when: expr(not is_nil(archived)), set: [archived: expr(now())]
+        state :expired, when: expr(expiry_date < fragment("CURRENT_DATE")), derived: true
+        state :active, when: expr(processed and verified), set: [processed: true, verified: true]
+
+        state :terminated,
+          when: expr(processed and not verified),
+          set: [processed: true, verified: false]
+
+        state :ready_to_execute,
+          representation:
+            {:lossy,
+             to: :draft,
+             loss:
+               "terms finalised but not executed; legacy only knows un-executed contracts as draft"}
+
+        state :cancelled,
+          representation:
+            {:refuse,
+             reason:
+               "legacy clm_contracts has no cancelled encoding; cancelling is refused while legacy is authoritative"}
+
+        state :draft, when: :otherwise, set: [processed: false, verified: false]
+      end
     end
   end
 end
@@ -64,15 +90,17 @@ defmodule AshStrangler.Test.Contract do
   handoff §5 contract — with the mapping entirely external (see
   `AshStrangler.Test.Legacy.ContractMapping`).
 
-  Every acceptance property of the strangler is asserted against rows this
-  resource shares with raw SQL on both sides: legacy edits read through with
-  no sync job, host writes are visible to legacy immediately, and a command
-  touching shared and extension data fails atomically.
+  The lifecycle is an `AshStateMachine` over the collapse: every command is a
+  named update whose only state change is its declared transition, and there
+  is **no primary `:update`** — an executed contract is never edited, it is
+  amended. The absence of any generic edit path is the enforcement; the
+  lifecycle tests also assert a raw state write is refused.
   """
 
   use Ash.Resource,
     domain: AshStrangler.Test.Domain,
     data_layer: AshPostgres.DataLayer,
+    extensions: [AshStateMachine],
     fragments: [AshStrangler.Test.Legacy.ContractMapping]
 
   postgres do
@@ -96,14 +124,54 @@ defmodule AshStrangler.Test.Contract do
     attribute :renewal_end_date, :date, public?: true
     attribute :value, :decimal, public?: true
     attribute :payment_term, :string, public?: true
-    attribute :processed, :boolean, public?: true, default: false
-    attribute :verified, :boolean, public?: true, default: false
-    attribute :archived_at, :utc_datetime_usec, public?: true
     attribute :vendor_party_id, :uuid, public?: true
     attribute :client_party_id, :uuid, public?: true
     attribute :vendor_name, :string, public?: true
     attribute :organization_id, :uuid, public?: true
     attribute :negotiating_notes, :string, public?: true, default: ""
+
+    attribute :lifecycle_state, :atom do
+      public? true
+      allow_nil? false
+      default :draft
+
+      constraints one_of: [
+                    :draft,
+                    :negotiating,
+                    :ready_to_execute,
+                    :active,
+                    :terminated,
+                    :archived,
+                    :cancelled,
+                    :expired
+                  ]
+    end
+  end
+
+  state_machine do
+    initial_states [:draft]
+    default_initial_state :draft
+    state_attribute :lifecycle_state
+
+    # :expired has no command — it is a function of expiry_date, not a
+    # transition — so the machine is told about it here rather than through a
+    # transition that could never fire.
+    extra_states [:expired]
+
+    transitions do
+      transition :negotiate_terms, from: :draft, to: :negotiating
+      transition :finalise_terms, from: :negotiating, to: :ready_to_execute
+      # :ready_to_execute is lossy -- it reads back as :draft -- so the
+      # machine that traverses it must accept the read-back spelling, or the
+      # lossy declaration would make its own forward path unreachable.
+      transition :execute, from: [:ready_to_execute, :draft], to: :active
+      transition :amend, from: :active, to: :active
+      transition :renew, from: :active, to: :active
+      transition :extend, from: :active, to: :active
+      transition :terminate, from: :active, to: :terminated
+      transition :cancel, from: [:draft, :negotiating, :ready_to_execute], to: :cancelled
+      transition :archive, from: :terminated, to: :archived
+    end
   end
 
   actions do
@@ -118,9 +186,6 @@ defmodule AshStrangler.Test.Contract do
       :renewal_end_date,
       :value,
       :payment_term,
-      :processed,
-      :verified,
-      :archived_at,
       :vendor_party_id,
       :client_party_id,
       :negotiating_notes
@@ -130,8 +195,102 @@ defmodule AshStrangler.Test.Contract do
       primary? true
     end
 
-    update :update do
-      primary? true
+    update :negotiate_terms do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      accept [
+        :name,
+        :description,
+        :effective_date,
+        :expiry_date,
+        :renewal_start_date,
+        :renewal_end_date,
+        :value,
+        :payment_term,
+        :vendor_party_id,
+        :client_party_id,
+        :negotiating_notes
+      ]
+
+      change transition_state(:negotiating)
+    end
+
+    update :finalise_terms do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      change transition_state(:ready_to_execute)
+    end
+
+    update :execute do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      change transition_state(:active)
+    end
+
+    update :amend do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      accept [:name, :description, :value, :payment_term, :negotiating_notes]
+      change transition_state(:active)
+    end
+
+    update :renew do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      accept [:renewal_start_date, :renewal_end_date]
+      change transition_state(:active)
+    end
+
+    update :extend do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      accept [:expiry_date]
+      change transition_state(:active)
+    end
+
+    update :terminate do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      change transition_state(:terminated)
+    end
+
+    update :cancel do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      change transition_state(:cancelled)
+    end
+
+    update :archive do
+      # Atomicity is delivered by the INSTEAD OF trigger's single statement;
+      # the machine's atomic guard expression cannot compile against a
+      # view-backed data layer.
+      require_atomic? false
+
+      change transition_state(:archived)
     end
   end
 

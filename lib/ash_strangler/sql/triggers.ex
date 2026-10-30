@@ -135,7 +135,17 @@ defmodule AshStrangler.Sql.Triggers do
             key,
             fn {_path, _attribute} -> "stored.#{key.from}" end
           ),
-      extension_attrs: Info.extension_attrs(resource_or_dsl)
+      extension_attrs: Info.extension_attrs(resource_or_dsl),
+      # Implicit extension-state columns: `{column, rendered CASE}` from every
+      # collapse with `{:extension, _}` states. The CASE is over the collapse
+      # attribute in the NEW frame, so an unrelated update of a row sitting in
+      # an extension state re-writes what it reads, and a transition out of
+      # one NULLs the column.
+      extension_state_values: extension_state_values(resource_or_dsl),
+      # `{:refuse, _}` and `derived:` states RAISE before anything is written:
+      # the transition aborts the transaction, with the declared reason (or
+      # the structural one) quoted in the message.
+      refuse_states: refuse_states(resource_or_dsl)
     }
 
     Enum.flat_map([:insert, :update, :delete], fn operation ->
@@ -143,6 +153,46 @@ defmodule AshStrangler.Sql.Triggers do
         function_statement(context, operation),
         trigger_statement(context, operation)
       ]
+    end)
+  end
+
+  defp extension_state_values(resource_or_dsl) do
+    resource_or_dsl
+    |> Lens.for_resource()
+    |> Enum.filter(&(&1.combinator == :collapse))
+    |> Enum.flat_map(fn lens ->
+      column = Lens.extension_state_columns(lens.entry) |> List.first()
+      case_expr = Lens.extension_state_write(lens.entry)
+
+      if column && case_expr do
+        [{column, Printer.to_sql(case_expr, ref: Printer.new_frame())}]
+      else
+        []
+      end
+    end)
+  end
+
+  # Every state a write cannot store, with the message it is refused in.
+  # `{:refuse, reason}` declares its own; a `derived:` state refuses
+  # structurally -- it is a function of the data, so a stored value could
+  # never agree with the reads, and the machine layer refuses the transition
+  # before this guard is ever the one to fire.
+  defp refuse_states(resource_or_dsl) do
+    resource_or_dsl
+    |> Lens.for_resource()
+    |> Enum.filter(&(&1.combinator == :collapse))
+    |> Enum.flat_map(fn lens ->
+      Enum.flat_map(lens.entry.states, fn
+        %{representation: {:refuse, reason}} = state ->
+          [{lens.attribute, state.value, reason}]
+
+        %{derived: true, representation: nil} = state ->
+          reason = "a derived state is a function of the legacy data, never a value to store"
+          [{lens.attribute, state.value, reason}]
+
+        _state ->
+          []
+      end)
     end)
   end
 
@@ -268,7 +318,7 @@ defmodule AshStrangler.Sql.Triggers do
     DECLARE
       stored #{ctx.relation}%ROWTYPE;
     BEGIN
-    #{read_only_guards(ctx, :insert)}  INSERT INTO #{ctx.relation} (#{columns})
+    #{refuse_guards(ctx, :insert)}#{read_only_guards(ctx, :insert)}  INSERT INTO #{ctx.relation} (#{columns})
       VALUES (#{values})
       RETURNING * INTO stored;
 
@@ -304,7 +354,7 @@ defmodule AshStrangler.Sql.Triggers do
     DECLARE
       stored #{ctx.relation}%ROWTYPE;
     BEGIN
-    #{read_only_guards(ctx, :update)}  -- Keyed off __legacy_id rather than the derived uuid: the derivation is
+    #{refuse_guards(ctx, :update)}#{read_only_guards(ctx, :update)}  -- Keyed off __legacy_id rather than the derived uuid: the derivation is
       -- one-way, and re-deriving it in SQL to compare would be slower and
       -- another place for the two sides to disagree.
       UPDATE #{ctx.relation}
@@ -360,11 +410,11 @@ defmodule AshStrangler.Sql.Triggers do
   # is what keeps a partially-deleted row from being visible: if the legacy
   # delete fails, the whole transaction rolls back, extension row included.
 
-  defp extension_insert(%{extension_attrs: []}), do: ""
+  defp extension_insert(%{extension_attrs: [], extension_state_values: []}), do: ""
 
   defp extension_insert(ctx) do
     columns = extension_columns(ctx)
-    values = [ctx.extension_pk_expr | Enum.map(ctx.extension_attrs, &"NEW.#{&1}")]
+    values = extension_values(ctx)
 
     """
         INSERT INTO #{ctx.extension_relation} (#{columns})
@@ -373,16 +423,30 @@ defmodule AshStrangler.Sql.Triggers do
     """
   end
 
-  defp extension_upsert(%{extension_attrs: []}), do: ""
+  defp extension_upsert(%{extension_attrs: [], extension_state_values: []}), do: ""
 
   defp extension_upsert(ctx) do
     columns = extension_columns(ctx)
-    values = [ctx.extension_pk_expr | Enum.map(ctx.extension_attrs, &"NEW.#{&1}")]
+    values = extension_values(ctx)
 
-    sets =
+    # The CASE references NEW.<attr>, which is in scope inside
+    # DO UPDATE SET too -- the same spelling works in both positions.
+    attribute_sets =
       Enum.map_join(ctx.extension_attrs, ", ", fn attribute ->
         ~s("#{attribute}" = NEW.#{attribute})
       end)
+
+    state_sets =
+      Enum.map_join(ctx.extension_state_values, ", ", fn {column, case_sql} ->
+        ~s("#{column}" = #{case_sql})
+      end)
+
+    sets =
+      case {attribute_sets, state_sets} do
+        {"", state_sets} -> state_sets
+        {attribute_sets, ""} -> attribute_sets
+        {attribute_sets, state_sets} -> attribute_sets <> ", " <> state_sets
+      end
 
     """
         INSERT INTO #{ctx.extension_relation} (#{columns})
@@ -392,7 +456,7 @@ defmodule AshStrangler.Sql.Triggers do
     """
   end
 
-  defp extension_delete(%{extension_attrs: []}), do: ""
+  defp extension_delete(%{extension_attrs: [], extension_state_values: []}), do: ""
 
   defp extension_delete(ctx) do
     """
@@ -401,8 +465,63 @@ defmodule AshStrangler.Sql.Triggers do
     """
   end
 
-  defp extension_columns(ctx),
-    do: Enum.map_join([ctx.extension_pk | ctx.extension_attrs], ", ", &~s("#{&1}"))
+  defp extension_columns(%{
+         extension_pk: pk,
+         extension_attrs: attrs,
+         extension_state_values: state_values
+       }) do
+    Enum.map_join([pk | attrs] ++ Enum.map(state_values, &elem(&1, 0)), ", ", &~s("#{&1}"))
+  end
+
+  defp extension_values(%{
+         extension_pk_expr: pk_expr,
+         extension_attrs: attrs,
+         extension_state_values: state_values
+       }) do
+    [pk_expr] ++
+      Enum.map(attrs, &"NEW.#{&1}") ++
+      Enum.map(state_values, fn {_column, case_sql} -> case_sql end)
+  end
+
+  # Raises when a write carries a state the legacy schema cannot store,
+  # quoting the declaration's own reason. The transition aborts the
+  # transaction -- "refused while legacy is authoritative" is enforced here,
+  # in the same transaction the write would have committed in, not in a
+  # validator that only runs on days somebody remembers to run it.
+  #
+  # On INSERT the guard fires only for a non-NULL value, since every column of
+  # the view is present in NEW whether the client mentioned it or not; on
+  # UPDATE the value itself is refusal enough -- re-writing the state a row
+  # already holds cannot be refused, and no row legitimately holds one of
+  # these values anyway, because nothing was ever allowed to store it.
+  defp refuse_guards(%{refuse_states: []}, _operation), do: ""
+
+  defp refuse_guards(ctx, :insert) do
+    ctx.refuse_states
+    |> Enum.map_join("", fn {attribute, value, reason} ->
+      """
+        IF NEW.#{attribute} IS NOT NULL AND NEW.#{attribute} = #{Printer.literal(value)} THEN
+          RAISE EXCEPTION 'strangler: state #{state_label(value)} is unrepresentable in legacy: %', #{quote_literal(reason)} USING ERRCODE = 'P0001';
+        END IF;
+
+      """
+    end)
+  end
+
+  defp refuse_guards(ctx, :update) do
+    ctx.refuse_states
+    |> Enum.map_join("", fn {attribute, value, reason} ->
+      """
+        IF NEW.#{attribute} = #{Printer.literal(value)} THEN
+          RAISE EXCEPTION 'strangler: state #{state_label(value)} is unrepresentable in legacy: %', #{quote_literal(reason)} USING ERRCODE = 'P0001';
+        END IF;
+
+      """
+    end)
+  end
+
+  defp state_label(value) when is_atom(value), do: ":#{value}"
+  defp state_label(value), do: inspect(value)
 
   # `on_update: :changed_columns` wraps each assignment so a column whose value did
   # not change keeps the value it had. See the `on_update` option for why this is a

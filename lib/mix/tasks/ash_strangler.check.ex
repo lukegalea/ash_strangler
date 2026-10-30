@@ -189,7 +189,32 @@ defmodule Mix.Tasks.AshStrangler.Check do
       read-only  #{read_only_summary(read_only)}#{joins_summary(resource)}
       mechanism  #{mechanism_summary(resource)}#{upsert_warning(resource, Info.writes(resource))}\
       #{tenant_summary(resource)}\
+      #{declared_losses(resource)}\
     """)
+  end
+
+  # A declared loss is a decision, and this is where it stays visible: every
+  # `{:lossy, to:, loss:}` state prints its reason verbatim, so a check run is
+  # the record of what a read will quietly collapse. A loss nobody can see is
+  # a loss somebody will rediscover in production.
+  defp declared_losses(resource) do
+    losses =
+      resource
+      |> Info.mappings()
+      |> Enum.filter(&is_struct(&1, AshStrangler.Collapse))
+      |> Enum.flat_map(fn collapse ->
+        for %{representation: {:lossy, to, loss}} <- collapse.states do
+          "  #{inspect(collapse.attribute)} #{inspect(to)} — #{loss}"
+        end
+      end)
+
+    case losses do
+      [] ->
+        ""
+
+      losses ->
+        "\n  declared losses\n" <> Enum.join(losses, "\n")
+    end
   end
 
   # An exemption is a decision on the record. The verifier carries it; this is

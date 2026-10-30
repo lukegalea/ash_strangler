@@ -389,7 +389,7 @@ defmodule AshStrangler.Obligations do
   # That coarseness is why overlap is a warning; see `overlap/2`.
   defp atoms(%Collapse{states: states}) do
     states
-    |> Enum.reject(&(&1.when == :otherwise))
+    |> Enum.reject(&(&1.when in [:otherwise, nil]))
     |> Enum.reduce_while({:ok, []}, fn state, {:ok, acc} ->
       case collect_atoms(state.when, acc) do
         {:ok, atoms} -> {:cont, {:ok, atoms}}
@@ -443,7 +443,10 @@ defmodule AshStrangler.Obligations do
     if Enum.any?(states, &(&1.when == :otherwise)) do
       nil
     else
-      guards = states |> Enum.reject(&(&1.when == :otherwise)) |> Enum.map(& &1.when)
+      guards =
+        states
+        |> Enum.reject(&(&1.when in [:otherwise, nil]))
+        |> Enum.map(& &1.when)
 
       atoms
       |> assignments()
@@ -494,7 +497,10 @@ defmodule AshStrangler.Obligations do
   # under `:first` it is legal by construction -- that is what "first match wins"
   # means -- and is not reported at all.
   defp overlap(%Collapse{hit_policy: policy, states: states} = entry, atoms) do
-    guarded = Enum.reject(states, &(&1.when == :otherwise))
+    # Extension, refuse and lossy states carry no legacy guard: they never
+    # participate in the guard lattice, so they can neither be masked nor
+    # overlap anything.
+    guarded = Enum.reject(states, &(&1.when in [:otherwise, nil]))
     space = assignments(atoms)
 
     masked =
@@ -568,9 +574,28 @@ defmodule AshStrangler.Obligations do
   defp surjectivity(%Collapse{}, nil), do: nil
 
   defp surjectivity(%Collapse{states: states} = entry, modern_values) do
-    produced = MapSet.new(states, & &1.value)
+    # States declared through `representation:` or `derived:` are intentionally
+    # not forward-producible from the legacy columns alone — an extension state
+    # is read from the extension table, a `lossy` read collapses to its `to:`
+    # state, a `refuse`d state is never produced, and a `derived` state is a
+    # function of the data rather than an encoding of it. Surjectivity is about
+    # states a legacy encoding MEANT; a declared answer is not a clause
+    # somebody forgot.
+    produced =
+      states
+      |> Enum.reject(&(&1.representation != nil or &1.derived))
+      |> MapSet.new(& &1.value)
 
-    case Enum.reject(modern_values, &MapSet.member?(produced, &1)) do
+    declared =
+      states
+      |> Enum.filter(&(&1.representation != nil or &1.derived))
+      |> MapSet.new(& &1.value)
+
+    modern_values
+    |> Enum.reject(fn value ->
+      MapSet.member?(produced, value) or MapSet.member?(declared, value)
+    end)
+    |> case do
       [] ->
         nil
 

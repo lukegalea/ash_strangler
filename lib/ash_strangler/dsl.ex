@@ -221,30 +221,77 @@ defmodule AshStrangler.Dsl do
       value: [type: :any, required: true, doc: "The attribute value this clause produces."],
       when: [
         type: {:or, [{:literal, :otherwise}, {:custom, Combinators, :expression, []}]},
-        required: true,
+        required: false,
         doc: """
         The guard, as an expression over legacy columns, or `:otherwise` for the
         fallback clause.
 
-        Exactly one clause may be `:otherwise` and it must be last — a guard after
-        the fallback can never be reached, which the DMN literature calls a masked
+        Required unless `representation:` says otherwise — an extension state is
+        read from the extension table and has no legacy guard, and `{:refuse,
+        _}` and `{:lossy, _}` states are never forward-producible. Exactly one
+        clause may be `:otherwise` and it must be last — a guard after the
+        fallback can never be reached, which the DMN literature calls a masked
         rule and `AshStrangler.Obligations` reports as one.
+        """
+      ],
+      representation: [
+        type: {:custom, Combinators, :representation, []},
+        required: false,
+        doc: """
+        The declared answer for a state the legacy schema cannot represent. One
+        of:
+
+          * `{:extension, :column}` — the value lives in the extension table,
+            in a column added implicitly. The forward direction reads
+            `ext."column"` before any legacy guard; the backward direction
+            writes the extension column and leaves the legacy columns
+            untouched. No `when:` and no `set:` — there is no legacy encoding
+            to guard on or write to.
+
+          * `{:refuse, reason: "..."}` — a write to this state aborts the
+            transaction with `ERRCODE P0001` and the reason quoted verbatim.
+            Refused while the legacy side is authoritative. Never
+            forward-producible; no `when:` and no `set:`.
+
+          * `{:lossy, to: :state, loss: "..."}` — reads collapse to the `to:`
+            state; a write to it applies the `to:` state's `set:` values. The
+            `loss:` text is surfaced verbatim by `mix ash_strangler.check`
+            under "Declared losses". Never forward-producible; no `when:`.
+        """
+      ],
+      derived: [
+        type: :boolean,
+        default: false,
+        doc: """
+        The state is a FUNCTION of legacy data — time-nondeterministic guards
+        allowed (`expr(expiry_date < fragment("CURRENT_DATE"))`), because the
+        expression renders in the view's SELECT and never in a generated
+        column. Forward-only: no `set:` (there is nothing to write back — the
+        state was never stored), and the backward direction never produces it.
+        A machine transition whose `to:` is a derived state is refused by
+        `VerifyStateMachineBacked` — the write could never stick.
         """
       ],
       set: [
         type: :keyword_list,
-        required: true,
+        required: false,
         doc: """
         What to write back for this clause: **every** legacy column the table
         touches, so the backward direction is total and canonical by construction.
         There is no "which of the four do I write" question left to get wrong.
 
-        Values are literals, `nil`, or `touch()` — the explicit
-        timestamp-preservation marker. `touch()` writes `now()` only on an actual
-        transition and preserves the stored value otherwise, which is what real
-        triggers do and is the one declared `PutPut` violation in the whole design.
-        Round-tripping cannot recover the original instant, so the alternative to
-        declaring the loss is pretending it does not happen.
+        Values are literals, `nil`, `expr(...)` — e.g. `expr(now())`, what an
+        `archive` transition stamps a legacy timestamp with — or `touch()` — the
+        explicit timestamp-preservation marker. `touch()` writes `now()` only on
+        an actual transition and preserves the stored value otherwise, which is
+        what real triggers do and is the one declared `PutPut` violation in the
+        whole design. Round-tripping cannot recover the original instant, so the
+        alternative to declaring the loss is pretending it does not happen.
+
+        An `expr(...)` value is a **backward-side derivation**, not an inverse:
+        it renders through the trigger frame like every write expression, and it
+        makes no invertibility claim — `linearity` and the round-trip obligations
+        are unchanged.
         """
       ]
     ]

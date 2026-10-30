@@ -453,19 +453,14 @@ defmodule AshStrangler.Lens do
   # --- collapse ----------------------------------------------------------------
 
   defp collapse_build(%Collapse{} = entry, context, _source) do
-    forward =
-      entry.states
-      |> Enum.reverse()
-      |> Enum.reduce(nil, fn state, acc ->
-        case state.when do
-          :otherwise -> state.value
-          guard -> call(:if, [guard, [do: state.value, else: acc]])
-        end
-      end)
+    forward = collapse_forward(entry)
 
     columns =
       entry.states
-      |> Enum.flat_map(fn state -> Keyword.keys(state.set) end)
+      |> Enum.flat_map(fn
+        %{set: nil} -> []
+        %{set: set} -> Keyword.keys(set)
+      end)
       |> Enum.uniq()
 
     writes = Enum.map(columns, &{&1, collapse_write(entry, context, &1)})
@@ -477,13 +472,88 @@ defmodule AshStrangler.Lens do
       forward: forward,
       writes: writes,
       # `touch()` is a declared loss: round-tripping :cancelled cannot recover the
-      # original instant. Without one the table is a total bijection.
-      invertible: if(touches?(entry), do: :semi, else: :yes),
+      # original instant. So is every `representation:` — a state the legacy
+      # schema cannot represent cannot round-trip through it by definition.
+      invertible:
+        if(touches?(entry) or Enum.any?(entry.states, &(&1.representation || &1.derived)),
+          do: :semi,
+          else: :yes
+        ),
       type: :transformation,
       subtypes: [:conditional],
       because: entry.because,
       sources: Enum.flat_map(entry.states, &guard_refs/1)
     }
+  end
+
+  # The forward CASE, in declared-order precedence: extension-state conditions
+  # first (they read the extension table, where an explicitly-written state
+  # outranks anything the legacy columns could imply), then the `when:` guards
+  # — including `derived:` states, which ARE forward-producible, time-
+  # nondeterministically or not — then `:otherwise` last. `{:refuse, _}` and
+  # `{:lossy, _}` states are never forward-producible: there is no legacy
+  # encoding that means them, and pretending otherwise is how a read invents
+  # a state nothing stored.
+  defp collapse_forward(entry) do
+    arms =
+      Enum.flat_map(entry.states, fn
+        %{representation: {:extension, column}} = state ->
+          [{call(:strangler_ext_state, [column, state.value]), state.value}]
+
+        %{representation: nil, derived: false, when: guard} = state when guard != :otherwise ->
+          [{guard, state.value}]
+
+        %{representation: nil, derived: true, when: guard} = state when guard != :otherwise ->
+          [{guard, state.value}]
+
+        _state ->
+          []
+      end)
+
+    fallback =
+      Enum.find_value(entry.states, fn
+        %{when: :otherwise} = state -> state.value
+        _state -> nil
+      end)
+
+    arms
+    |> Enum.reverse()
+    |> Enum.reduce(fallback, fn {guard, value}, acc ->
+      call(:if, [guard, [do: value, else: acc]])
+    end)
+  end
+
+  @doc """
+  The extension columns a collapse's `{:extension, _}` states add implicitly,
+  as `{column, attribute}` — the attribute's type types the column, and the
+  attribute's own name is what the extension table keys nothing by (the key
+  column does that); these are state columns, one per representing collapse.
+  """
+  def extension_state_columns(%Collapse{states: states}) do
+    for %{representation: {:extension, column}} <- states, do: column
+  end
+
+  @doc """
+  The backward expression for a collapse's implicit extension-state column:
+  `CASE <attr> WHEN <ext state> THEN <ext state> ELSE NULL END`.
+
+  Whatever the command wrote is what the client's image of the attribute
+  carries (`NEW.<attr>` in the trigger frame). An unrelated update of a row
+  sitting in an extension state re-reads it through the view first, so its
+  image already says `'negotiating'`, and the column is preserved. A row
+  transitioning OUT of an extension state writes a legacy-encoded value, the
+  CASE matches nothing, and the column is NULLed — an extension state is
+  storage, not history.
+  """
+  def extension_state_write(%Collapse{attribute: attribute} = entry) do
+    case Enum.filter(entry.states, &match?({:extension, _}, &1.representation)) do
+      [] ->
+        nil
+
+      ext_states ->
+        pairs = Enum.map(ext_states, fn state -> {state.value, state.value} end)
+        call(:strangler_case, [attr_ref(attribute), pairs, nil])
+    end
   end
 
   # The backward direction does NOT mirror the forward guards. Forward, a clause is
@@ -492,21 +562,75 @@ defmodule AshStrangler.Lens do
   # simple `CASE attr WHEN … END` rather than a nest of predicates. That is not only
   # shorter: it is what makes the reverse *total and canonical*, because `set:` names
   # every column and the attribute's value picks exactly one row of the table.
+  #
+  # With `representation:` states the CASE gains arms in a fixed order:
+  #
+  #   * extension states first, whose legacy columns are HELD (an update of a
+  #     row sitting in an extension state must not drag its legacy flags to the
+  #     fallback's values; on an INSERT the hold renders the fallback
+  #     assignment, because the row being created has no legacy flags to hold).
+  #     The extension column itself is written by
+  #     `extension_state_write/1` in the trigger's extension section.
+  #   * the `when:` states with their `set:` -- and, where a state's `set:`
+  #     omits a column the table touches, a HOLD for that column. The
+  #     handoff's lifecycle declares `state :archived, set: [archived: ...]`:
+  #     archiving stamps one column and must not drag the flags anywhere. A
+  #     hold preserves the stored value on UPDATE and applies the fallback on
+  #     INSERT (a fresh row has nothing to preserve).
+  #   * `lossy` states, whose arm writes the `to:` state's `set:` values --
+  #     holding where the `to:` state omits the column, by the same rule.
+  #   * refuse and derived states get NO arm: the trigger RAISEs before any
+  #     write when the attribute carries one of them (`Sql.Triggers`), so the
+  #     CASE never sees those values.
+  #
+  # and `:otherwise` remains the default.
   defp collapse_write(%Collapse{} = entry, context, column) do
-    {fallback, guarded} = Enum.split_with(entry.states, &(&1.when == :otherwise))
+    {fallback, _guarded} = Enum.split_with(entry.states, &(&1.when == :otherwise))
 
-    pairs =
-      Enum.map(guarded, fn state ->
-        {state.value, collapse_value(entry, context, Keyword.get(state.set, column), column)}
-      end)
-
-    default =
+    fallback_value =
       case fallback do
-        [state] -> collapse_value(entry, context, Keyword.get(state.set, column), column)
-        [] -> :none
+        [state] -> collapse_value(entry, context, Keyword.get(state.set || [], column), column)
+        [] -> nil
       end
 
+    pairs =
+      Enum.flat_map(entry.states, fn
+        %{representation: {:extension, _column}} = state ->
+          [{state.value, hold(context, column, fallback_value)}]
+
+        %{representation: {:lossy, to, _loss}} = state ->
+          case Enum.find(entry.states, &(&1.value == to)) do
+            %{set: set} when set != nil ->
+              [{state.value, set_or_hold(entry, context, set, column, fallback_value)}]
+
+            _state ->
+              []
+          end
+
+        %{representation: nil, derived: false, when: guard} = state when guard != :otherwise ->
+          [{state.value, set_or_hold(entry, context, state.set || [], column, fallback_value)}]
+
+        _state ->
+          []
+      end)
+
+    default = if fallback == [], do: :none, else: fallback_value
+
     call(:strangler_case, [attr_ref(entry.attribute), pairs, default])
+  end
+
+  # A state that does not write this column holds it: the stored value on
+  # UPDATE, the fallback's value on INSERT (rendered by the `:strangler_hold`
+  # printer node).
+  defp hold(context, column, fallback_value) do
+    call(:strangler_hold, [legacy_column_name(context, column), fallback_value])
+  end
+
+  defp set_or_hold(entry, context, set, column, fallback_value) do
+    case Keyword.fetch(set, column) do
+      {:ok, value} -> collapse_value(entry, context, value, column)
+      :error -> hold(context, column, fallback_value)
+    end
   end
 
   # `touch()` becomes a marker node the printer turns into the preserve-or-bump
@@ -537,11 +661,12 @@ defmodule AshStrangler.Lens do
 
   defp touches?(%Collapse{states: states}) do
     Enum.any?(states, fn state ->
-      Enum.any?(state.set, fn {_column, value} -> Dsl.Combinators.touch?(value) end)
+      Enum.any?(state.set || [], fn {_column, value} -> Dsl.Combinators.touch?(value) end)
     end)
   end
 
   defp guard_refs(%Collapse.State{when: :otherwise}), do: []
+  defp guard_refs(%Collapse.State{when: nil}), do: []
   defp guard_refs(%Collapse.State{when: guard}), do: Expr.refs(guard)
 
   # --- coalesce ----------------------------------------------------------------
