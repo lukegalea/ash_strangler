@@ -5,7 +5,7 @@
 defmodule AshStrangler.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.4.0"
   @source_url "https://github.com/lukegalea/ash_strangler"
 
   def project do
@@ -94,6 +94,17 @@ defmodule AshStrangler.MixProject do
       # asserts they still match.
       {:ash_diagram, "~> 0.2", optional: true},
       {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
+      # Luke's fork, pinned to match Keystone's mix.lock (d71f6d0). Optional:
+      # only the AshEvents replay guard and the events-bridge fixture touch it.
+      {:ash_events,
+       github: "lukegalea/ash_events",
+       branch: "temporal-as-of-support-0.7",
+       only: [:dev, :test],
+       optional: true},
+      # Keystone uses 2.0.x. The archival verifier's tests need the extension
+      # present in dev/test; the verifier itself is guarded by
+      # Code.ensure_loaded? so a consumer without archival never pays for it.
+      {:ash_archival, "~> 2.0", only: [:dev, :test], optional: true},
       # A SAT solver, so the suite can exercise a resource carrying real
       # policies. This library's central claim about the notification bridge is
       # that re-reading through Ash means "calculations are computed, field and
@@ -141,10 +152,18 @@ defmodule AshStrangler.MixProject do
       extra_section: "GUIDES",
       extras: [
         {"README.md", title: "Home"},
+        "LICENSE",
         "documentation/topics/how-it-works.md",
+        "documentation/topics/shared-rows.md",
+        "documentation/topics/out-of-resource-mappings.md",
+        "documentation/topics/extension-stores.md",
+        "documentation/topics/state-machines-over-collapse.md",
+        "documentation/topics/observations.md",
+        "documentation/topics/integrating-with-a-host.md",
         "documentation/topics/the-transform-layer.md",
         "documentation/topics/phases.md",
         "documentation/topics/what-it-refuses.md",
+        "documentation/topics/platform-conventions.md",
         "documentation/topics/backfill-and-reconciliation.md",
         "documentation/topics/notifications.md",
         "documentation/topics/the-change-ledger.md",

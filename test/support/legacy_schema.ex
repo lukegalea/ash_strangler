@@ -122,6 +122,19 @@ defmodule AshStrangler.Test.LegacySchema do
     )
     """)
 
+    # The events-bridge seam's host-side event log: the observer's outbox
+    # substrate, idempotent by the delivery contract's own key.
+    execute!("""
+    CREATE TABLE IF NOT EXISTS events_bridge_log (
+      source_event_id bigint NOT NULL,
+      resource text NOT NULL,
+      operation text NOT NULL,
+      payload jsonb NOT NULL,
+      mapping_version text NOT NULL,
+      PRIMARY KEY (source_event_id, resource)
+    )
+    """)
+
     install_resource!(LegacyUser)
     install_resource!(DualWriteUser)
     # Three resources over one legacy table, which is the case this package exists

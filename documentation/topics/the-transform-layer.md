@@ -37,10 +37,10 @@ Count the restatements. **One transform is represented six times:**
 
 | # | Where | Representation |
 |---|---|---|
-| 1 | forward projection | the SQL string in `from:` — `AshStrangler.Sql.View.mapped_expression/1` |
+| 1 | forward projection | the SQL string in `from:` -- the old View `mapped_expression` helper |
 | 2 | backward projection | a *separate, hand-written* SQL string in `to:` plus `into:` |
-| 3 | trigger write body | `String.replace(to, "$NEW.", "NEW.")` — `AshStrangler.Sql.Triggers.write_expression/1` |
-| 4 | reverse view at `:read_from_new` | `String.replace(to, "$NEW.", "")` — `AshStrangler.Sql.ReverseView.reverse_column/1` |
+| 3 | trigger write body | `String.replace(to, "$NEW.", "NEW.")` -- the old Trigger `write_expression` helper |
+| 4 | reverse view at `:read_from_new` | `String.replace(to, "$NEW.", "")` -- the old ReverseView `reverse_column` helper |
 | 5 | column lineage, for both diagram generators | a regex plus a 60-word SQL keyword denylist — `AshStrangler.Diagram.Sql.columns/2` |
 | 6 | reconciler comparison | a hand-passed `columns:` list, plus a third mini-language: `normalize: %{email: :ci_string, archived_at: {:sql, "%s AT TIME ZONE 'UTC'"}}` |
 
@@ -151,7 +151,7 @@ Its moduledoc argues, correctly, that a diagram which quietly omits edges it cou
 worse than no diagram — so the mapping diagram draws a rhombus reading *"source columns not resolved"*.
 
 But it has a **second** consumer that does not get that treatment.
-`AshStrangler.Resource.legacy_columns/1` feeds the `ash_diagram` extension hook, and there
+The old resource-level `legacy_columns` helper fed the `ash_diagram` extension hook, and there
 `:unresolved` degrades to `[]`. A column the heuristic could not parse silently vanishes from every
 entity-relationship diagram the application draws — including the ones `mix
 ash.generate_resource_diagrams` and Clarity produce. The README says of that diagram: *"Only the
@@ -483,7 +483,7 @@ of the theory above.
 So an automatically updatable view may contain a **mix** of updatable and read-only columns. A computed
 column does not force a trigger. It forces an error only if somebody assigns to it.
 
-`AshStrangler.Info.derive_writes/1` assumes otherwise: any writable computed mapping forces
+The old `derive_writes` rule assumed otherwise: any writable computed mapping forced
 `:triggers`, for the whole resource. Measured against PostgreSQL 17.10 on a view with two plain
 references and two computed columns, **no triggers**:
 

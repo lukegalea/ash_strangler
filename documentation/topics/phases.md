@@ -78,12 +78,14 @@ multiple commands there with `42601 cannot insert multiple commands into a
 prepared statement`. `down` runs the statements in reverse order, since a trigger
 cannot outlive the view it is attached to.
 
-One phase gets no notify trigger even when `notify? true`, and it is worth knowing
-why rather than discovering it: at `:read_from_new` the legacy relation *is* the
-reverse view, and PostgreSQL rejects row-level `AFTER` triggers on a view outright.
-Emitting it would produce a migration that cannot run. Nothing is lost — past
-cutover the new table is Ash-owned, so Ash's own notifiers cover writes to it, and
-the bridge exists precisely for writes this application does not make.
+The compatibility `Sql.Notify` trigger is not emitted at `:read_from_new`,
+even with `notify? true`, and it is worth knowing why rather than discovering
+it: the legacy relation *is* the reverse view, and PostgreSQL rejects row-level
+`AFTER` triggers on a view outright. The durable ledger trigger is different
+(v0.4.0 correction): it follows the **owned table**, the reverse view's source,
+for as long as any compatibility writer exists. Legacy writes through the
+reverse view fire no Ash notifier; the claim that Ash notifiers cover writes
+past cutover is true only if every writer goes through Ash.
 
 ### `:read_from_legacy`
 
@@ -224,6 +226,14 @@ changes what is generated; both are how you earn the right to move on.
 The cutover. A real Ash-owned table now holds the data, and the **legacy name
 becomes a view over it**, so the old application's `SELECT * FROM users` keeps
 working without a line of its SQL changing.
+
+A `ledger?` source stays valid here (v0.4.0 correction): the ledger trigger
+follows the **owned table** -- the reverse view's source -- for as long as any
+compatibility writer exists. The old application still writes through the
+reverse view, and those writes fire **no Ash notifier**; the claim that Ash's
+own events cover writes past cutover is true only if every writer goes through
+Ash. `Sql.Notify` (the compatibility announce) is still refused: PostgreSQL
+rejects row-level triggers on a view.
 
 ```mermaid
 flowchart TB

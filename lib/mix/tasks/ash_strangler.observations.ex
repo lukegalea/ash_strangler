@@ -10,6 +10,7 @@ defmodule Mix.Tasks.AshStrangler.Observations do
 
       mix ash_strangler.observations                                   # recent, all
       mix ash_strangler.observations --resource MyApp.Clm.Contract
+      mix ash_strangler.observations --consumer MyApp.MyObserver
       mix ash_strangler.observations --quarantined                     # one consumer
       mix ash_strangler.observations --inspect <observation-uuid>      # full envelope
       mix ash_strangler.observations --replay                          # reset all receipts
@@ -32,6 +33,7 @@ defmodule Mix.Tasks.AshStrangler.Observations do
     consumer: :string,
     inspect: :string,
     replay: :boolean,
+    observation_id: :string,
     limit: :integer
   ]
 
@@ -40,16 +42,13 @@ defmodule Mix.Tasks.AshStrangler.Observations do
     {opts, _} = OptionParser.parse!(args, strict: @switches)
     repo = repo!()
 
-    cond do
-      opts[:inspect] ->
-        inspect_observation(repo, opts[:inspect])
-
-      opts[:replay] ->
-        replay(repo, opts)
-
-      true ->
-        list(repo, opts)
-    end
+    with_repo(repo, fn repo ->
+      cond do
+        opts[:inspect] -> inspect_observation(repo, opts[:inspect])
+        opts[:replay] -> replay(repo, opts)
+        true -> list(repo, opts)
+      end
+    end)
   end
 
   defp repo! do
@@ -58,9 +57,18 @@ defmodule Mix.Tasks.AshStrangler.Observations do
         Mix.raise("no strangled resources found -- nothing observes anything")
 
       [resource | _] ->
-        repo = AshPostgres.DataLayer.Info.repo(resource)
-        {:ok, _} = repo.start_link([])
-        repo
+        AshPostgres.DataLayer.Info.repo(resource)
+    end
+  end
+
+  defp with_repo(repo, fun) do
+    if Process.whereis(repo) do
+      fun.(repo)
+    else
+      case Ecto.Migrator.with_repo(repo, fun) do
+        {:ok, result, _apps} -> result
+        {:error, reason} -> Mix.raise("could not start #{inspect(repo)}: #{inspect(reason)}")
+      end
     end
   end
 
@@ -75,34 +83,9 @@ defmodule Mix.Tasks.AshStrangler.Observations do
   end
 
   defp list(repo, opts) do
-    clauses = []
-
-    clauses =
-      if opts[:resource],
-        do: [{"resource = $#{length(clauses) + 1}", opts[:resource]} | clauses],
-        else: clauses
-
-    clauses =
-      if opts[:quarantined],
-        do: [
-          {"id IN (SELECT observation_id FROM \"strangler_receipts\" WHERE state = 'quarantined')" <>
-             consumer_clause(opts, clauses), nil}
-          | clauses
-        ],
-        else: clauses
-
-    where =
-      clauses
-      |> Enum.reverse()
-      |> Enum.map_join(" AND ", fn
-        {text, nil} -> text
-        {text, _value} -> text
-      end)
-
-    where = if where == "", do: "", else: "WHERE " <> where
+    {filters, params} = list_filters(opts)
+    where = if filters == [], do: "", else: "WHERE " <> Enum.join(filters, " AND ")
     limit = opts[:limit] || 25
-
-    params = clauses |> Enum.reverse() |> Enum.map(fn {_t, v} -> v end) |> Enum.reject(&is_nil/1)
 
     %Postgrex.Result{rows: rows} =
       repo.query!(
@@ -123,30 +106,71 @@ defmodule Mix.Tasks.AshStrangler.Observations do
       Enum.each(rows, fn [id, category, resource, record_id, operation, origin, corr, version, at] ->
         Mix.shell().info(
           "#{at} #{category} #{operation} #{resource} " <>
-            "#{record_id || "-"} origin=#{origin} #{corr && "corr=" <> corr} " <>
+            "#{record_id || "-"} origin=#{origin} #{if corr, do: "corr=" <> corr, else: ""} " <>
             "v=#{String.slice(version || "", 0, 8)} #{id}"
         )
       end)
     end
 
-    print_quarantines(repo)
+    print_quarantines(repo, opts[:consumer])
   end
 
-  defp consumer_clause(opts, _clauses) do
-    if opts[:consumer], do: " AND consumer = '" <> opts[:consumer] <> "'", else: ""
+  defp list_filters(opts) do
+    {filters, params} =
+      if opts[:resource] do
+        {["resource = $1"], [opts[:resource]]}
+      else
+        {[], []}
+      end
+
+    cond do
+      opts[:quarantined] && opts[:consumer] ->
+        n = length(params) + 1
+
+        {filters ++
+           [
+             "id IN (SELECT observation_id FROM \"strangler_receipts\" WHERE state = 'quarantined' AND consumer = $#{n})"
+           ], params ++ [opts[:consumer]]}
+
+      opts[:quarantined] ->
+        {filters ++
+           [
+             "id IN (SELECT observation_id FROM \"strangler_receipts\" WHERE state = 'quarantined')"
+           ], params}
+
+      opts[:consumer] ->
+        n = length(params) + 1
+
+        {filters ++
+           ["id IN (SELECT observation_id FROM \"strangler_receipts\" WHERE consumer = $#{n})"],
+         params ++ [opts[:consumer]]}
+
+      true ->
+        {filters, params}
+    end
   end
 
   defp scope_note(opts) do
     if opts[:resource], do: " for #{opts[:resource]}", else: ""
   end
 
-  defp print_quarantines(repo) do
+  defp print_quarantines(repo, consumer) do
+    {where, params} =
+      if consumer do
+        {"WHERE state = 'quarantined' AND consumer = $1", [consumer]}
+      else
+        {"WHERE state = 'quarantined'", []}
+      end
+
     %Postgrex.Result{rows: rows} =
-      repo.query!("""
-      SELECT consumer, observation_id, last_error, recorded_at
-        FROM "strangler_receipts" WHERE state = 'quarantined'
-       ORDER BY recorded_at DESC LIMIT 25
-      """)
+      repo.query!(
+        """
+        SELECT consumer, observation_id, last_error, recorded_at
+          FROM "strangler_receipts" #{where}
+         ORDER BY recorded_at DESC LIMIT 25
+        """,
+        params
+      )
 
     if rows != [] do
       Mix.shell().info("\nquarantined:")
@@ -158,8 +182,11 @@ defmodule Mix.Tasks.AshStrangler.Observations do
   end
 
   defp inspect_observation(repo, id) do
-    case repo.query!("SELECT * FROM \"strangler_observations\" WHERE id = $1", [id]) do
-      %Postgrex.Result{columns: columns, rows: [[values]]} ->
+    case repo.query!(
+           "SELECT * FROM \"strangler_observations\" WHERE id = $1",
+           [Ecto.UUID.dump!(id)]
+         ) do
+      %Postgrex.Result{columns: columns, rows: [values]} ->
         envelope = Enum.zip(columns, values) |> Map.new()
 
         Mix.shell().info(
@@ -172,36 +199,38 @@ defmodule Mix.Tasks.AshStrangler.Observations do
   end
 
   defp replay(repo, opts) do
-    {sql, params} = replay_sql(opts)
+    {where, params} = replay_filter(opts)
 
-    %Postgrex.Result{num_rows: deleted} = repo.query!(sql, params)
+    %Postgrex.Result{num_rows: deleted} =
+      repo.query!("DELETE FROM \"strangler_receipts\" #{where}", params)
 
     Mix.shell().info(
       "#{deleted} receipt(s) deleted -- the next drain re-delivers those observations."
     )
   end
 
-  defp replay_sql(opts) do
-    clauses =
-      [
-        if(opts[:consumer], do: {"consumer = $1", opts[:consumer]}),
-        if(opts[:"observation-id"], do: {"observation_id = $2", opts[:"observation-id"]})
-      ]
-      |> Enum.reject(&is_nil/1)
+  defp replay_filter(opts) do
+    filters = []
+    params = []
 
-    case clauses do
-      [] ->
-        {"DELETE FROM \"strangler_receipts\"", []}
+    {filters, params} =
+      if opts[:consumer] do
+        {filters ++ ["consumer = $#{length(params) + 1}"], params ++ [opts[:consumer]]}
+      else
+        {filters, params}
+      end
 
-      clauses ->
-        where =
-          clauses
-          |> Enum.with_index(1)
-          |> Enum.map_join(" AND ", fn {{text, _}, i} ->
-            String.replace(text, "$1", "$#{i}") |> String.replace("$2", "$#{i}")
-          end)
+    {filters, params} =
+      if opts[:observation_id] do
+        {filters ++ ["observation_id = $#{length(params) + 1}"],
+         params ++ [Ecto.UUID.dump!(opts[:observation_id])]}
+      else
+        {filters, params}
+      end
 
-        {"DELETE FROM \"strangler_receipts\" WHERE " <> where, Enum.map(clauses, &elem(&1, 1))}
+    case filters do
+      [] -> {"", []}
+      filters -> {"WHERE " <> Enum.join(filters, " AND "), params}
     end
   end
 end

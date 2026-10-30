@@ -56,7 +56,8 @@ defmodule AshStrangler.Resource do
   use Spark.Dsl.Extension,
     sections: AshStrangler.Dsl.sections(),
     transformers: [
-      AshStrangler.Transformers.MarkKeyGenerated
+      AshStrangler.Transformers.MarkKeyGenerated,
+      AshStrangler.Transformers.ResolveMappingTarget
     ],
     verifiers: [
       # Order matters. `VerifyTwin` runs first because every verifier after it
@@ -73,6 +74,7 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifyTenancy,
       AshStrangler.Verifiers.VerifyCollapseRepresentation,
       AshStrangler.Verifiers.VerifyStateMachineBacked,
+      AshStrangler.Verifiers.VerifyArchival,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyNotRedundant,
       AshStrangler.Verifiers.VerifyTimestampZones,

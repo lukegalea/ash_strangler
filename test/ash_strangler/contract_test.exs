@@ -28,6 +28,10 @@ defmodule AshStrangler.ContractTest do
 
   @extension_table Contract.extension_table()
 
+  test "the mapping fragment target is checked even when both modules share a file" do
+    assert :ok = AshStrangler.Mapping.verify_target(Contract)
+  end
+
   # --- helpers -----------------------------------------------------------------
 
   defp draft_contract!(attrs \\ []) do
@@ -183,6 +187,45 @@ defmodule AshStrangler.ContractTest do
         ])
 
       assert name == record.name
+    end
+
+    test "provenance lives in the extension table and rolls back with the command" do
+      org = Ash.UUID.generate()
+      party = insert_legacy_party!(organization_id: org)
+      actor = Ash.UUID.generate()
+
+      record =
+        Ash.create!(Contract, %{
+          name: "provenance",
+          client_party_id: party,
+          created_by_id: actor
+        })
+
+      %Postgrex.Result{rows: [[stored]]} =
+        TestRepo.query!("SELECT created_by_id FROM #{@extension_table} WHERE id = $1", [
+          Ecto.UUID.dump!(record.id)
+        ])
+
+      assert Ecto.UUID.load(stored) == {:ok, actor}
+
+      # A legacy constraint failure rolls provenance back with the shared row
+      # and the rest of the extension write.
+      assert_raise Ash.Error.Unknown, fn ->
+        Ash.create!(Contract, %{
+          name: "provenance-doomed",
+          value: Decimal.new(-1),
+          client_party_id: party,
+          created_by_id: actor
+        })
+      end
+
+      %Postgrex.Result{rows: [[count]]} =
+        TestRepo.query!(
+          "SELECT count(*) FROM #{@extension_table} WHERE created_by_id = $1",
+          [Ecto.UUID.dump!(actor)]
+        )
+
+      assert count == 1
     end
   end
 

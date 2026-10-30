@@ -1041,33 +1041,35 @@ defmodule AshStrangler.VerifiersTest do
       """)
     end
 
-    test "refuses `ledger?` past cutover, where the relation is a view no trigger can attach to" do
-      message =
-        assert_rejected_by(
-          Verifiers.VerifyLedger,
-          """
-          attributes do
-            attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
-            attribute :email, :string, public?: true
-          end
+    test "ACCEPTS `ledger?` past cutover -- the trigger follows the owned table" do
+      # v0.4.0 correction: in :read_from_new the legacy relation is the reverse
+      # view, but the ledger trigger targets the OWNED table (the view's
+      # source). Legacy writers through the reverse view fire no Ash notifier,
+      # so capture follows the authoritative base storage for as long as any
+      # compatibility writer exists.
+      dsl =
+        define("""
+        attributes do
+          attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+          attribute :email, :string, public?: true
+        end
 
-          strangler do
-            phase :read_from_new
-            source #{@twin} do
-              #{@key}
-              notify? true
-              ledger? true
-              map :email, from: :email
-            end
+        strangler do
+          phase :read_from_new
+          source #{@twin} do
+            #{@key}
+            notify? true
+            ledger? true
+            map :email, from: :email
           end
-          """,
-          "phase :read_from_new"
-        )
+        end
+        """)
 
-      # PostgreSQL's refusal, not this package's: row-level AFTER triggers on
-      # a view are rejected outright, so emitting the statement would produce
-      # a migration that cannot run.
-      assert message =~ "row-level AFTER triggers"
+      assert :ok = Verifiers.VerifyLedger.verify(dsl)
+
+      # The phase-specific composition shape (ledger trigger against the owned
+      # table) is asserted by ledger_read_from_new_test.exs against a
+      # :read_from_new resource.
     end
   end
 end

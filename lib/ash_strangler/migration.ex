@@ -36,16 +36,21 @@ defmodule AshStrangler.Migration do
           []
 
         :read_from_new ->
-          # No notify trigger here, deliberately. `Sql.Notify` attaches an
-          # `AFTER ... FOR EACH ROW` trigger to the legacy relation, and in this
-          # phase that name is the reverse *view* -- which Postgres rejects
-          # outright ("Views cannot have row-level BEFORE or AFTER triggers"),
-          # so emitting it would produce a migration that cannot run.
+          # No compatibility notify trigger here, deliberately. `Sql.Notify`
+          # attaches an `AFTER ... FOR EACH ROW` trigger to the legacy relation,
+          # and in this phase that name is the reverse *view* -- which Postgres
+          # rejects outright ("Views cannot have row-level BEFORE or AFTER
+          # triggers"), so emitting it would produce a migration that cannot run.
           #
-          # Nothing is lost: past cutover the new table is Ash-owned, so Ash's
-          # own notifiers cover writes to it, and the bridge exists precisely
-          # for writes this application does not make.
-          Sql.ReverseView.build(resource)
+          # The LEDGER trigger is different, and v0.4.0 corrected this: it is a
+          # trigger on the OWNED table (the reverse view reads from it), which
+          # Postgres accepts. Capture follows the authoritative base storage for
+          # as long as any compatibility writer exists -- including legacy
+          # writers going through the reverse view, which fire NO Ash notifier.
+          # The claim that Ash's own events cover writes past cutover is true
+          # only if every writer goes through Ash.
+          Sql.ReverseView.build(resource) ++
+            Sql.Ledger.build(resource) ++ Observation.Store.statements()
 
         phase ->
           %{view: view, key_index: key_index} = Sql.View.build(resource)

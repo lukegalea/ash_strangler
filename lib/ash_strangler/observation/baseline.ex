@@ -37,11 +37,12 @@ defmodule AshStrangler.Observation.Baseline do
   Snapshots `resource` through the forward mapping.
 
   Returns `{:ok, %{group: uuid, count: n}}`, or `{:error, :no_ledger}` when
-  the resource's source carries no ledger — a baseline without a stream to
+  the resource's source carries no ledger -- a baseline without a stream to
   hand off to would silently miss everything after the snapshot.
 
-  Pass `isolation: :caller` when an existing transaction owns the isolation
-  level; the default starts a new repeatable-read transaction.
+  The default opens `REPEATABLE READ`. A caller already inside a transaction
+  may pass `isolation: :caller` to use its existing snapshot (the SQL sandbox
+  uses this in tests); that caller owns the isolation guarantee.
   """
   def run(resource, opts) do
     repo = Keyword.fetch!(opts, :repo)
@@ -81,9 +82,15 @@ defmodule AshStrangler.Observation.Baseline do
 
     repo.transaction(
       fn ->
-        # This must be first when this function owns the transaction: the
-        # ledger marker and keyset scan share one MVCC snapshot.
+        # Must be the first statement in a transaction this function owns:
+        # the ledger marker and keyset scan share one MVCC snapshot. The
+        # explicit :caller mode is for an existing host transaction (e.g. the
+        # SQL sandbox); that caller owns the isolation level.
         set_isolation!(repo, isolation)
+
+        # max(id) inside the snapshot: the handoff marker. Read but not used as
+        # a fence -- the design explicitly rejects MAX(id) fencing (it would
+        # drop exactly the rows committed between the snapshot and the fence).
         repo.query!("SELECT COALESCE(max(id), 0) FROM #{Ledger.events_table()}")
         stream(scan, nil, 0)
       end,

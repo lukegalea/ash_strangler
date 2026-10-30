@@ -11,10 +11,28 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 <!-- changelog -->
 
-## [Unreleased]
+## [0.4.0] - 2026-10-29
 
-Nothing has been released yet. Everything below is the initial body of work,
-summarised from the commit history.
+The single release containing shared rows, out-of-resource mappings, extension
+stores, lifecycles over `collapse`, durable observations and the platform
+conventions. Baseline tag `v0.1.0` remains the pre-expansion reference point.
+
+### Features added in 0.4.0
+
+- **Shared rows:** one resource over the live legacy relation and an owned
+  extension table in the same PostgreSQL database and transaction. External
+  Spark fragments (`use AshStrangler.Mapping, resource: ...`), the extension
+  store, host/legacy key allocation, and a structural tenant derivation.
+- **Lifecycles over `collapse`:** extension, refuse, lossy and derived answers
+  for legacy-unrepresentable states; `AshStateMachine` is verified against the
+  collapse, and the trigger carries the declared backward `set:`.
+- **Observation beside materialisation:** a versioned envelope projected from
+  the ledger's old/new images; repeatable-read baseline; per-consumer receipts,
+  retry/quarantine/replay; joined-read invalidations; transaction-local
+  correlation; the `AshStrangler.Observer` behaviour and generated Oban worker.
+- **Platform conventions:** provenance in the extension store, archival
+  mapped-or-refused, AshEvents replay refused on shared rows, and a read-only
+  events-bridge resource that keeps action events distinct from observations.
 
 ### Breaking changes:
 
@@ -49,6 +67,28 @@ summarised from the commit history.
   `as:`. A resource written against 0.1 does not compile, and the error names its
   replacement.
 
+- **Derived-key creates that send an id cannot use `writes: :auto`.** An
+  auto-updatable view rejects a value for its expression-backed id column.
+  `VerifyKeyAllocation` now refuses that shape. Migration: set `writes:
+  :triggers` so the legacy sequence allocates and the trigger re-reads the
+  derived id, or make the primary key non-writable with no default so the
+  create omits the id and PostgreSQL can allocate it through the view. The
+  latter is measured working; host-created rows that need to choose their own
+  id use `strategy: :identity`.
+
+- **Partial collapse `set:` clauses now hold omitted columns.** They used to
+  write NULL for a column omitted by a state; they now preserve the stored
+  value on UPDATE and use the `:otherwise` state's value on INSERT. This is
+  required for the handoff lifecycle, where `:archived` stamps `archived`
+  without changing `processed`/`verified`. Migration: review every `set:` that
+  relied on omission meaning NULL and write `column: nil` explicitly.
+
+- **Security dependency floors.** Ash now requires at least `3.37.2` and
+  AshPostgres at least `2.15.2`, which contain upstream fixes for tenant-scope
+  bypasses in upserts and relationship loading. Migration: run
+  `mix deps.update ash ash_postgres`; projects pinned below these versions must
+  raise their constraints.
+
 ### Bug Fixes:
 
 - **The ledger follows the host's owned schema instead of `public`.** The
@@ -60,6 +100,14 @@ summarised from the commit history.
   legacy application's session. A host on the default layout still gets
   `public`. An existing deployment keeps its table where it is: no migration
   moves it, and the unqualified reads find it through `search_path`.
+
+- **`ledger?` remains valid in `:read_from_new`.** The v0.1 verifier refused
+  it because the legacy name is a reverse view, but the trigger now follows
+  the authoritative owned table (the view's source) while any compatibility
+  writer remains. Legacy writes through the reverse view fire no Ash notifier;
+  the claim that Ash's own events cover writes past cutover is true only if
+  every writer goes through Ash. `Sql.Notify` remains refused there because
+  PostgreSQL rejects row-level triggers on views.
 
 ### Features:
 

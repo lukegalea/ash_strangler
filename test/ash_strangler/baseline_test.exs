@@ -160,6 +160,35 @@ defmodule AshStrangler.BaselineTest do
     assert {:error, :no_ledger} = Baseline.run(AshStrangler.Test.LegacyUser, repo: TestRepo)
   end
 
+  test "the default baseline opens REPEATABLE READ outside a caller transaction" do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(TestRepo, fn ->
+      legacy_id = insert_legacy_user!(login: "baseline-rr")
+
+      # No isolation: :caller -- this is the production entry point. It starts
+      # its own transaction, sets REPEATABLE READ before its first query, and
+      # snapshots the row through the same forward mapping.
+      assert {:ok, %{count: 1}} = Baseline.run(AshStrangler.Test.LedgerUser, repo: TestRepo)
+
+      %Postgrex.Result{rows: [[count]]} =
+        TestRepo.query!(
+          "SELECT count(*) FROM \"strangler_observations\" WHERE resource = $1 AND category = 'baseline'",
+          [to_string(AshStrangler.Test.LedgerUser)]
+        )
+
+      assert count == 1
+
+      # This connection is outside the sandbox transaction, so clean its
+      # committed fixtures explicitly for the next test run.
+      TestRepo.query!("DELETE FROM legacy.users WHERE id = $1", [legacy_id])
+
+      TestRepo.query!("DELETE FROM \"strangler_observations\" WHERE resource = $1", [
+        to_string(AshStrangler.Test.LedgerUser)
+      ])
+
+      TestRepo.query!("DELETE FROM legacy_change_events WHERE source_table = 'users'", [])
+    end)
+  end
+
   # --- harness -----------------------------------------------------------------
 
   defp observations(resource: resource, group: group) do

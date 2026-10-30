@@ -168,7 +168,13 @@ defmodule AshStrangler.Source do
     mappings: [],
     extensions: [],
     tenants: [],
-    keys: []
+    keys: [],
+    # Set by ResolveMappingTarget when a `use AshStrangler.Mapping` fragment
+    # supplied this source entity. Persisted on the merged entity because
+    # Spark intentionally does not persist a parent's `fragments:` list.
+    mapping_target: nil,
+    mapping_module: nil,
+    mapping_target_unverifiable?: false
   ]
 
   @type t :: %__MODULE__{}

@@ -39,10 +39,15 @@ defmodule AshStrangler.Verifiers.VerifyLedger do
 
   alias Spark.Dsl.Verifier
 
-  # The phases in which the legacy name is a real table the trigger can attach
-  # to. Past cutover it is the reverse view, and "Views cannot have row-level
-  # BEFORE or AFTER triggers" is PostgreSQL's answer, not this package's.
-  @triggerless_phases [:read_from_new, :decommissioned]
+  # The phase in which the ledger cannot be created: the legacy name is the
+  # reverse view, and "Views cannot have row-level BEFORE or AFTER triggers"
+  # is PostgreSQL's answer, not this package's. v0.4.0 corrected :read_from_new
+  # -- the ledger trigger follows the authoritative base storage (the OWNED
+  # table) for as long as any compatibility writer exists, because legacy
+  # writers through the reverse view fire no Ash notifier. Only
+  # :decommissioned (no trigger target at all, nothing left to capture) is
+  # refused now.
+  @triggerless_phases [:decommissioned]
 
   @impl true
   def verify(dsl) do
@@ -98,16 +103,13 @@ defmodule AshStrangler.Verifiers.VerifyLedger do
          message: """
          `ledger? true` is meaningless in phase #{inspect(phase)}.
 
-         The ledger trigger is an `AFTER ... FOR EACH ROW` trigger on the
-         legacy relation, and in this phase that name is the reverse *view* —
-         PostgreSQL rejects row-level AFTER triggers on a view outright, so the
-         statement this option asks for cannot be created and the migration
-         would fail at `mix ash.migrate` time.
+         The compatibility layer is gone: there is no trigger target left and
+         nothing left to capture -- every writer is this application, and its
+         writes are Ash actions at their source.
 
-         Nothing is lost. Past cutover the writes worth recording are made
-         through Ash, and Ash's own event log records them at their source —
-         capturing them a second time, from a table this application now owns,
-         would duplicate every event by construction.
+         Turn `ledger?` off with the phase change (a migration recipe in the
+         changelog): leaving it on would ask for a trigger on a relation that
+         no longer exists.
          """
        )}
     else

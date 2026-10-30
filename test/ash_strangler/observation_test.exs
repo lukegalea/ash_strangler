@@ -208,7 +208,9 @@ defmodule AshStrangler.ObservationTest do
       ])
 
       Application.put_env(:ash_strangler_test, :recording_mode, {:error, :boom})
-      drain!()
+
+      assert {:error, {:observer_errors, _}} =
+               Processor.drain(TestRepo, Contract, [RecordingObserver], batch: 100)
 
       events = Enum.filter(observations_for(Contract), &(&1.after["name"] == "receipted"))
       assert [%{source_event_id: event_id}] = events
@@ -217,8 +219,8 @@ defmodule AshStrangler.ObservationTest do
       assert %{state: "error", attempts: 1} = receipt
       assert RecordingObserver.effects(TestRepo) == []
 
-      # Still erroring: attempts increment.
-      drain!()
+      assert {:error, {:observer_errors, _}} =
+               Processor.drain(TestRepo, Contract, [RecordingObserver], batch: 100)
 
       assert %{state: "error", attempts: 2} =
                RecordingObserver.receipt(TestRepo, receipt_observation_id(event_id))

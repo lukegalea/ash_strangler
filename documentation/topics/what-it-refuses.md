@@ -21,7 +21,7 @@ compiling the broken mapping and reading what came out.
 
 ## Two layers, and one rule about the boundary
 
-There are **twelve verifiers** and, behind one of them, **ten proof obligations**.
+There are **twenty verifiers** and, behind one of them, **ten proof obligations**.
 The split is not arbitrary. A verifier answers a question about the *declaration* —
 is this attribute accounted for, does this identity exist, is this reference a real
 column. An obligation answers a question about the *values*: is there a legacy
@@ -1018,6 +1018,77 @@ Note that the two symbols are inverted relative to SQL: Ash's `||` is SQL's
 ```
 
 ---
+
+## Additional verifiers: fragments, extensions, tenants, lifecycle and platform
+
+The shared-rows, lifecycle and observation trains add compile-time refusals
+around the new declarations. They are separate questions; combining them
+into one generic "mapping invalid" error would hide which contract was broken.
+
+### More than one source (inline or fragmented)
+
+**`VerifySingleSource`** counts `source` entities after Spark merges fragments.
+Two mappings are refused because `Info.source/1` would take the first and
+silently ignore the rest. See `out-of-resource-mappings.md`.
+
+### Extension attributes
+
+**`VerifyExtension`** refuses a second extension block (one table per
+resource), a missing attribute, an attribute already accounted for by a map,
+constant, unmapped entry, key or tenant, function defaults, and extension use
+past `:dual_write`. A function default would make the view return a different
+generated value on every read. See `extension-stores.md`.
+
+### Host-created key allocation
+
+**`VerifyKeyAllocation`** refuses a derived key on an auto-updatable view when
+the create actually sends that key: PostgreSQL rejects a value for the view's
+expression column. The safe shape that sends no key is accepted -- the legacy
+sequence allocates and `RETURNING` projects the derived id. For `:identity`,
+the host must mint the key (default or writable attribute), and the trigger
+passes it into the legacy key column.
+
+### Tenant proofs
+
+**`VerifyTenancy`** refuses two tenant declarations and cross-tenant
+relationships whose destination's tenant is not on the source's derive path,
+unless `allow_unproven: [...]` records the exemption. `mix
+ash_strangler.check` prints every exemption; a proof you declined is a
+decision, not a silence.
+
+### Collapse representation answers
+
+**`VerifyCollapseRepresentation`** holds the grammar for `representation:` and
+`derived:` together: extension/refuse/lossy states take no `when:`/`set:`;
+derived states require `when:` and take no `set:`; lossy `to:` names a state
+with a `set:`; extension states need an extension block. A missing answer is
+not silently interpreted as NULL.
+
+### A machine over a shared-row lifecycle
+
+**`VerifyStateMachineBacked`** requires a collapse for the machine's mapped
+state attribute, a clause per machine state, no transition targeting a
+`derived:` state (it can never stick), and no refused initial state (every
+create would abort). A transition to `{:refuse, _}` is intentionally allowed:
+the runtime abort with the declared reason IS the refusal the host command
+promised.
+
+### Archival with no writable legacy representation
+
+**`VerifyArchival`** (only when `AshArchival.Resource` is loaded) refuses an
+archive attribute with no writable mapping. Extension storage is not enough:
+AshArchival would mark the extension row while the legacy lifecycle stayed
+silent. Map the archive timestamp onto the legacy encoding, or refuse
+archival on this resource. See `platform-conventions.md`.
+
+### The ledger in `:read_from_new`
+
+**`VerifyLedger`** requires `notify? true`, and refuses only
+`:decommissioned`. `ledger?` is valid in `:read_from_new` (v0.4.0
+correction): the trigger follows the owned table, because compatibility
+writers through the reverse view fire no Ash notifier. The compatibility
+`Sql.Notify` trigger remains refused there; PostgreSQL rejects row-level
+triggers on views.
 
 # What replaced the checks that are gone
 

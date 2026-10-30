@@ -410,25 +410,21 @@ incomplete backfill produces missing rows, not an error.
     *type*, fires; `publish :some_action, [...]`, which matches on its *name*,
     does not. Write publications for a strangled read model with `publish_all`.
 
-31. **`ledger?: true` is the durable half, and it needs the ingester to be
-    real.** It turns every legacy write into a row in `legacy_change_events`,
-    committed *with* the legacy transaction, plus a `wake:<event id>` notify
-    that replaces the JSON envelope — so a ledger source's listeners hear
-    wakes, not changes; downstream consumers hear about the write when the
-    generated ingestion performs ordinary Ash actions, which fire Ash's own
-    notifiers. Requires `notify? true` (the wake is what makes ingestion prompt
-    instead of merely eventual) and is refused past cutover, where the relation
-    is a view no row trigger can attach to. Generate the drain with `mix
-    ash_strangler.gen.ingester`, wire `config :ash_strangler, ledger_drain:
-    {Worker, :nudge}`, and keep the cron sweep — a missed wake costs delay, not
-    delivery, *only* while the sweep exists. `mix ash_strangler.check` reports
-    the backlog per relation; watch it. The table, its index and the trigger
-    function are created unqualified, in the migrating session's
-    `current_schema()`, and the function pins that `search_path`; the drain and
-    `check` find the table through the host repo's `search_path`, so run the
-    migration with the schema you want first on it. And before turning this
-    on, say the trade out loud: the legacy application's writes now fail if the
-    ledger table cannot accept an insert.
+31. **`ledger?: true` is the durable half, and it needs the ingester or observer to be real.** It turns every legacy write into a row in `legacy_change_events`, committed *with* the legacy transaction, plus a `wake:<event id>` notify that replaces the JSON envelope. Requires `notify? true` (the wake is what makes capture prompt instead of merely eventual). Generate the materialisation drain with `mix ash_strangler.gen.ingester`, or the observation worker with `mix ash_strangler.gen.observer`; keep the cron sweep either way. The backlog is reported by `mix ash_strangler.check`. The table, its index and the trigger function are created unqualified in the migrating session's `current_schema()`, and the function pins that `search_path`; run the migration with the schema you want first on it. Before turning it on, say the trade out loud: the legacy application's writes now fail if the ledger table cannot accept an insert.
+
+    **In `:read_from_new`, `ledger?` remains valid (v0.4.0 correction).** The ledger trigger targets the **owned table**, not the reverse view: legacy writers through that reverse view fire no Ash notifier, so the ledger still has to capture them while any compatibility writer exists. The claim "Ash events cover writes after cutover" is true only if every writer goes through Ash. `notify?`'s compatibility trigger is still refused in this phase, because Postgres rejects row-level triggers on a view.
+
+32. **A fragment is the same mapping, elsewhere — one source total.** `use AshStrangler.Mapping, resource: MyApp.Resource` declares the resource a fragment is written for; attach it with `fragments: [...]`. Spark merges its `strangler` section before verifiers run, so `VerifySingleSource` refuses two sources whether inline, fragmented, or both. `mix ash_strangler.check` verifies the fragment's target; do not leave a wrong-target declaration for runtime.
+
+33. **`extension [...]` is owned storage, not a mapping.** It creates one `<view>_extension` table keyed by the canonical id; the view LEFT JOINs it and INSTEAD OF triggers write it in the same transaction as the legacy row. A static literal default reads through COALESCE for pre-existing rows. A function default, an already-accounted attribute, a missing attribute, and use past `:dual_write` are refused. Any extension forces triggers (and loses upserts); see `extension-stores.md`.
+
+34. **A tenant is derived from the legacy row, never accepted from the host.** Declare `tenant :organization_id, derive: expr(client_party.organization_id)` on the source. The structural lens is read-only and joins are discovered from the expression. It configures no Ash multitenancy; the host declares its own. A cross-tenant relationship whose destination tenant is not proven must be named in `allow_unproven: [...]`, and `mix ash_strangler.check` prints every exemption.
+
+35. **Every collapse state declares the answer for its legacy encoding.** Ordinary states have `when:` + `set:`. Unrepresentable states choose `{:extension, column}`, `{:refuse, reason: ...}`, `{:lossy, to: ..., loss: ...}`, or `derived: true`; the verifier rejects mixed shapes. Loss text is printed under "Declared losses". Omitted legacy columns in a partial `set:` are held -- preserved on update, fallback on insert -- never silently set to NULL.
+
+36. **Observers are outbox consumers, not action replay.** `observers: [Mod]` implements `AshStrangler.Observer`; effects in the same database go through `ctx.repo` and commit with the receipt. Delivery is at-least-once, never exactly-once, and ledger id order is not commit order. Idempotence is by `source_event_id`. `:error` retries to the configured max; `:quarantine` stops immediately; only replaying receipts re-opens delivery.
+
+37. **Baseline before stream consumption, with the ledger already installed.** `mix ash_strangler.baseline Resource --repo Repo` takes a REPEATABLE READ snapshot and keyset-scans the forward mapping. The ledger trigger captures commits outside the snapshot. A baseline means "seen as executed", never "happened now"; no MAX(id) fence, because id order is not commit order. Reconciliation is the consumer's job via source event and transaction ids.
 
 ---
 

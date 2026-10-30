@@ -51,7 +51,7 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
         because: "The vendor's name is the party row's name; contracts do not own it."
 
       # Storage the legacy schema has no room for, beside the shared rows.
-      extension([:negotiating_notes])
+      extension([:negotiating_notes, :created_by_id])
 
       # Tenancy is a fact about the client party's row, derived once.
       tenant :organization_id, derive: expr(client_party.organization_id)
@@ -138,6 +138,11 @@ defmodule AshStrangler.Test.Contract do
     attribute :organization_id, :uuid, public?: true
     attribute :negotiating_notes, :string, public?: true, default: ""
 
+    # Provenance (platform convention): WHO created this row on the host
+    # side. Stored in the extension store (see ContractMapping), travels with
+    # the shared row, and rolls back with the command that wrote it.
+    attribute :created_by_id, :uuid, public?: true
+
     attribute :lifecycle_state, :atom do
       public? true
       allow_nil? false
@@ -196,7 +201,8 @@ defmodule AshStrangler.Test.Contract do
       :payment_term,
       :vendor_party_id,
       :client_party_id,
-      :negotiating_notes
+      :negotiating_notes,
+      :created_by_id
     ]
 
     create :create do
