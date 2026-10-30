@@ -796,6 +796,21 @@ defmodule AshStrangler.Dsl do
         references and two computed columns keeps upserts, `RETURNING` and
         `WITH CHECK OPTION` with no triggers at all.
         """
+      ],
+      observers: [
+        type: {:wrap_list, {:behaviour, AshStrangler.Observer}},
+        default: [],
+        doc: """
+        Observation consumers for this resource's ledger events, as modules
+        implementing the `AshStrangler.Observer` behaviour.
+
+        The behaviour's moduledoc carries the delivery contract in full:
+        at-least-once by `source_event_id`, never exactly-once, and
+        same-database effects transactional with the receipt. Each observer
+        runs once per observation per drain, in declaration order, and the
+        receipt (`ok`, erroring with attempts, or `quarantined`) is written
+        in the same transaction as the observation itself.
+        """
       ]
     ]
   }

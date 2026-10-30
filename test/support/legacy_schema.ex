@@ -111,6 +111,17 @@ defmodule AshStrangler.Test.LegacySchema do
     execute!(@clm_parties_table)
     execute!(@clm_contracts_table)
 
+    # The observation tests' consumer effects: idempotent by the delivery
+    # contract's own key.
+    execute!("""
+    CREATE TABLE IF NOT EXISTS observation_effects (
+      consumer text NOT NULL,
+      source_event_id bigint NOT NULL,
+      effect text NOT NULL,
+      PRIMARY KEY (consumer, source_event_id)
+    )
+    """)
+
     install_resource!(LegacyUser)
     install_resource!(DualWriteUser)
     # Three resources over one legacy table, which is the case this package exists

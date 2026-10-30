@@ -37,6 +37,7 @@ spark_locals_without_parens = [
   negate: 2,
   notify?: 1,
   notify_channel: 1,
+  observers: 1,
   on_update: 1,
   phase: 1,
   read_only?: 1,
