@@ -12,6 +12,8 @@ defmodule AshStrangler.Test.Domain do
     resource AshStrangler.Test.DualWriteUser
     resource AshStrangler.Test.MixedUser
     resource AshStrangler.Test.LedgerUser
+    resource AshStrangler.Test.ExtendedUser
+    resource AshStrangler.Test.Contract
   end
 end
 

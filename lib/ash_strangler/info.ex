@@ -74,6 +74,49 @@ defmodule AshStrangler.Info do
   @spec unmapped(Spark.Dsl.t() | Ash.Resource.t()) :: [AshStrangler.Unmapped.t()]
   def unmapped(resource), do: of_type(resource, AshStrangler.Unmapped)
 
+  @doc "Every `extension` declaration — at most one per source; see VerifyExtension."
+  @spec extensions(Spark.Dsl.t() | Ash.Resource.t()) :: [AshStrangler.Extension.t()]
+  def extensions(resource), do: of_type(resource, AshStrangler.Extension)
+
+  @doc """
+  The attributes stored in this resource's extension table, in declared order.
+
+  Empty when the source declares no `extension` block. These are the columns
+  `AshStrangler.Sql.Extension` creates, the view `LEFT JOIN`s in, and the
+  triggers write — owned storage beside the legacy relation, not a mapping.
+  """
+  @spec extension_attrs(Spark.Dsl.t() | Ash.Resource.t()) :: [atom()]
+  def extension_attrs(resource) do
+    case source(resource) do
+      nil -> []
+      source -> Enum.flat_map(source.extensions, & &1.attributes)
+    end
+  end
+
+  @doc """
+  The tenant declaration, or `nil`.
+
+  One per source — the tenant attribute is a single fact about the resource,
+  and two derivations of it would be two answers to one question (the same
+  bug `VerifySingleSource` refuses for mappings).
+  """
+  @spec tenant(Spark.Dsl.t() | Ash.Resource.t()) :: AshStrangler.Tenant.t() | nil
+  def tenant(resource) do
+    case source(resource) do
+      nil -> nil
+      source -> Enum.find(source.tenants, &is_struct(&1, AshStrangler.Tenant))
+    end
+  end
+
+  @doc "The tenant attribute's name, or `nil` when the source declares no `tenant`."
+  @spec tenant_attr(Spark.Dsl.t() | Ash.Resource.t()) :: atom() | nil
+  def tenant_attr(resource) do
+    case tenant(resource) do
+      nil -> nil
+      %{attribute: attribute} -> attribute
+    end
+  end
+
   @doc """
   The resource's single `key`, or `nil`.
 
@@ -114,8 +157,10 @@ defmodule AshStrangler.Info do
         mapped = for m <- source.mappings, Map.has_key?(m, :attribute), do: m.attribute
         unmapped = for u <- source.mappings, is_struct(u, AshStrangler.Unmapped), do: u.attributes
         keys = for k <- source.keys, do: k.attribute
+        extension = Enum.flat_map(source.extensions, & &1.attributes)
+        tenant = for t <- source.tenants, do: t.attribute
 
-        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys)
+        MapSet.new(mapped ++ List.flatten(unmapped) ++ keys ++ extension ++ tenant)
     end
   end
 

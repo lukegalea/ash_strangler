@@ -479,6 +479,100 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
+  @extension %Spark.Dsl.Entity{
+    name: :extension,
+    describe: """
+    Attributes this resource owns outright, kept in a table **beside** the
+    legacy one instead of inside it.
+
+        extension [:negotiating_notes, :governing_law]
+
+    The columns land in `"<view_schema>"."<table>_extension"`, keyed by the
+    canonical primary key; the view `LEFT JOIN`s that table in, and the
+    `INSTEAD OF` triggers keep it in step inside the same transaction as the
+    legacy write. One extension table per resource — one resource, one answer
+    to "where does this column live".
+
+    This is the shared-rows answer to the attributes the legacy schema has no
+    room for. It is deliberately not three things it can be mistaken for:
+
+    * it is not `unmapped` — an unmapped attribute is a NULL the legacy table
+      could have held; an extension attribute is real storage.
+    * it is not a `constant` — a constant is the same value for every row;
+      an extension column is written per row.
+    * it is not a `map` — there is no legacy column on the other side, and the
+      mapping DSL would be pretending there is.
+
+    A static literal default on the attribute reads back through `COALESCE`,
+    so pre-existing legacy rows — which have no extension row at all — read
+    the declared default. A function default (`&Ash.UUID.generate/0`) is
+    refused: the view definition would have to call it, and a view that calls
+    a random generator returns a different value on every read.
+    """,
+    examples: [
+      ~S|extension [:negotiating_notes, :governing_law]|
+    ],
+    target: AshStrangler.Extension,
+    args: [:attributes],
+    schema: [
+      attributes: [
+        type: {:list, :atom},
+        required: true,
+        doc: "The resource attributes stored in this resource's extension table."
+      ]
+    ]
+  }
+
+  @tenant %Spark.Dsl.Entity{
+    name: :tenant,
+    describe: """
+    The tenant attribute, derived from legacy data.
+
+        tenant :organization_id, derive: expr(client_party.organization_id)
+
+    `derive:` resolves on the twin through `belongs_to`/`has_one`
+    relationships — the same machinery a mapping's `expr(address.city)` uses —
+    and the attribute is read-only by construction: a structural lens with no
+    write direction, so the tenant comes from the legacy rows, never from the
+    host write. A host that tries to set it gets the trigger's read-only
+    guard, with no `because:` needed because the reason is structural.
+
+    ash_strangler does **not** configure Ash multitenancy. The host's resource
+    declares its own `multitenancy` block if it wants one; what this
+    declaration guarantees is the attribute's *value* — one derivation, shared
+    by every reader, host and legacy alike.
+    """,
+    examples: [
+      ~S|tenant :organization_id, derive: expr(client_party.organization_id)|
+    ],
+    target: AshStrangler.Tenant,
+    args: [:attribute],
+    imports: @expr_imports,
+    schema: [
+      attribute: [
+        type: :atom,
+        required: true,
+        doc: "The resource attribute carrying the tenant."
+      ],
+      derive: [
+        type: {:custom, Combinators, :expression, []},
+        required: true,
+        doc: "An expression over legacy columns, possibly through relationships."
+      ],
+      allow_unproven: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        Cross-tenant relationships this resource declines to prove: a
+        relationship to another strangled, tenanted resource whose tenant this
+        source's derive path cannot reach. Every entry is reported by
+        `mix ash_strangler.check` — an exemption is a decision on the record,
+        not a silence.
+        """
+      ]
+    ]
+  }
+
   @mapping_entities [
     @map,
     @decode,
@@ -514,6 +608,8 @@ defmodule AshStrangler.Dsl do
     args: [:twin],
     entities: [
       mappings: @mapping_entities,
+      extensions: [@extension],
+      tenants: [@tenant],
       keys: [@key]
     ],
     schema: [

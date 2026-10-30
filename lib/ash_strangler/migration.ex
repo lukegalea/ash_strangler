@@ -56,12 +56,20 @@ defmodule AshStrangler.Migration do
           # legacy relation's own name, in a schema the legacy application
           # already owns.
           #
+          # The extension table comes BEFORE the view, because the view's
+          # `FROM` clause `LEFT JOIN`s it — `CREATE VIEW` resolves every
+          # referenced relation at creation time. (`Sql.Extension.build/1`
+          # returns [] in the phases that cannot have one, so the ordering
+          # contract is unconditional.)
+          #
           # The ledger comes before the notify statements, and at most one of
           # the two is non-empty: a `ledger?` source's trigger writes the
           # durable event and then notifies `wake:<id>` itself, so
           # `Sql.Notify` stands down for it. See `AshStrangler.Sql.Ledger` --
           # "One trigger, not two".
-          Enum.reject([Sql.View.schema_statement(resource), view, key_index], &is_nil/1) ++
+          (Enum.reject([Sql.View.schema_statement(resource)], &is_nil/1) ++
+             List.flatten(Sql.Extension.build(resource)) ++
+             Enum.reject([view, key_index], &is_nil/1)) ++
             triggers ++ Sql.Ledger.build(resource) ++ Sql.Notify.build(resource)
       end
     else

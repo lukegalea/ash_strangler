@@ -63,7 +63,14 @@ defmodule AshStrangler.Resource do
       # builds lenses, and a lens over a stale twin fails in a place that names
       # neither the column nor the fix.
       AshStrangler.Verifiers.VerifyTwin,
+      # Before anything that reads `Info.source/1` and assumes it found *the*
+      # mapping: with fragments in play, a resource can carry two sources, and
+      # `Info.source/1` would take the first in silence.
+      AshStrangler.Verifiers.VerifySingleSource,
       AshStrangler.Verifiers.VerifyCompleteMapping,
+      AshStrangler.Verifiers.VerifyExtension,
+      AshStrangler.Verifiers.VerifyKeyAllocation,
+      AshStrangler.Verifiers.VerifyTenancy,
       AshStrangler.Verifiers.VerifyNotMigrated,
       AshStrangler.Verifiers.VerifyNotRedundant,
       AshStrangler.Verifiers.VerifyTimestampZones,

@@ -188,7 +188,22 @@ defmodule AshStrangler.Mechanism do
     |> Lens.for_resource()
     |> Enum.map(&emitted/1)
     |> strongest()
+    |> escalate_for_extension(resource_or_dsl)
     |> escalate_for_joins(resource_or_dsl)
+  end
+
+  # An extension table is a second relation, and for the view that is the same
+  # fact a join is: automatic updatability requires exactly one base relation.
+  # Unlike a joined read, though, the extension is not merely read through the
+  # view — every extension column must be written, and an auto-updatable view
+  # has nowhere to put the write. So any `extension` declaration forces the
+  # INSTEAD OF triggers, exactly as `escalate_for_joins` does for a joined
+  # read. (`VerifyNoUpserts` then refuses upserts on its own, since writes
+  # resolve to :triggers.)
+  defp escalate_for_extension(mechanism, resource_or_dsl) do
+    if AshStrangler.Info.extension_attrs(resource_or_dsl) == [],
+      do: mechanism,
+      else: :instead_of
   end
 
   # A join makes the whole VIEW non-updatable, not just the columns that cross it,

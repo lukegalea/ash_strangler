@@ -55,7 +55,7 @@ defmodule AshStrangler.Sql.Triggers do
   type is gone, because an expression over attributes already says what it means.
   """
 
-  alias AshStrangler.{Info, Lens}
+  alias AshStrangler.{Info, Lens, Sql}
   alias AshStrangler.Sql.Printer
 
   # Captured at compile time because a guard cannot call a remote function. There is
@@ -112,10 +112,30 @@ defmodule AshStrangler.Sql.Triggers do
       view: view,
       relation: Info.relation(resource_or_dsl),
       legacy_key: key.from,
+      key: key,
       on_update: Info.on_update(resource_or_dsl),
       backfill_interlock?: Info.backfill_interlock?(resource_or_dsl),
       lenses: lenses,
-      read_only: Enum.filter(lenses, &(&1.type == :masked))
+      read_only: Enum.filter(lenses, &(&1.type == :masked)),
+      # The extension table's own write path. Extension columns never appear in
+      # the legacy assignments (their lenses have no legacy `writes`); they are
+      # written to this relation in the same statement sequence, inside the
+      # same transaction the legacy write runs in -- which is what makes a
+      # command touching shared and extension data roll back atomically.
+      extension_relation:
+        extension_relation?(resource_or_dsl) && Sql.Extension.relation(resource_or_dsl),
+      extension_pk: extension_relation?(resource_or_dsl) && key.attribute,
+      # Rendered through `Sql.View.key_expression/3` against a `stored.`
+      # frame, so the row the trigger writes is keyed by the same expression
+      # the view's id column carries -- one spelling, not two.
+      extension_pk_expr:
+        extension_relation?(resource_or_dsl) &&
+          Sql.View.key_expression(
+            resource_or_dsl,
+            key,
+            fn {_path, _attribute} -> "stored.#{key.from}" end
+          ),
+      extension_attrs: Info.extension_attrs(resource_or_dsl)
     }
 
     Enum.flat_map([:insert, :update, :delete], fn operation ->
@@ -137,16 +157,36 @@ defmodule AshStrangler.Sql.Triggers do
   defp writable_targets(ctx, operation) do
     touch = touch_mode(operation)
 
-    ctx.lenses
-    |> Enum.flat_map(fn lens ->
-      Enum.map(Lens.writes(lens), fn {column, expression} ->
-        {column, Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
+    targets =
+      ctx.lenses
+      |> Enum.flat_map(fn lens ->
+        Enum.map(Lens.writes(lens), fn {column, expression} ->
+          {column, Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
+        end)
       end)
-    end)
-    |> Enum.uniq_by(fn {column, _sql} -> column end)
+      |> Enum.uniq_by(fn {column, _sql} -> column end)
+
+    targets
+    |> identity_key_target(ctx, operation)
     |> Enum.sort_by(fn {column, _sql} -> to_string(column) end)
     |> interlock(ctx)
   end
+
+  # An `:identity` key is the legacy key itself, so a host-created row mints
+  # the canonical id and the INSERT must pass `NEW.<pk>` into the legacy key
+  # column -- the sequence (or default) that allocates keys for a `:uuid_v5`
+  # mapping must not run here, or the legacy row would carry a key the host's
+  # id does not name, and the id the client asked for would be silently
+  # replaced by the view's projection of a row it did not create.
+  #
+  # UPDATE and DELETE need nothing: both key off `__legacy_id`, which the
+  # insert stored.
+  defp identity_key_target(targets, %{key: %{strategy: :identity} = key}, :insert) do
+    [{key.from, "NEW.#{key.attribute}"} | targets]
+    |> Enum.uniq_by(fn {column, _sql} -> column end)
+  end
+
+  defp identity_key_target(targets, _ctx, _operation), do: targets
 
   # pgroll's interlock: the writer declares the row done, so a backfill running
   # concurrently never re-derives a row this trigger already handled.
@@ -179,6 +219,8 @@ defmodule AshStrangler.Sql.Triggers do
   defp touch_mode(_operation), do: :now
 
   # --- the statements ---------------------------------------------------------
+
+  defp extension_relation?(resource_or_dsl), do: Info.extension_attrs(resource_or_dsl) != []
 
   defp function_statement(ctx, operation) do
     %{
@@ -230,6 +272,14 @@ defmodule AshStrangler.Sql.Triggers do
       VALUES (#{values})
       RETURNING * INTO stored;
 
+      -- The extension write runs BEFORE the re-select, on purpose: the
+      -- re-select replaces NEW with the stored row as the view projects it --
+      -- the view that COALESCEs the extension's own columns -- so extension
+      -- values read out of NEW afterwards would be the defaults, not what the
+      -- command supplied. The key is taken from `stored` (the legacy row this
+      -- function just wrote) and rendered through the same key expression the
+      -- view's id column is, so the two cannot disagree.
+    #{extension_insert(ctx)}
       -- Re-read through the view rather than returning NEW. RETURNING on a view
       -- with an INSTEAD OF trigger reports whatever this function returns, so
       -- returning NEW would report NULL for every derived column -- silently,
@@ -266,6 +316,11 @@ defmodule AshStrangler.Sql.Triggers do
         RAISE EXCEPTION 'row % no longer exists in #{ctx.relation}', OLD.__legacy_id;
       END IF;
 
+      -- Same order as the INSERT: extension write first, off `stored` and the
+      -- command's NEW, re-select after. The upsert also covers the row whose
+      -- first update this is: a legacy row predating the extension table has
+      -- no extension row until this statement inserts it.
+    #{extension_upsert(ctx)}
       SELECT * INTO NEW FROM #{ctx.view} WHERE __legacy_id = stored.#{ctx.legacy_key};
 
       RETURN NEW;
@@ -277,7 +332,7 @@ defmodule AshStrangler.Sql.Triggers do
     """
     CREATE OR REPLACE FUNCTION #{function_name(ctx, :delete)}() RETURNS trigger AS $strangler$
     BEGIN
-      DELETE FROM #{ctx.relation} WHERE #{ctx.legacy_key} = OLD.__legacy_id;
+    #{extension_delete(ctx)}  DELETE FROM #{ctx.relation} WHERE #{ctx.legacy_key} = OLD.__legacy_id;
 
       -- OLD, not NULL: returning NULL from an INSTEAD OF trigger reports
       -- "0 rows affected" even though the row is gone, which Ecto surfaces as
@@ -286,6 +341,68 @@ defmodule AshStrangler.Sql.Triggers do
     END $strangler$ LANGUAGE plpgsql;
     """
   end
+
+  # --- the extension table's own write path ------------------------------------
+  #
+  # INSERT always writes the extension row -- written values, NULL where the
+  # command did not supply one. "No extension row" means only one thing, and it
+  # is history: a legacy row that predates the resource. Letting an INSERT
+  # create a row without an extension row would silently add a second meaning.
+  #
+  # UPDATE upserts for the same reason: the row being updated may predate the
+  # extension table, so the first update of a legacy row is an INSERT into the
+  # extension and every later one is an UPDATE. `ON CONFLICT DO UPDATE` covers
+  # both inside the same transaction as the legacy write.
+  #
+  # DELETE removes the extension row first, then the legacy row: the extension
+  # table has no foreign key to the legacy relation (adding one would make the
+  # legacy application's own DELETE fail on a row it cannot see), so the order
+  # is what keeps a partially-deleted row from being visible: if the legacy
+  # delete fails, the whole transaction rolls back, extension row included.
+
+  defp extension_insert(%{extension_attrs: []}), do: ""
+
+  defp extension_insert(ctx) do
+    columns = extension_columns(ctx)
+    values = [ctx.extension_pk_expr | Enum.map(ctx.extension_attrs, &"NEW.#{&1}")]
+
+    """
+        INSERT INTO #{ctx.extension_relation} (#{columns})
+        VALUES (#{Enum.join(values, ", ")});
+
+    """
+  end
+
+  defp extension_upsert(%{extension_attrs: []}), do: ""
+
+  defp extension_upsert(ctx) do
+    columns = extension_columns(ctx)
+    values = [ctx.extension_pk_expr | Enum.map(ctx.extension_attrs, &"NEW.#{&1}")]
+
+    sets =
+      Enum.map_join(ctx.extension_attrs, ", ", fn attribute ->
+        ~s("#{attribute}" = NEW.#{attribute})
+      end)
+
+    """
+        INSERT INTO #{ctx.extension_relation} (#{columns})
+        VALUES (#{Enum.join(values, ", ")})
+        ON CONFLICT ("#{ctx.extension_pk}") DO UPDATE SET #{sets};
+
+    """
+  end
+
+  defp extension_delete(%{extension_attrs: []}), do: ""
+
+  defp extension_delete(ctx) do
+    """
+        DELETE FROM #{ctx.extension_relation} WHERE "#{ctx.extension_pk}" = OLD.#{ctx.extension_pk};
+
+    """
+  end
+
+  defp extension_columns(ctx),
+    do: Enum.map_join([ctx.extension_pk | ctx.extension_attrs], ", ", &~s("#{&1}"))
 
   # `on_update: :changed_columns` wraps each assignment so a column whose value did
   # not change keeps the value it had. See the `on_update` option for why this is a

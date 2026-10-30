@@ -250,6 +250,23 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # An extension column, read from the resource's own extension table — the
+  # alias the view's `LEFT JOIN` binds (`Sql.View.from_clause/1` owns that
+  # spelling, and this node assumes it). With a static literal default the read
+  # is wrapped in `COALESCE`, which is how a legacy row that predates the
+  # extension table — no extension row at all — reads the declared default
+  # instead of NULL. No default, no wrapper: NULL is what an absent extension
+  # row means, and saying so plainly beats hiding it behind a value nobody
+  # declared.
+  defp print(%Call{name: :strangler_ext, args: [attribute, default]}, _ref) do
+    column = ~s(ext.") <> to_string(attribute) <> ~s(")
+
+    case default do
+      nil -> column
+      default -> "coalesce(#{column}, #{literal(default)})"
+    end
+  end
+
   # A `decode`'s value table, as SQL's *simple* `CASE subject WHEN … THEN … END`.
   #
   # A fold over the table into nested `if`s renders correctly and is unreadable —

@@ -113,13 +113,20 @@ defmodule Mix.Tasks.AshStrangler.Check do
     else
       Enum.each(resources, &report/1)
 
+      # Target declarations live outside the DSL's reach — Spark does not
+      # persist which fragments a resource attached — so this is where the
+      # `use AshStrangler.Mapping, resource: ...` promise is held to. See
+      # `AshStrangler.Mapping.verify_target/1` for why it cannot be a verifier.
+      target_failures = Enum.count(resources, &report_target_mismatch/1)
+
       failures =
-        if opts[:data] == false do
-          Mix.shell().info(skipped_note())
-          0
-        else
-          measure(resources)
-        end
+        target_failures +
+          if opts[:data] == false do
+            Mix.shell().info(skipped_note())
+            0
+          else
+            measure(resources)
+          end
 
       Mix.shell().info(manual_checks())
 
@@ -154,6 +161,19 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   # --- the declaration ---------------------------------------------------
 
+  # One line per mapping fragment attached to the wrong resource, and a failure
+  # count so the exit code covers the declaration as well as the data.
+  defp report_target_mismatch(resource) do
+    case AshStrangler.Mapping.verify_target(resource) do
+      :ok ->
+        false
+
+      {:error, message} ->
+        Mix.shell().error("#{@fail} #{message}")
+        true
+    end
+  end
+
   defp report(resource) do
     source = Info.source(resource)
     mappings = Info.mappings(resource)
@@ -168,7 +188,25 @@ defmodule Mix.Tasks.AshStrangler.Check do
       mappings   #{length(mappings)} mapped, #{length(Info.constants(resource))} constant, #{unmapped_count(resource)} unmapped
       read-only  #{read_only_summary(read_only)}#{joins_summary(resource)}
       mechanism  #{mechanism_summary(resource)}#{upsert_warning(resource, Info.writes(resource))}\
+      #{tenant_summary(resource)}\
     """)
+  end
+
+  # An exemption is a decision on the record. The verifier carries it; this is
+  # where it is said out loud, because a check run that stays silent about the
+  # relationships a resource declined to prove is a check that cannot be used
+  # to audit them.
+  defp tenant_summary(resource) do
+    case Info.tenant(resource) do
+      nil ->
+        ""
+
+      %{allow_unproven: []} ->
+        ""
+
+      %{attribute: attribute, allow_unproven: allow_unproven} ->
+        "#{@continued}tenant      #{attribute}, unproven: #{Enum.map_join(allow_unproven, ", ", &":#{&1}")}"
+    end
   end
 
   defp joins_summary(resource) do

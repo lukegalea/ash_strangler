@@ -42,18 +42,30 @@ defmodule AshStrangler.MixProject do
 
   # test/support carries the real-Postgres harness: the test repo, the legacy
   # fixture schema, and the mapped resources the round-trip tests read through.
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # The twin fixtures must compile BEFORE the resources whose mappings resolve
+  # through them at compile time: `contract.ex`'s fragment names
+  # `AshStrangler.Test.Legacy.ClmContracts`, and a Spark verifier runs while the
+  # file that declared it is still compiling. Glob order put `contract.ex`
+  # first; these two entries pin the twins ahead of the directory.
+  defp elixirc_paths(:test),
+    do: [
+      "lib",
+      "test/support/legacy_twins.ex",
+      "test/support/legacy_contracts.exs",
+      "test/support"
+    ]
+
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
     [
-      {:ash, "~> 3.0"},
+      {:ash, ">= 3.37.2 and < 4.0.0"},
       {:spark, "~> 2.0"},
       # Optional deliberately. Step 1 is checks and verifiers, which reason about
       # the mapping rather than emitting SQL, so a consumer can adopt the
       # pre-flight tooling without this extension dragging a data layer into
       # their dependency tree. SQL generation (step 2) will need it.
-      {:ash_postgres, "~> 2.0", optional: true},
+      {:ash_postgres, ">= 2.15.2 and < 3.0.0", optional: true},
       # Rides in transitively via `ash`, but the round-trip property tests
       # depend on it directly -- so it is declared directly. A transitive
       # dependency that a test suite leans on is one `mix deps.update` away

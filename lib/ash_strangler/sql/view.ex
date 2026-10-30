@@ -22,7 +22,7 @@ defmodule AshStrangler.Sql.View do
   `AshStrangler.Info`.
   """
 
-  alias AshStrangler.{Info, Key, Lens, Twin}
+  alias AshStrangler.{Info, Key, Lens, Sql, Twin}
   alias AshStrangler.Sql.Printer
 
   @doc """
@@ -147,10 +147,22 @@ defmodule AshStrangler.Sql.View do
   defp select_columns!(resource_or_dsl, _source, key, attributes) do
     lenses = Lens.by_attribute(resource_or_dsl)
     frame = read_frame(resource_or_dsl)
+    extension_lenses = Lens.extension_lenses(resource_or_dsl)
+    extension_attrs = MapSet.new(extension_lenses, & &1.attribute)
+    tenant_attr = Info.tenant_attr(resource_or_dsl)
+
+    # Extension columns are appended last, after every mapped column: the view's
+    # column order is otherwise attribute-declaration order, and keeping the two
+    # kinds apart makes a diff against a previously generated view read as what
+    # changed (columns added to the extension) rather than as noise.
+    extension_columns =
+      Enum.map(extension_lenses, fn lens -> {forward_sql(lens, frame), lens.attribute} end)
+
+    excluded = MapSet.union(extension_attrs, MapSet.new(List.wrap(tenant_attr)))
 
     {rest, missing} =
       attributes
-      |> Enum.reject(&(&1.name == key.attribute))
+      |> Enum.reject(&(&1.name == key.attribute or MapSet.member?(excluded, &1.name)))
       |> Enum.reduce({[], []}, fn attribute, {columns, missing} ->
         case Map.fetch(lenses, attribute.name) do
           {:ok, lens} ->
@@ -177,7 +189,13 @@ defmodule AshStrangler.Sql.View do
     key_column = {key_expression(resource_or_dsl, key, frame), key.attribute}
     legacy_id_column = {frame.({[], key.from}), :__legacy_id}
 
-    [key_column, legacy_id_column | Enum.reverse(rest)]
+    tenant_column =
+      case Lens.tenant_lens(resource_or_dsl) do
+        nil -> []
+        lens -> [{forward_sql(lens, frame), lens.attribute}]
+      end
+
+    ([key_column, legacy_id_column] ++ Enum.reverse(rest)) ++ tenant_column ++ extension_columns
   end
 
   # An `unmapped ..., as: :null` lens has no forward expression at all, which is
@@ -190,6 +208,8 @@ defmodule AshStrangler.Sql.View do
   # bare column name ambiguous -- which keeps the generated SQL for the common case
   # exactly as it was before joins existed.
   #
+  # The extension table's `LEFT JOIN` is a join for this purpose: with `ext` in
+  # scope, a bare `id` names two columns and Postgres refuses the view outright.
   # The expression index on the base table stays UNqualified: Postgres resolves the
   # alias at parse time, so both forms reference the same column and the index still
   # matches. Asserted by an EXPLAIN test rather than assumed, because a mismatch
@@ -197,7 +217,7 @@ defmodule AshStrangler.Sql.View do
   def read_frame(resource_or_dsl) do
     twin = Info.twin(resource_or_dsl)
 
-    if Info.joins(resource_or_dsl) == [] do
+    if Info.joins(resource_or_dsl) == [] and Info.extension_attrs(resource_or_dsl) == [] do
       Printer.bare_frame(twin)
     else
       Printer.qualified_frame(twin, Twin.table!(twin))
@@ -212,19 +232,43 @@ defmodule AshStrangler.Sql.View do
   # structural rather than a default: an `INNER JOIN` removes rows, so a legacy row
   # with no match would disappear from the view and the new application would see
   # fewer records than the old one with nothing reporting it.
+  #
+  # An `extension [...]` declaration adds its own LEFT JOIN — the resource's
+  # extension table, aliased `ext` (the alias `:strangler_ext` printer nodes
+  # assume). LEFT for the same structural reason as every other join here: a
+  # legacy row that predates the extension table has no extension row, and it
+  # must still read — through `COALESCE`, as its declared default.
   def from_clause(resource_or_dsl) do
     twin = Info.twin(resource_or_dsl)
     relation = Twin.relation(twin)
 
-    case Info.joins(resource_or_dsl) do
-      [] ->
-        relation
+    base =
+      case Info.joins(resource_or_dsl) do
+        [] ->
+          relation
 
-      joins ->
-        Enum.reduce(joins, "#{relation} AS #{Twin.table!(twin)}", fn join, acc ->
-          "#{acc}\n  LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
-        end)
-    end
+        joins ->
+          Enum.reduce(joins, "#{relation} AS #{Twin.table!(twin)}", fn join, acc ->
+            "#{acc}\n  LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
+          end)
+      end
+
+    extension_join(resource_or_dsl, base, Lens.extension_lenses(resource_or_dsl))
+  end
+
+  defp extension_join(_resource_or_dsl, base, []), do: base
+
+  # Keyed by the canonical primary key expression — the same expression the
+  # view's `id` column is, built by one function so the join and the column
+  # cannot disagree. Rendered in the same frame as the SELECT, so a joined
+  # mapping's qualified spelling and the join's agree.
+  defp extension_join(resource_or_dsl, base, _lenses) do
+    key = Info.key(resource_or_dsl)
+    frame = read_frame(resource_or_dsl)
+
+    base <>
+      "\n  LEFT JOIN #{Sql.Extension.relation(resource_or_dsl)} AS #{Sql.Extension.join_alias()}" <>
+      " ON #{Sql.Extension.join_alias()}.\"#{key.attribute}\" = #{key_expression(resource_or_dsl, key, frame)}"
   end
 
   # --- the key ---------------------------------------------------------------
