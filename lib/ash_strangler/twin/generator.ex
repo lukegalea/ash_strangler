@@ -173,7 +173,7 @@ defmodule AshStrangler.Twin.Generator do
         module = spec.destination.(target),
         destination_name = attribute_name(destination) do
       %{
-        name: relationship_name(source, target),
+        name: relationship_name(declared[source], target),
         destination: module,
         source_attribute: declared[source],
         destination_attribute: destination_name
@@ -188,12 +188,16 @@ defmodule AshStrangler.Twin.Generator do
         do: {column, name}
   end
 
-  defp relationship_name(source_column, target) do
+  # Named from the source attribute, not the column: `clientPartyId` and
+  # `providerPartyId` are `client_party_id` and `provider_party_id` by then, so
+  # two keys to one table get two names rather than both the table's.
+  defp relationship_name(source_attribute, target) do
     {_schema, table} = split(target)
+    source = Atom.to_string(source_attribute)
 
-    case String.replace_suffix(source_column, "_id", "") do
-      ^source_column -> attribute_name(table)
-      stripped -> attribute_name(stripped)
+    case String.replace_suffix(source, "_id", "") do
+      ^source -> attribute_name(table)
+      stripped -> String.to_atom(stripped)
     end
   end
 

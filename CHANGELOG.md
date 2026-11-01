@@ -86,6 +86,32 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
   manifest; `AshStrangler.Estate.drift_allow/1` turns residue into drift allow
   patterns. The "Estates" guide and the `AshStrangler.Estate.Dsl` reference.
 
+### Fixes
+
+- **The ledger trigger builds its row image inside the savepoint.** A legacy
+  migration that renamed or dropped a column the twin still names made every
+  write to that table fail with `42703`; the event is now skipped with a
+  `WARNING` and the legacy write commits.
+- **An IN-list `CHECK` is read as a value set only when it is nothing else.**
+  A constraint that combined the list with `OR`, `AND` or `NOT VALID` used to
+  yield every quoted literal in it, so twins got a wrong `one_of` and drift
+  missed a narrowed constraint.
+- **A `NOT VALID` `NOT NULL` (PostgreSQL 18) is not `not_null`.** The column is
+  recorded as nullable and the constraint is listed among the checks, unvalidated.
+- **A domain's `NOT NULL` is no longer listed as one of its checks** on
+  PostgreSQL 17 and later, so a catalog is the same on every major.
+- **`strangler_*` objects are the strangle's on both sides:** drift skips them
+  in the locked catalog as well as the live one, and `capture` leaves them out
+  of `schema.sql`.
+- **A 16-bit packed-key part raises in SQL when the value does not fit**, as
+  the Elixir encoder does, rather than wrapping onto another key.
+- **Generated SQL quotes a legacy column that is not a lowercase identifier**
+  (`"effectiveDate"`), which PostgreSQL would otherwise fold to lowercase.
+- **gen.twin:** two foreign keys to one table get two relationship names,
+  taken from their attributes, and an unparsed `CHECK` is quoted in a note
+  wrapped at 72 characters.
+- The catalog moduledoc lists what drift cannot see.
+
 ### Changes
 
 - **Ledger row images come from the twin's columns**

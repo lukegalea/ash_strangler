@@ -204,6 +204,20 @@ defmodule AshStrangler.UuidV8Test do
       assert %{rows: [[nil]]} = TestRepo.query!(sql, [nil])
     end
 
+    test "the SQL refuses a part too wide for its width, as the Elixir encoder does" do
+      for width <- [16, 32, 64], value <- [-(1 <<< (width - 1)) - 1, 1 <<< (width - 1)] do
+        assert_raise ArgumentError, ~r/does not fit in a #{width}-bit part/, fn ->
+          UuidV8.encode(@estate, 1, [width], [value])
+        end
+
+        sql = "SELECT (#{UuidV8.sql(@estate, 1, [width], ["$1::numeric"])})::text"
+
+        assert_raise Postgrex.Error, ~r/out of range/, fn ->
+          TestRepo.query!(sql, [Decimal.new(value)])
+        end
+      end
+    end
+
     test "the SQL is immutable, so it can back an expression index" do
       TestRepo.query!("CREATE TEMP TABLE packed_probe (a smallint, b bigint)", [])
 

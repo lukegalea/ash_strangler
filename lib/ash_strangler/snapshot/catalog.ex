@@ -35,6 +35,23 @@ defmodule AshStrangler.Snapshot.Catalog do
   None of them is something a twin, a mapping or a drift gate decides anything
   on.
 
+  A `NOT NULL` constraint added `NOT VALID` (PostgreSQL 18) leaves the column's
+  `not_null` false and is recorded among the relation's `checks`, with
+  `validated: false`: it does not promise that no row holds a NULL, so a twin
+  must not read the column as non-null.
+
+  ### What drift cannot see
+
+  `diff/2` compares only what is recorded, so a change confined to something
+  not recorded passes it. Today that includes: a column's collation; `NULLS
+  NOT DISTINCT` on a unique constraint or index (its columns are recorded, its
+  options are not); a foreign key's `MATCH` and `DEFERRABLE` options; exclusion
+  constraints; the fields of a composite type; partition bounds; whether a
+  generated column is `STORED` or `VIRTUAL`; and row-level security and its
+  policies. Several of these change which rows a table admits or how keys
+  compare, so a schema that uses them needs its own review on every capture
+  until they are read.
+
   ## Deterministic by construction
 
   Every name list is sorted in Elixir (binary order), never by `ORDER BY`,
@@ -70,7 +87,10 @@ defmodule AshStrangler.Snapshot.Catalog do
          format_type(a.atttypid, a.atttypmod),
          COALESCE(en.nspname || '.' || e.typname, tn.nspname || '.' || t.typname),
          e.oid IS NOT NULL,
-         a.attnotnull,
+         a.attnotnull
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint nn
+                            WHERE nn.conrelid = a.attrelid AND nn.contype = 'n'
+                              AND NOT nn.convalidated AND nn.conkey[1] = a.attnum),
          pg_get_expr(d.adbin, d.adrelid),
          a.attidentity::text,
          a.attgenerated::text
@@ -110,7 +130,7 @@ defmodule AshStrangler.Snapshot.Catalog do
     LEFT JOIN pg_class fc ON fc.oid = con.confrelid
     LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
    WHERE n.nspname = ANY($1)
-     AND con.contype IN ('p', 'u', 'f', 'c')
+     AND (con.contype IN ('p', 'u', 'f', 'c') OR (con.contype = 'n' AND NOT con.convalidated))
   """
 
   # Unique indexes that no constraint owns: `CREATE UNIQUE INDEX`, partial or
@@ -176,7 +196,7 @@ defmodule AshStrangler.Snapshot.Catalog do
     FROM pg_constraint con
     JOIN pg_type t ON t.oid = con.contypid
     JOIN pg_namespace n ON n.oid = t.typnamespace
-   WHERE n.nspname = ANY($1)
+   WHERE n.nspname = ANY($1) AND con.contype = 'c'
   """
 
   @extensions """
@@ -329,8 +349,11 @@ defmodule AshStrangler.Snapshot.Catalog do
     |> by_name()
   end
 
+  # A NOT NULL that is NOT VALID (PostgreSQL 18) is recorded here, beside the
+  # CHECKs, and its column as nullable: it refuses new NULLs but does not
+  # promise the rows hold none. A validated one is the column's `not_null`.
   defp checks(constraints) do
-    for [name, "c", columns, definition, validated | _] <- constraints do
+    for [name, type, columns, definition, validated | _] <- constraints, type in ["c", "n"] do
       values =
         case columns do
           [column] ->
@@ -455,9 +478,9 @@ defmodule AshStrangler.Snapshot.Catalog do
 
   Columns compare on type, nullability, default, identity and generation;
   constraints, indexes and triggers compare whole; relations on kind and view
-  definition. Triggers whose name starts `strangler_` are skipped on the live
-  side: this package names every trigger it installs that way, and they are
-  the strangle's own, not drift.
+  definition. Triggers whose name starts `strangler_` are skipped on both
+  sides: this package names every trigger it installs that way, and they are
+  the strangle's own, not drift, whichever database was captured.
   """
   @spec diff(map(), map()) :: [difference()]
   def diff(locked, live) do
@@ -484,9 +507,9 @@ defmodule AshStrangler.Snapshot.Catalog do
     named = fn field -> Map.new(locked[field] || [], &{&1["name"], &1}) end
     live_named = fn field -> Map.new(live[field] || [], &{&1["name"], &1}) end
 
-    live_triggers =
-      live_named.("triggers")
-      |> Map.reject(fn {name, _trigger} -> String.starts_with?(name, "strangler_") end)
+    ours? = fn {name, _trigger} -> String.starts_with?(name, "strangler_") end
+    triggers = Map.reject(named.("triggers"), ours?)
+    live_triggers = Map.reject(live_named.("triggers"), ours?)
 
     keyed("column #{key}.", named.("columns"), live_named.("columns"), "") ++
       keyed("primary_key", %{key => locked["primary_key"]}, %{key => live["primary_key"]}) ++
@@ -496,7 +519,7 @@ defmodule AshStrangler.Snapshot.Catalog do
         keyed("check #{key}.", named.("checks"), live_named.("checks"), ""),
         &same_value_set?/1
       ) ++
-      keyed("trigger #{key}.", named.("triggers"), live_triggers, "")
+      keyed("trigger #{key}.", triggers, live_triggers, "")
   end
 
   # A CHECK that is exactly `column IN (...)` compares on its value set, not

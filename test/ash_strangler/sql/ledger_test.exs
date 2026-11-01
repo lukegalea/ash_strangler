@@ -291,42 +291,47 @@ defmodule AshStrangler.Sql.LedgerTest do
              BEGIN
                affected := COALESCE(NEW, OLD);
 
-               IF (TG_OP = 'DELETE') THEN
-                 old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
-                 new_row := NULL;
-                 changed := NULL;
-               ELSIF (TG_OP = 'INSERT') THEN
-                 old_row := NULL;
-                 new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
-                 changed := new_row;
-               ELSE
-                 old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
-                 new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
-                 changed := (
-                   SELECT COALESCE(jsonb_object_agg(pair.key, pair.value), '{}'::jsonb)
-                     FROM jsonb_each(new_row) AS pair
-                    WHERE (old_row -> pair.key) IS DISTINCT FROM pair.value
-                 );
-               END IF;
-
-               -- Attribution: whatever the enclosing transaction declared through
-               -- AshStrangler.Context (custom GUCs, transaction-local). Absent context
-               -- stays absent -- current_setting's `true` yields NULL and the slot
-               -- stays empty, which is the honest value. Capture itself is never
-               -- suppressed: the context decorates the event, it does not gate it.
-               actor_confidence := CASE
-                 WHEN nullif(current_setting('ash_strangler.origin', true), '') IS NOT NULL
-                   OR nullif(current_setting('ash_strangler.correlation_id', true), '') IS NOT NULL
-                   OR nullif(current_setting('ash_strangler.causation_id', true), '') IS NOT NULL
-                   OR nullif(current_setting('ash_strangler.actor', true), '') IS NOT NULL
-                 THEN 'asserted' ELSE NULL END;
-
-               -- Committed WITH the legacy write or not at all: that is the whole
-               -- guarantee the ledger exists for, and it is why this is a synchronous
-               -- insert rather than a queue. The block is a savepoint: a ledger that
-               -- cannot be written is logged and skipped, never allowed to abort the
-               -- legacy application's write.
+               -- Everything that reads the row runs inside this block, which is a
+               -- savepoint. The image names columns, and PL/pgSQL records no dependency
+               -- on them: a legacy migration that renames or drops one goes through,
+               -- and from then on reading it raises 42703 on every write. Inside the
+               -- block that is a skipped event; outside it, an outage of the legacy
+               -- application. A ledger that cannot be written is logged and skipped,
+               -- never allowed to abort the legacy write.
                BEGIN
+                 IF (TG_OP = 'DELETE') THEN
+                   old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
+                   new_row := NULL;
+                   changed := NULL;
+                 ELSIF (TG_OP = 'INSERT') THEN
+                   old_row := NULL;
+                   new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
+                   changed := new_row;
+                 ELSE
+                   old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
+                   new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
+                   changed := (
+                     SELECT COALESCE(jsonb_object_agg(pair.key, pair.value), '{}'::jsonb)
+                       FROM jsonb_each(new_row) AS pair
+                      WHERE (old_row -> pair.key) IS DISTINCT FROM pair.value
+                   );
+                 END IF;
+
+                 -- Attribution: whatever the enclosing transaction declared through
+                 -- AshStrangler.Context (custom GUCs, transaction-local). Absent context
+                 -- stays absent -- current_setting's `true` yields NULL and the slot
+                 -- stays empty, which is the honest value. Capture itself is never
+                 -- suppressed: the context decorates the event, it does not gate it.
+                 actor_confidence := CASE
+                   WHEN nullif(current_setting('ash_strangler.origin', true), '') IS NOT NULL
+                     OR nullif(current_setting('ash_strangler.correlation_id', true), '') IS NOT NULL
+                     OR nullif(current_setting('ash_strangler.causation_id', true), '') IS NOT NULL
+                     OR nullif(current_setting('ash_strangler.actor', true), '') IS NOT NULL
+                   THEN 'asserted' ELSE NULL END;
+
+                 -- Committed WITH the legacy write or not at all: that is the whole
+                 -- guarantee the ledger exists for, and it is why this is a synchronous
+                 -- insert rather than a queue.
                  INSERT INTO #{@table}
                    (source_schema, source_table, operation, primary_key, old_row, new_row,
                     changed_columns, transaction_id, transaction_timestamp,

@@ -109,9 +109,16 @@ The fields:
 - `udt` is the underlying type. For an array, it is the element type.
 - `identity` is `always`, `by_default` or `null`.
 - `predicate` is set only on a partial unique index.
-- A check's `values` is filled in when the check is a single-column
+- A check's `values` is filled in when the whole check is a single-column
   `col IN (...)` / `= ANY (ARRAY[...])` over literals, which is what makes the
-  column an `:atom` with `one_of`.
+  column an `:atom` with `one_of`. An IN list joined to anything else (`OR`,
+  `AND`, or a `NOT VALID` constraint that does not hold yet) has no `values`.
+- `not_null` is false for a column whose `NOT NULL` was added `NOT VALID`
+  (PostgreSQL 18): the constraint is listed among the relation's `checks` with
+  `validated: false`, because it does not promise the rows hold no NULL.
+- `diff` cannot see what the catalog does not record. `AshStrangler.Snapshot.Catalog`
+  lists those kinds (collations, `NULLS NOT DISTINCT`, exclusion constraints,
+  partition bounds and others); a schema that uses them needs its own review.
 
 ### `lock.json`
 
@@ -243,9 +250,11 @@ not watches. See `AshStrangler.Sql.Watch`.
 ## Triggers fail closed to the legacy write
 
 Every trigger this package installs on a legacy relation (notify, ledger and
-watch) runs its side effect inside a `BEGIN ... EXCEPTION WHEN OTHERS` block.
-If the ledger table has been dropped or a notify fails, the trigger raises a
-`WARNING` and the legacy write commits anyway. The legacy application keeps
+watch) runs its side effect inside a `BEGIN ... EXCEPTION WHEN OTHERS` block,
+and so does everything that reads the row's columns: the ledger's row image is
+built inside it. If the ledger table has been dropped, a notify fails, or a
+legacy migration has renamed or dropped a column the twin still names, the
+trigger raises a `WARNING` and the legacy write commits anyway. The legacy application keeps
 working even when the strangler's side of the database is broken.
 
 The cost is a subtransaction per row. The ledger's subtransaction writes, so
@@ -255,8 +264,10 @@ slows visibility checks on other sessions and on replicas for as long as that
 transaction stays open. Keep this in mind for bulk legacy jobs. The notify and
 watch blocks write nothing, so they do not take a transaction id.
 
-`drift` ignores triggers whose names start with `strangler_`, because those
-are this package's own.
+`drift` ignores triggers whose names start with `strangler_`, on both sides,
+because those are this package's own. `capture` leaves every `strangler_*`
+object (trigger, trigger function, key index) out of `schema.sql`, so a
+snapshot captured where a strangle already runs equals one captured before it.
 
 A `CHECK` that is exactly `column IN (...)` compares on its columns, values
 and validity, not its text. The locked catalog has been through a dump and

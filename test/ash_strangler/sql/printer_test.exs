@@ -2,6 +2,32 @@
 #
 # SPDX-License-Identifier: MIT
 
+defmodule AshStrangler.Sql.PrinterTest.CamelCaseTwin do
+  @moduledoc "A twin whose legacy columns are not lowercase identifiers."
+  use Ash.Resource,
+    domain: nil,
+    validate_domain_inclusion?: false,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "loans"
+    schema "library"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false
+    attribute :due_date, :date, source: :dueDate
+    attribute :shelf_mark, :string, source: :"Shelf \"Mark\""
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
 defmodule AshStrangler.Sql.PrinterTest do
   @moduledoc """
   The printer is the one module in this package where a bug is a security bug.
@@ -246,6 +272,16 @@ defmodule AshStrangler.Sql.PrinterTest do
       # lives, so the frame reads it rather than assuming attribute name and column
       # name are the same word.
       assert Printer.to_sql(expr(nick), ref: Printer.bare_frame(diagram_twin())) == "nick"
+    end
+
+    test "a twin column that is not a lowercase identifier is quoted, in every frame" do
+      twin = AshStrangler.Sql.PrinterTest.CamelCaseTwin
+
+      assert Printer.to_sql(expr(due_date), ref: Printer.bare_frame(twin)) == ~s("dueDate")
+      assert Printer.to_sql(expr(id), ref: Printer.bare_frame(twin)) == "id"
+
+      assert Printer.to_sql(expr(shelf_mark), ref: Printer.qualified_frame(twin, "loans")) ==
+               ~s(loans."Shelf ""Mark""")
     end
 
     test "qualified_frame/2 qualifies the primary relation with the alias it was given" do
