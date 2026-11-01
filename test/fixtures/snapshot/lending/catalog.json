@@ -1,0 +1,462 @@
+{
+  "domains": {},
+  "enums": {},
+  "extensions": {},
+  "format": "ash_strangler.catalog/1",
+  "relations": {
+    "lending.books": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "title",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "isbn",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "branch_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "shelf_note",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "branch_id"
+          ],
+          "name": "books_branch_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "lending.branches"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "books_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.branches": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "name",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "fax",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "branches_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.fax_log": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "sent_at",
+          "not_null": false,
+          "type": "timestamp without time zone",
+          "udt": "pg_catalog.timestamp"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "fax_log_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.fines": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "loan_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "amount_cents",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "loan_id"
+          ],
+          "name": "fines_loan_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "lending.loans"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "fines_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.loans": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "book_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "member_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "due_on",
+          "not_null": true,
+          "type": "date",
+          "udt": "pg_catalog.date"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "returned_on",
+          "not_null": false,
+          "type": "date",
+          "udt": "pg_catalog.date"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "book_id"
+          ],
+          "name": "loans_book_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "lending.books"
+          },
+          "validated": true
+        },
+        {
+          "columns": [
+            "member_id"
+          ],
+          "name": "loans_member_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "lending.members"
+          },
+          "validated": false
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "loans_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.members": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "email",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "full_name",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "pin_hash",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "branch_id",
+          "not_null": false,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "branch_id"
+          ],
+          "name": "members_branch_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "lending.branches"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "members_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "lending.sessions": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "member_id",
+          "not_null": false,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "data",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "sessions_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    }
+  },
+  "schemas": [
+    "lending"
+  ]
+}
