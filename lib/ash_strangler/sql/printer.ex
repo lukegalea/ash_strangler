@@ -267,6 +267,18 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # A packed key over its parts, and one part of a packed key: the two
+  # directions of a `reference`. `AshStrangler.UuidV8` owns both spellings, so
+  # the SQL here and the Elixir `encode`/`decode` are one definition printed
+  # twice.
+  defp print(%Call{name: :strangler_v8, args: [registry, kind, parts]}, ctx) do
+    AshStrangler.KeyKinds.to_sql(registry, kind, Enum.map(parts, &print(&1, ctx)))
+  end
+
+  defp print(%Call{name: :strangler_v8_part, args: [registry, kind, index, uuid]}, ctx) do
+    AshStrangler.KeyKinds.part_sql(registry, kind, index, print(uuid, ctx))
+  end
+
   # An extension-state condition: the forward read of a `{:extension, _}`
   # state. `ext.` is the alias `Sql.View.from_clause/1` binds for the
   # resource's extension table — the same assumption the `:strangler_ext`

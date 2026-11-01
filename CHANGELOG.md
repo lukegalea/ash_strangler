@@ -36,6 +36,39 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
   regeneration.
 - **Watched twins:** `twin do watch "channel" end` installs a notify-only,
   key-only trigger through `gen.migration` (`AshStrangler.Sql.Watch`).
+- **Packed keys (`{:uuid_v8, Registry, :kind}`):** an invertible key
+  strategy. A key-kind registry (`use AshStrangler.KeyKinds`, `key_kinds do
+  estate ...; kind :name, 0x001, parts: [{"schema.table.column", 32}] end`)
+  gives each kind a 12-bit tag, and `AshStrangler.UuidV8` packs one or more
+  16/32/64-bit integer parts (94 bits at most) into a version 8 UUID behind a
+  16-bit estate tag. The Elixir encoder and the SQL printer agree, and the SQL
+  is immutable, so the view's id has an expression index. Ids sort in legacy
+  key order within a kind. `VerifyKeyKinds` refuses reused, reserved or
+  out-of-range tags, over-wide kinds, and, against a snapshot, nullable,
+  non-integer or wider-than-declared parts.
+- **Composite keys:** `key :id, from: [:a, :b], strategy: {:uuid_v8, ...}`,
+  for resources in `:read_from_legacy` without `notify?` or `ledger?`.
+- **V-KEY (`VerifyKey`):** a packed key must name exactly its kind's columns on
+  a pinned twin, each a `NOT NULL` integer no wider than its part, holding a
+  non-partial unique key. An `:identity` key on a pinned twin must be a unique
+  `NOT NULL uuid`.
+- **References:** `reference :member_id, kind: {Registry, :member}, from:
+  :member_id` (or a list of columns) maps a legacy foreign key to the packed
+  id of the row it names. Writes decode it back to the legacy integers, and an
+  id of another kind fails the write. **V-REF (`VerifyReferences`)** proves
+  closure from a validated foreign key in the snapshot, or requires `soft:
+  "reason"`, which becomes a `reference_closure` assertion counting dangling
+  rows in `mix ash_strangler.check`.
+- **Twin authorizer:** `twin do system_actor Check end` (with
+  `authorizers: [Ash.Policy.Authorizer]`) adds a policy that only the system
+  actor passes. A twin with a `bypass`, or without the authorizer, does not
+  compile. `gen.twin --system-actor Check` writes both and keeps them on
+  regeneration.
+- **Fixture writers:** `AshStrangler.Twin.Fixture.insert!/3` and
+  `insert_all!/3` write legacy rows through a twin's columns, under the
+  database's constraints, for seeds and tests.
+- The "Keys and references" guide and the `AshStrangler.KeyKinds` DSL
+  reference.
 - **`AshStrangler.Twin` DSL reference** (`documentation/dsls/DSL-AshStrangler.Twin.md`)
   and the "Snapshots" guide.
 

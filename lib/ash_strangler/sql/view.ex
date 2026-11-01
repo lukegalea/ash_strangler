@@ -187,7 +187,13 @@ defmodule AshStrangler.Sql.View do
     end
 
     key_column = {key_expression(resource_or_dsl, key, frame), key.attribute}
-    legacy_id_column = {frame.({[], key.from}), :__legacy_id}
+
+    # A composite key has no single legacy value to carry. Composite keys are
+    # packed, so the id itself decodes to the legacy key, and
+    # `AshStrangler.Verifiers.VerifyKey` keeps them to the phases and features
+    # that never key off `__legacy_id`.
+    legacy_id_column =
+      if Key.composite?(key), do: [], else: [{frame.({[], key.from}), :__legacy_id}]
 
     tenant_column =
       case Lens.tenant_lens(resource_or_dsl) do
@@ -195,7 +201,7 @@ defmodule AshStrangler.Sql.View do
         lens -> [{forward_sql(lens, frame), lens.attribute}]
       end
 
-    ([key_column, legacy_id_column] ++ Enum.reverse(rest)) ++ tenant_column ++ extension_columns
+    ([key_column | legacy_id_column] ++ Enum.reverse(rest)) ++ tenant_column ++ extension_columns
   end
 
   # An `unmapped ..., as: :null` lens has no forward expression at all, which is
@@ -291,6 +297,10 @@ defmodule AshStrangler.Sql.View do
     "uuid_generate_v5(#{Printer.literal(namespace)}::uuid, #{Printer.literal(prefix)} || #{frame.({[], from})}::text)"
   end
 
+  defp do_key_expression(%Key{strategy: {:uuid_v8, registry, kind}} = key, _relation, frame) do
+    AshStrangler.KeyKinds.to_sql(registry, kind, Enum.map(Key.columns(key), &frame.({[], &1})))
+  end
+
   defp do_key_expression(%Key{from: from, strategy: :identity}, _relation, frame) do
     "#{frame.({[], from})}::uuid"
   end
@@ -302,7 +312,8 @@ defmodule AshStrangler.Sql.View do
     raise ArgumentError, """
     key strategy #{inspect(strategy)} is not yet implemented.
 
-    Only `{:uuid_v5, namespace: "..."}` and `:identity` generate SQL today.
+    Only `{:uuid_v8, Registry, :kind}`, `{:uuid_v5, namespace: "..."}` and
+    `:identity` generate SQL.
     """
   end
 
@@ -313,7 +324,8 @@ defmodule AshStrangler.Sql.View do
   # already serves `Ash.get`.
   defp key_index_statement(_table, _resource_or_dsl, %Key{strategy: :identity}), do: nil
 
-  defp key_index_statement(table, resource_or_dsl, %Key{strategy: {:uuid_v5, namespace: _}} = key) do
+  defp key_index_statement(table, resource_or_dsl, %Key{strategy: strategy} = key)
+       when is_tuple(strategy) and elem(strategy, 0) in [:uuid_v5, :uuid_v8] do
     name = "strangler_#{table}_key_idx"
     relation = Info.relation(resource_or_dsl)
     twin = Info.twin(resource_or_dsl)

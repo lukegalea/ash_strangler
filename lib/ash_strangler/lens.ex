@@ -56,6 +56,7 @@ defmodule AshStrangler.Lens do
     Expr,
     Key,
     Negate,
+    Reference,
     Source,
     Unmapped
   }
@@ -306,6 +307,7 @@ defmodule AshStrangler.Lens do
   defp build(%Constant{} = entry, context, source), do: constant_build(entry, context, source)
   defp build(%Unmapped{} = entry, context, source), do: unmapped_build(entry, context, source)
   defp build(%Key{} = entry, context, source), do: key_build(entry, context, source)
+  defp build(%Reference{} = entry, context, source), do: reference_build(entry, context, source)
 
   # --- map ---------------------------------------------------------------------
 
@@ -756,6 +758,33 @@ defmodule AshStrangler.Lens do
     }
   end
 
+  # --- reference ---------------------------------------------------------------
+
+  # A packed key is a bijection, so the reverse of each legacy column is the
+  # decode of its part: one write per column, all from the one attribute.
+  defp reference_build(%Reference{kind: {registry, kind}} = entry, _context, _source) do
+    columns = Reference.columns(entry)
+
+    writes =
+      columns
+      |> Enum.with_index()
+      |> Enum.map(fn {column, index} ->
+        {column, call(:strangler_v8_part, [registry, kind, index, attr_ref(entry.attribute)])}
+      end)
+
+    %__MODULE__{
+      attribute: entry.attribute,
+      entry: entry,
+      combinator: :reference,
+      forward: call(:strangler_v8, [registry, kind, Enum.map(columns, &column_ref/1)]),
+      writes: writes,
+      invertible: :yes,
+      type: :transformation,
+      because: nil,
+      sources: Enum.map(columns, &{[], &1})
+    }
+  end
+
   # --- affine ------------------------------------------------------------------
 
   defp affine_build(%Affine{} = entry, _context, _source) do
@@ -868,7 +897,7 @@ defmodule AshStrangler.Lens do
       writes: [],
       invertible: :no,
       type: :structural,
-      sources: [{[], entry.from}],
+      sources: Enum.map(Key.columns(entry), &{[], &1}),
       because: nil
     }
   end

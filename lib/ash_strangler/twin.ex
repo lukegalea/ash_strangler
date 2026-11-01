@@ -85,6 +85,25 @@ defmodule AshStrangler.Twin do
   table, a permission table) but which no resource maps. See
   `AshStrangler.Sql.Watch`.
 
+  ## Only the system actor reads a twin
+
+  A twin is raw legacy data with none of the canonical resource's policies, so
+  nothing but the host's own machinery (views, observers, backfills, fixture
+  writers) should read it. `system_actor MyApp.Checks.SystemActor` gives the
+  twin a single generated policy that authorizes that actor and nobody else:
+
+      use Ash.Resource,
+        ...,
+        extensions: [AshStrangler.Twin],
+        authorizers: [Ash.Policy.Authorizer]
+
+      twin do
+        system_actor MyApp.Checks.SystemActor
+      end
+
+  `authorize?: false` still reads, as it does on any resource; the policy
+  closes the paths that carry an actor (an API, an admin UI, a tool call).
+
   ## Joins are always `LEFT`, and that is now structural rather than a default
 
   The old DSL let a join declare `type: :inner` and argued at length that `:left`
@@ -110,6 +129,7 @@ defmodule AshStrangler.Twin do
         snapshot "priv/legacy/snapshot/catalog.json"
         secrets [:password_digest, :reset_token]
         watch "legacy_memberships"
+        system_actor MyApp.Checks.SystemActor
       end
       """
     ],
@@ -139,13 +159,27 @@ defmodule AshStrangler.Twin do
         emits a notify-only trigger on this relation whose payload is the
         relation, the operation and the primary key, and nothing else.
         """
+      ],
+      system_actor: [
+        type: {:or, [:atom, {:tuple, [:atom, :keyword_list]}]},
+        doc: """
+        A policy check (an `Ash.Policy.Check` module, or `{module, opts}`)
+        that matches the host's system actor. The twin then gets one policy,
+        `policy always() do authorize_if <check> end`, so an actor that is not
+        the system actor reads no legacy rows through it. Needs
+        `authorizers: [Ash.Policy.Authorizer]` on the twin; a `bypass` on it
+        is refused.
+        """
       ]
     ]
   }
 
   use Spark.Dsl.Extension,
     sections: [@twin],
-    transformers: [AshStrangler.Transformers.DeclareSnapshotResource],
+    transformers: [
+      AshStrangler.Transformers.DeclareSnapshotResource,
+      AshStrangler.Transformers.AddTwinPolicy
+    ],
     verifiers: [
       AshStrangler.Verifiers.VerifySecrets,
       AshStrangler.Verifiers.VerifySnapshot,
@@ -165,6 +199,10 @@ defmodule AshStrangler.Twin do
   @doc "The channel a watched twin notifies on, or `nil` when it is not watched."
   @spec watch(Ash.Resource.t() | Spark.Dsl.t()) :: String.t() | nil
   def watch(twin), do: Spark.Dsl.Extension.get_opt(twin, [:twin], :watch, nil)
+
+  @doc "The policy check that matches the host's system actor, or `nil`."
+  @spec system_actor(Ash.Resource.t() | Spark.Dsl.t()) :: module() | {module(), keyword()} | nil
+  def system_actor(twin), do: Spark.Dsl.Extension.get_opt(twin, [:twin], :system_actor, nil)
 
   @doc """
   True when `module` is usable as a twin: a compiled `AshPostgres` resource with a

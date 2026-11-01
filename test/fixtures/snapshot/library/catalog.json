@@ -1,0 +1,348 @@
+{
+  "domains": {},
+  "enums": {},
+  "extensions": {},
+  "format": "ash_strangler.catalog/1",
+  "relations": {
+    "library.branches": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "smallint",
+          "udt": "pg_catalog.int2"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "name",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "branches_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "library.cards": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "uuid",
+          "udt": "pg_catalog.uuid"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "member_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "member_id"
+          ],
+          "name": "cards_member_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "library.members"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "cards_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "library.copies": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "branch_id",
+          "not_null": true,
+          "type": "smallint",
+          "udt": "pg_catalog.int2"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "copy_no",
+          "not_null": true,
+          "type": "bigint",
+          "udt": "pg_catalog.int8"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "title",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "branch_id"
+          ],
+          "name": "copies_branch_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "library.branches"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "branch_id",
+          "copy_no"
+        ],
+        "name": "copies_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "library.loans": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": "by_default",
+          "name": "id",
+          "not_null": true,
+          "type": "bigint",
+          "udt": "pg_catalog.int8"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "member_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "branch_id",
+          "not_null": true,
+          "type": "smallint",
+          "udt": "pg_catalog.int2"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "copy_no",
+          "not_null": true,
+          "type": "bigint",
+          "udt": "pg_catalog.int8"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "due_on",
+          "not_null": false,
+          "type": "date",
+          "udt": "pg_catalog.date"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "branch_id",
+            "copy_no"
+          ],
+          "name": "loans_branch_id_copy_no_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "branch_id",
+              "copy_no"
+            ],
+            "relation": "library.copies"
+          },
+          "validated": true
+        },
+        {
+          "columns": [
+            "member_id"
+          ],
+          "name": "loans_member_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "library.members"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "loans_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "library.members": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": "by_default",
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "home_branch_id",
+          "not_null": true,
+          "type": "smallint",
+          "udt": "pg_catalog.int2"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "referrer_id",
+          "not_null": false,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "email",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "home_branch_id"
+          ],
+          "name": "members_home_branch_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "library.branches"
+          },
+          "validated": true
+        },
+        {
+          "columns": [
+            "referrer_id"
+          ],
+          "name": "members_referrer_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "library.members"
+          },
+          "validated": false
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "members_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    }
+  },
+  "schemas": [
+    "library"
+  ]
+}

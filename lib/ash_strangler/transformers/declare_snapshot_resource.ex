@@ -4,7 +4,9 @@
 
 defmodule AshStrangler.Transformers.DeclareSnapshotResource do
   @moduledoc """
-  Makes a twin's snapshot catalog an `@external_resource` of the twin.
+  Makes a snapshot catalog an `@external_resource` of the module that names
+  it: a twin (`twin do snapshot ... end`) or a key-kind registry
+  (`key_kinds do snapshot ... end`).
 
   Without it, editing `catalog.json` recompiles nothing, so
   `AshStrangler.Verifiers.VerifySnapshot` would keep passing against the
@@ -16,7 +18,7 @@ defmodule AshStrangler.Transformers.DeclareSnapshotResource do
 
   @impl true
   def transform(dsl) do
-    case AshStrangler.Twin.snapshot(dsl) do
+    case AshStrangler.Twin.snapshot(dsl) || AshStrangler.KeyKinds.snapshot(dsl) do
       nil ->
         {:ok, dsl}
 

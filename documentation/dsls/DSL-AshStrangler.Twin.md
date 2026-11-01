@@ -84,6 +84,25 @@ resource required. It is for relations whose changes matter (a membership
 table, a permission table) but which no resource maps. See
 `AshStrangler.Sql.Watch`.
 
+## Only the system actor reads a twin
+
+A twin is raw legacy data with none of the canonical resource's policies, so
+nothing but the host's own machinery (views, observers, backfills, fixture
+writers) should read it. `system_actor MyApp.Checks.SystemActor` gives the
+twin a single generated policy that authorizes that actor and nobody else:
+
+    use Ash.Resource,
+      ...,
+      extensions: [AshStrangler.Twin],
+      authorizers: [Ash.Policy.Authorizer]
+
+    twin do
+      system_actor MyApp.Checks.SystemActor
+    end
+
+`authorize?: false` still reads, as it does on any resource; the policy
+closes the paths that carry an actor (an API, an admin UI, a tool call).
+
 ## Joins are always `LEFT`, and that is now structural rather than a default
 
 The old DSL let a join declare `type: :inner` and argued at length that `:left`
@@ -110,6 +129,7 @@ twin do
   snapshot "priv/legacy/snapshot/catalog.json"
   secrets [:password_digest, :reset_token]
   watch "legacy_memberships"
+  system_actor MyApp.Checks.SystemActor
 end
 
 ```
@@ -124,6 +144,7 @@ end
 | [`snapshot`](#twin-snapshot){: #twin-snapshot } | `String.t` |  | Path, relative to the project root, of the `catalog.json` this twin was generated from. It becomes an `@external_resource`, and `AshStrangler.Verifiers.VerifySnapshot` fails compilation when the twin and the catalog disagree. |
 | [`secrets`](#twin-secrets){: #twin-secrets } | `list(atom)` | `[]` | Legacy column names this twin must never carry. They are not attributes, so no mapping, view, ledger image or notification can read them; a mapping that names one fails to compile. |
 | [`watch`](#twin-watch){: #twin-watch } | `String.t` |  | A `pg_notify` channel. When set, `mix ash_strangler.gen.migration` emits a notify-only trigger on this relation whose payload is the relation, the operation and the primary key, and nothing else. |
+| [`system_actor`](#twin-system_actor){: #twin-system_actor } | `atom \| {atom, keyword}` |  | A policy check (an `Ash.Policy.Check` module, or `{module, opts}`) that matches the host's system actor. The twin then gets one policy, `policy always() do authorize_if <check> end`, so an actor that is not the system actor reads no legacy rows through it. Needs `authorizers: [Ash.Policy.Authorizer]` on the twin; a `bypass` on it is refused. |
 
 
 

@@ -38,11 +38,18 @@ defmodule AshStrangler.KeyDerivation do
   @doc """
   The modern id for `legacy_id` under `key`, for a source on `relation`.
 
+  For a composite (packed) key, `legacy_id` is the list of the key columns'
+  values, in `from:` order.
+
   Mirrors `AshStrangler.Sql.View`'s generated key expression.
   """
   @spec derive(Key.t(), String.t(), term()) :: String.t()
   def derive(%Key{strategy: {:uuid_v5, namespace: namespace}}, relation, legacy_id) do
     uuid_v5(namespace, name(relation, legacy_id))
+  end
+
+  def derive(%Key{strategy: {:uuid_v8, registry, kind}}, _relation, legacy_key) do
+    AshStrangler.KeyKinds.encode(registry, kind, List.wrap(legacy_key))
   end
 
   def derive(%Key{strategy: :identity}, _relation, legacy_id) do
@@ -53,7 +60,8 @@ defmodule AshStrangler.KeyDerivation do
     raise ArgumentError, """
     key strategy #{inspect(strategy)} is not yet implemented.
 
-    Only `{:uuid_v5, namespace: "..."}` and `:identity` are supported.
+    Only `{:uuid_v8, Registry, :kind}`, `{:uuid_v5, namespace: "..."}` and
+    `:identity` are supported.
     """
   end
 

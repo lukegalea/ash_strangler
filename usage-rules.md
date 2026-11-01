@@ -150,6 +150,12 @@ incomplete backfill produces missing rows, not an error.
    for example a membership table, can be `watch "channel"`ed for key-only
    notifications. See the "Snapshots" guide.
 
+5. **Restrict twins to the system actor.** `twin do system_actor Check end`
+   with `authorizers: [Ash.Policy.Authorizer]` (or `gen.twin --system-actor
+   Check`) makes legacy rows readable by that actor only. Do not add a
+   `bypass` to a twin; it is refused. Write seed and test rows with
+   `AshStrangler.Twin.Fixture`, not through the canonical resource.
+
 5. **`source` takes the twin module.** `source "legacy.users"` is refused with
    `expected module in :twin option`. The relation name, the schema, and the
    column names all come off the twin; there is nowhere to write them twice.
@@ -282,6 +288,17 @@ incomplete backfill produces missing rows, not an error.
     not reimplement the hashing or re-spell the `"<relation>:<id>"` name format
     anywhere — both sides go through `name_prefix/1` precisely so they cannot
     drift, and a drift produces `Ash.get/2` returning nothing for rows that exist.
+
+15a. **Key integer tables with a packed key, and map foreign keys as
+    `reference`s.** Declare a key-kind registry (`use AshStrangler.KeyKinds`)
+    pinned to the snapshot, then `key :id, from: :id, strategy: {:uuid_v8,
+    Registry, :kind}` and `reference :x_id, kind: {Registry, :x}, from: :x_id`.
+    A reference equals the id of the row it names, so no lookup table is
+    needed, and `KeyKinds.encode/3` and `decode/2` are the Elixir side. Never
+    edit a kind's tag or widths: that re-keys every row. If V-REF asks for
+    `soft:`, give the real reason the snapshot cannot prove the row exists; do
+    not add a foreign key to the stand-in schema that production lacks. See the
+    "Keys and references" guide.
 
 16. **The mapped primary key must not be declared with a default, and does not
     need `generated? true` written by hand** — the extension sets it, because the

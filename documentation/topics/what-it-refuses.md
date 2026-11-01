@@ -1048,6 +1048,15 @@ sequence allocates and `RETURNING` projects the derived id. For `:identity`,
 the host must mint the key (default or writable attribute), and the trigger
 passes it into the legacy key column.
 
+### Packed keys and references
+
+**`VerifyKeyKinds`**, **`VerifyKey`** (V-KEY) and **`VerifyReferences`**
+(V-REF) refuse a key-kind registry that is not a valid encoding, a key that
+does not name its kind's unique, `NOT NULL`, narrow-enough integer columns on a
+pinned twin, a composite key outside `:read_from_legacy`, and a reference whose
+closure the snapshot neither proves nor is told about with `soft:`. See
+`keys-and-references.md`.
+
 ### Tenant proofs
 
 **`VerifyTenancy`** refuses two tenant declarations and cross-tenant

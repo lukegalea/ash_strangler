@@ -69,6 +69,7 @@ phase it is in.
    * affine
    * constant
    * unmapped
+   * reference
    * extension
    * tenant
    * key
@@ -111,6 +112,7 @@ diagram's regex out of this DSL.
  * [affine](#strangler-source-affine)
  * [constant](#strangler-source-constant)
  * [unmapped](#strangler-source-unmapped)
+ * [reference](#strangler-source-reference)
  * [extension](#strangler-source-extension)
  * [tenant](#strangler-source-tenant)
  * [key](#strangler-source-key)
@@ -628,6 +630,71 @@ unmapped [:created_by_id], as: :null, because: "No provenance for pre-migration 
 
 Target: `AshStrangler.Unmapped`
 
+### strangler.source.reference
+```elixir
+reference attribute
+```
+
+
+An attribute holding another row's packed key: a foreign key, mapped.
+
+reference :member_id, kind: {MyApp.Keys, :member}, from: :member_id
+
+The attribute reads the key of kind `kind` packed from the legacy
+columns in `from`, so it equals the id of the row it points at by
+construction, wherever that row is mapped. The reverse is the decode, so a
+reference is writable: a write stores the legacy integers the id packs,
+and an id of any other kind fails the write rather than storing a wrong
+integer.
+
+`AshStrangler.Verifiers.VerifyReferences` proves closure from the twin's
+snapshot: a validated foreign key from `from` to the kind's columns, or
+`from` being those columns. Where no such constraint exists, `soft:`
+records why, and `mix ash_strangler.check` counts the dangling rows.
+
+
+
+
+### Examples
+```
+reference :member_id, kind: {MyApp.Keys, :member}, from: :member_id
+```
+
+```
+reference :copy_id, kind: {MyApp.Keys, :copy}, from: [:branch_id, :copy_no]
+```
+
+```
+reference :referred_by_id,
+  kind: {MyApp.Keys, :member},
+  from: :referrer_id,
+  soft: "Referrals predate the members table's foreign keys."
+
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attribute`](#strangler-source-reference-attribute){: #strangler-source-reference-attribute .spark-required} | `atom` |  | The resource attribute. |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`kind`](#strangler-source-reference-kind){: #strangler-source-reference-kind .spark-required} | `{atom, atom}` |  | `{Registry, :kind}`: the key kind of the row referred to. |
+| [`from`](#strangler-source-reference-from){: #strangler-source-reference-from .spark-required} | `atom \| list(atom)` |  | The legacy columns holding the referred-to row's parts, in the kind's order. |
+| [`soft`](#strangler-source-reference-soft){: #strangler-source-reference-soft } | `String.t` |  | Why no validated foreign key backs this reference. Required when the snapshot proves no closure; refused when it does. Every soft reference becomes a dangling-row count in `mix ash_strangler.check`. |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Reference`
+
 ### strangler.source.extension
 ```elixir
 extension attributes
@@ -758,6 +825,14 @@ on every row.
 key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e...71"}
 ```
 
+```
+key :id, from: :id, strategy: {:uuid_v8, MyApp.Keys, :member}
+```
+
+```
+key :id, from: [:branch_id, :copy_no], strategy: {:uuid_v8, MyApp.Keys, :copy}
+```
+
 
 
 ### Arguments
@@ -769,8 +844,8 @@ key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e...71"}
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`from`](#strangler-source-key-from){: #strangler-source-key-from .spark-required} | `atom` |  | The legacy key column, as a twin attribute. |
-| [`strategy`](#strangler-source-key-strategy){: #strangler-source-key-strategy .spark-required} | `any` |  | How to derive it. `{:uuid_v5, namespace: "..."}` hashes the legacy key into a stable uuid; `:identity` passes it through unchanged. |
+| [`from`](#strangler-source-key-from){: #strangler-source-key-from .spark-required} | `atom \| list(atom)` |  | The legacy key column, as a twin attribute. A list of columns is a composite key, and only a packed (`:uuid_v8`) strategy can derive one. |
+| [`strategy`](#strangler-source-key-strategy){: #strangler-source-key-strategy .spark-required} | `any` |  | How to derive it: * `{:uuid_v8, Registry, :kind}` packs the legacy integers into an   invertible version 8 UUID tagged with the kind (see   `AshStrangler.KeyKinds`). The id decodes back to the legacy key. * `{:uuid_v5, namespace: "..."}` hashes the legacy key into a stable,   one-way uuid. * `:identity` passes a legacy uuid through unchanged. |
 
 
 

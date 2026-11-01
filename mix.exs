@@ -168,11 +168,14 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/notifications.md",
         "documentation/topics/the-change-ledger.md",
         "documentation/topics/snapshots.md",
+        "documentation/topics/keys-and-references.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},
         {"documentation/dsls/DSL-AshStrangler.Twin.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Twin)},
+        {"documentation/dsls/DSL-AshStrangler.KeyKinds.md",
+         search_data: Spark.Docs.search_data_for(AshStrangler.KeyKinds.Dsl)},
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -188,7 +191,13 @@ defmodule AshStrangler.MixProject do
       groups_for_modules: [
         Dsl: [
           AshStrangler.Resource,
-          AshStrangler.Twin
+          AshStrangler.Twin,
+          AshStrangler.KeyKinds
+        ],
+        Keys: [
+          AshStrangler.UuidV8,
+          AshStrangler.KeyDerivation,
+          AshStrangler.Twin.Fixture
         ],
         "The transform layer": [
           AshStrangler.Lens,
@@ -264,9 +273,10 @@ defmodule AshStrangler.MixProject do
         "docs",
         "spark.replace_doc_links"
       ],
-      "spark.formatter": "spark.formatter --extensions AshStrangler.Resource,AshStrangler.Twin",
+      "spark.formatter":
+        "spark.formatter --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl",
       "spark.cheat_sheets":
-        "spark.cheat_sheets --extensions AshStrangler.Resource,AshStrangler.Twin"
+        "spark.cheat_sheets --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl"
     ]
   end
 end

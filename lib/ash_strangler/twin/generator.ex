@@ -40,9 +40,12 @@ defmodule AshStrangler.Twin.Generator do
     * `:secrets` — column names to omit;
     * `:snapshot` — the catalog path to pin the twin to, or `nil`;
     * `:watch` — a channel, or `nil`;
+    * `:system_actor` — the system-actor policy check, as source text, or
+      `nil` (optional);
     * `:command` — the provenance line for the moduledoc.
   """
   @type spec :: %{
+          optional(:system_actor) => String.t() | nil,
           relation: String.t(),
           catalog: map(),
           module: module(),
@@ -69,7 +72,7 @@ defmodule AshStrangler.Twin.Generator do
       use Ash.Resource,
         domain: #{inspect(spec.domain)},
         data_layer: AshPostgres.DataLayer,
-        extensions: [AshStrangler.Twin]
+        extensions: [AshStrangler.Twin]#{authorizers(spec)}
 
       postgres do
         table #{inspect(table)}
@@ -224,17 +227,24 @@ defmodule AshStrangler.Twin.Generator do
     |> String.trim_leading()
   end
 
-  defp twin_block(%{snapshot: nil, secrets: [], watch: nil}), do: ""
+  defp authorizers(spec) do
+    if spec[:system_actor], do: ",\n    authorizers: [Ash.Policy.Authorizer]", else: ""
+  end
 
   defp twin_block(spec) do
     lines =
       [
         spec.snapshot && "snapshot #{inspect(spec.snapshot)}",
         spec.secrets != [] && "secrets #{inspect(Enum.map(spec.secrets, &String.to_atom/1))}",
-        spec.watch && "watch #{inspect(spec.watch)}"
+        spec.watch && "watch #{inspect(spec.watch)}",
+        spec[:system_actor] && "system_actor #{spec[:system_actor]}"
       ]
       |> Enum.filter(& &1)
 
+    if lines == [], do: "", else: twin_block_lines(lines)
+  end
+
+  defp twin_block_lines(lines) do
     """
 
       twin do
