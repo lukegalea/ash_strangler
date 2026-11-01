@@ -22,6 +22,13 @@ defmodule AshStrangler.Verifiers.VerifyLedger do
       past cutover the writes worth recording are Ash's own, and Ash's own
       event log (or plain notifiers) covers them.
 
+    * V-LEDGER: a ledger whose row image (`AshStrangler.Sql.Ledger.image_columns/1`)
+      would include a column the twin declares secret. The image is built from
+      the twin's attributes and a secret is never one, so in the legacy phases
+      this holds by construction; in `:read_from_new` the image is the
+      resource's own columns, and one named like a legacy secret is refused
+      rather than trusted to be harmless.
+
   ## What this verifier does NOT check, and why it cannot
 
   "Only one ledger table per legacy relation" is not checked here because it
@@ -53,7 +60,8 @@ defmodule AshStrangler.Verifiers.VerifyLedger do
   def verify(dsl) do
     with %AshStrangler.Source{ledger?: true} = source <- AshStrangler.Info.source(dsl),
          :ok <- require_notify(dsl, source),
-         :ok <- require_triggerable_phase(dsl) do
+         :ok <- require_triggerable_phase(dsl),
+         :ok <- refuse_secret_image(dsl) do
       :ok
     else
       %AshStrangler.Source{} -> :ok
@@ -90,6 +98,30 @@ defmodule AshStrangler.Verifiers.VerifyLedger do
        backlog explain itself in production.
        """
      )}
+  end
+
+  defp refuse_secret_image(dsl) do
+    secrets = AshStrangler.Twin.secrets(AshStrangler.Info.twin(dsl))
+
+    case Enum.filter(AshStrangler.Sql.Ledger.image_columns(dsl), &(&1 in secrets)) do
+      [] ->
+        :ok
+
+      leaked ->
+        {:error,
+         Spark.Error.DslError.exception(
+           module: Verifier.get_persisted(dsl, :module),
+           path: [:strangler, :source, :ledger?],
+           message: """
+           The ledger's row image would include #{Enum.map_join(leaked, ", ", &"`#{&1}`")}, which
+           #{inspect(AshStrangler.Info.twin(dsl))} declares secret.
+
+           Every ledger row is a copy of the image, kept until it is drained and
+           often long after. A secret has no business in it. Rename or drop the
+           column from the image, or turn `ledger?` off for this resource.
+           """
+         )}
+    end
   end
 
   defp require_triggerable_phase(dsl) do

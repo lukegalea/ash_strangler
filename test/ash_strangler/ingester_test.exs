@@ -63,8 +63,6 @@ defmodule AshStrangler.IngesterTest do
 
   use AshStrangler.DataCase, async: true
 
-  import ExUnit.CaptureIO
-
   alias AshStrangler.Ingester
   alias AshStrangler.Test.DualWriteUser
 
@@ -109,9 +107,11 @@ defmodule AshStrangler.IngesterTest do
       {:ok, ctx} = Ingester.context(DualWriteUser, @namespace)
       source = Ingester.render_ingestion(ctx)
 
-      {_ast, stderr} = with_io(:stderr, fn -> Code.string_to_quoted!(source) end)
+      # This process's diagnostics, not the global stderr, which other async
+      # tests and test-file compilation also write to.
+      {_ast, diagnostics} = Code.with_diagnostics(fn -> Code.string_to_quoted!(source) end)
 
-      assert stderr == "", "rendering emitted compiler diagnostics:\n#{stderr}"
+      assert diagnostics == [], "rendering emitted compiler diagnostics:\n#{inspect(diagnostics)}"
     end
 
     test "carries the actor stub and the source envelope, not a guessed mapping" do
@@ -151,9 +151,11 @@ defmodule AshStrangler.IngesterTest do
       {:ok, ctx} = Ingester.context(DualWriteUser, @namespace)
       source = Ingester.render_worker(ctx)
 
-      {_ast, stderr} = with_io(:stderr, fn -> Code.string_to_quoted!(source) end)
+      # This process's diagnostics, not the global stderr, which other async
+      # tests and test-file compilation also write to.
+      {_ast, diagnostics} = Code.with_diagnostics(fn -> Code.string_to_quoted!(source) end)
 
-      assert stderr == "", "rendering emitted compiler diagnostics:\n#{stderr}"
+      assert diagnostics == [], "rendering emitted compiler diagnostics:\n#{inspect(diagnostics)}"
     end
 
     test "drains by cursor with SKIP LOCKED and marks processed on success" do

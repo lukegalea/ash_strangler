@@ -11,6 +11,45 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 <!-- changelog -->
 
+## Unreleased
+
+### Features
+
+- **Pinned schema snapshots:** `mix ash_strangler.snapshot capture|derive|verify|drift|load`.
+  A snapshot directory holds a normalised `pg_dump --schema-only`
+  (`schema.sql`), an optional `extensions.sql` preamble, a `catalog.json`
+  derived deterministically from them on a scratch database
+  (`ash_strangler.catalog/1`), and a `lock.json` of hashes, migration heads and
+  provenance (`ash_strangler.lock/1`). `verify` (G-SNAP) re-derives and compares
+  byte for byte; `drift` (G-DRIFT) diffs a live database against the catalog,
+  with an allow-list, and ignores this package's own `strangler_*` triggers.
+- **`gen.twin --from-snapshot`:** twins generated from a catalog with no live
+  database. Live generation now goes through the same catalog, so both paths
+  type columns identically (`AshStrangler.Snapshot.Types`).
+- **V-SNAPSHOT:** a twin may declare `twin do snapshot "…/catalog.json" end`.
+  The catalog becomes an `@external_resource`, and compilation fails, naming
+  each column, when the twin's attributes, types, value sets, nullability or
+  primary key disagree with it.
+- **Secret columns:** `twin do secrets [...] end` (or `gen.twin --secret
+  schema.table.column`). A secret is never a twin attribute, a mapping that names
+  one does not compile, and `gen.twin` preserves the declaration across
+  regeneration.
+- **Watched twins:** `twin do watch "channel" end` installs a notify-only,
+  key-only trigger through `gen.migration` (`AshStrangler.Sql.Watch`).
+- **`AshStrangler.Twin` DSL reference** (`documentation/dsls/DSL-AshStrangler.Twin.md`)
+  and the "Snapshots" guide.
+
+### Changes
+
+- **Ledger row images come from the twin's columns**
+  (`AshStrangler.Sql.Ledger.image_columns/1`), not `to_jsonb(OLD/NEW)`, so a
+  column the twin does not declare is no longer written to
+  `legacy_change_events`. V-LEDGER refuses a ledger whose image would include a
+  declared secret.
+- **Trigger failure isolation:** the ledger's insert and wake, and the notify
+  trigger's `pg_notify`, run in a savepoint. A failure, such as a dropped
+  ledger table, raises a `WARNING`, and the legacy write commits.
+
 ## [0.4.0] - 2026-10-29
 
 The single release containing shared rows, out-of-resource mappings, extension

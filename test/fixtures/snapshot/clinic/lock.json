@@ -1,0 +1,15 @@
+{
+  "captured": null,
+  "derived_on": "PostgreSQL 18.4",
+  "files": {
+    "catalog.json": "69560757d1b59dddd2d7c201dc96ea2ae9bc812aa6c3fc1c4b7ef1fd2f0168f0",
+    "extensions.sql": "85641e21336d5eea88543ed747d8a7e3bb632ca5979fcc7ebfdc611c3d90741d",
+    "schema.sql": "eac82a2ca3c40f4c65b1d04b3a25ebef876bf0773d84841bf972e8f5a005778a"
+  },
+  "format": "ash_strangler.lock/1",
+  "generator": "ash_strangler 0.4.0",
+  "heads": {},
+  "schemas": [
+    "clinic"
+  ]
+}

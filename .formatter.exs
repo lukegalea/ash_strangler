@@ -42,8 +42,10 @@ spark_locals_without_parens = [
   phase: 1,
   read_only?: 1,
   representation: 1,
+  secrets: 1,
   separator: 1,
   set: 1,
+  snapshot: 1,
   source: 1,
   source: 2,
   state: 1,
@@ -54,6 +56,7 @@ spark_locals_without_parens = [
   unmapped: 1,
   unmapped: 2,
   values: 1,
+  watch: 1,
   when: 1,
   writes: 1,
   zone: 1

@@ -1,0 +1,248 @@
+{
+  "domains": {
+    "clinic.postcode": {
+      "checks": [
+        {
+          "definition": "CHECK ((VALUE ~ '^[A-Z0-9 ]+$'::text))",
+          "name": "postcode_check"
+        }
+      ],
+      "default": null,
+      "not_null": false,
+      "type": "text",
+      "udt": "pg_catalog.text"
+    }
+  },
+  "enums": {
+    "clinic.visit_kind": [
+      "checkup",
+      "urgent",
+      "follow_up"
+    ]
+  },
+  "extensions": {
+    "citext": "clinic"
+  },
+  "format": "ash_strangler.catalog/1",
+  "relations": {
+    "clinic.patients": {
+      "checks": [
+        {
+          "columns": [
+            "status"
+          ],
+          "definition": "CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))",
+          "name": "patients_status_check",
+          "validated": true,
+          "values": [
+            "active",
+            "archived"
+          ]
+        }
+      ],
+      "columns": [
+        {
+          "array": false,
+          "default": "nextval('clinic.patients_id_seq'::regclass)",
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "bigint",
+          "udt": "pg_catalog.int8"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "email",
+          "not_null": true,
+          "type": "clinic.citext",
+          "udt": "clinic.citext"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "full_name",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": "'active'::text",
+          "generated": null,
+          "identity": null,
+          "name": "status",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "postcode",
+          "not_null": false,
+          "type": "clinic.postcode",
+          "udt": "clinic.postcode"
+        },
+        {
+          "array": true,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "tags",
+          "not_null": false,
+          "type": "text[]",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "password_digest",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "location",
+          "not_null": false,
+          "type": "point",
+          "udt": "pg_catalog.point"
+        },
+        {
+          "array": false,
+          "default": "now()",
+          "generated": null,
+          "identity": null,
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp without time zone",
+          "udt": "pg_catalog.timestamp"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "patients_pkey"
+      },
+      "triggers": [],
+      "unique": [
+        {
+          "columns": [
+            "full_name"
+          ],
+          "name": "patients_active_name_index",
+          "predicate": "(status = 'active'::text)"
+        },
+        {
+          "columns": [
+            "email"
+          ],
+          "name": "patients_email_index",
+          "predicate": null
+        }
+      ]
+    },
+    "clinic.visits": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": "by_default",
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "patient_id",
+          "not_null": true,
+          "type": "bigint",
+          "udt": "pg_catalog.int8"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "kind",
+          "not_null": true,
+          "type": "clinic.visit_kind",
+          "udt": "clinic.visit_kind"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "notes",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "Room",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "patient_id"
+          ],
+          "name": "visits_patient_id_fkey",
+          "on_delete": "cascade",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "clinic.patients"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "visits_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    }
+  },
+  "schemas": [
+    "clinic"
+  ]
+}

@@ -37,6 +37,12 @@ defmodule AshStrangler.Sql.LedgerTest.Legacy.Users do
     migrate? false
   end
 
+  # The legacy table also holds `password_digest`. Declaring it secret keeps it
+  # off the twin, and so out of the ledger's row image below.
+  twin do
+    secrets [:password_digest]
+  end
+
   attributes do
     attribute :id, :integer, primary_key?: true, allow_nil?: false
     attribute :login, :string
@@ -286,16 +292,16 @@ defmodule AshStrangler.Sql.LedgerTest do
                affected := COALESCE(NEW, OLD);
 
                IF (TG_OP = 'DELETE') THEN
-                 old_row := to_jsonb(OLD);
+                 old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
                  new_row := NULL;
                  changed := NULL;
                ELSIF (TG_OP = 'INSERT') THEN
                  old_row := NULL;
-                 new_row := to_jsonb(NEW);
+                 new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
                  changed := new_row;
                ELSE
-                 old_row := to_jsonb(OLD);
-                 new_row := to_jsonb(NEW);
+                 old_row := jsonb_build_object('id', OLD."id", 'login', OLD."login", 'email', OLD."email");
+                 new_row := jsonb_build_object('id', NEW."id", 'login', NEW."login", 'email', NEW."email");
                  changed := (
                    SELECT COALESCE(jsonb_object_agg(pair.key, pair.value), '{}'::jsonb)
                      FROM jsonb_each(new_row) AS pair
@@ -317,29 +323,36 @@ defmodule AshStrangler.Sql.LedgerTest do
 
                -- Committed WITH the legacy write or not at all: that is the whole
                -- guarantee the ledger exists for, and it is why this is a synchronous
-               -- insert rather than a queue.
-               INSERT INTO #{@table}
-                 (source_schema, source_table, operation, primary_key, old_row, new_row,
-                  changed_columns, transaction_id, transaction_timestamp,
-                  source_system, source_correlation_id, source_request_id, source_user,
-                  actor_confidence)
-               VALUES
-                 (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
-                  jsonb_build_object('id', affected.id),
-                  old_row, new_row, changed,
-                  txid_current(), transaction_timestamp(),
-                  nullif(current_setting('ash_strangler.origin', true), ''),
-                  nullif(current_setting('ash_strangler.correlation_id', true), ''),
-                  nullif(current_setting('ash_strangler.causation_id', true), ''),
-                  nullif(current_setting('ash_strangler.actor', true), ''),
-                  actor_confidence)
-               RETURNING id INTO event_id;
+               -- insert rather than a queue. The block is a savepoint: a ledger that
+               -- cannot be written is logged and skipped, never allowed to abort the
+               -- legacy application's write.
+               BEGIN
+                 INSERT INTO #{@table}
+                   (source_schema, source_table, operation, primary_key, old_row, new_row,
+                    changed_columns, transaction_id, transaction_timestamp,
+                    source_system, source_correlation_id, source_request_id, source_user,
+                    actor_confidence)
+                 VALUES
+                   (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
+                    jsonb_build_object('id', affected.id),
+                    old_row, new_row, changed,
+                    txid_current(), transaction_timestamp(),
+                    nullif(current_setting('ash_strangler.origin', true), ''),
+                    nullif(current_setting('ash_strangler.correlation_id', true), ''),
+                    nullif(current_setting('ash_strangler.causation_id', true), ''),
+                    nullif(current_setting('ash_strangler.actor', true), ''),
+                    actor_confidence)
+                 RETURNING id INTO event_id;
 
-               -- The wake, key-only. The event id is a bigint, so the payload is a
-               -- handful of bytes no matter how wide the row is -- the 7999-byte
-               -- pg_notify ceiling aborts the LEGACY application's transaction, and a
-               -- drain re-reads the durable row anyway.
-               PERFORM pg_notify('ledger_test_channel', 'wake:' || event_id);
+                 -- The wake, key-only. The event id is a bigint, so the payload is a
+                 -- handful of bytes no matter how wide the row is -- the 7999-byte
+                 -- pg_notify ceiling aborts the LEGACY application's transaction, and a
+                 -- drain re-reads the durable row anyway.
+                 PERFORM pg_notify('ledger_test_channel', 'wake:' || event_id);
+               EXCEPTION WHEN OTHERS THEN
+                 RAISE WARNING 'ash_strangler ledger for %.% skipped: % (%)',
+                   TG_TABLE_SCHEMA, TG_TABLE_NAME, SQLERRM, SQLSTATE;
+               END;
 
                -- The return value of an AFTER row trigger is ignored.
                RETURN NULL;

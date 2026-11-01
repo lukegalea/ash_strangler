@@ -89,11 +89,17 @@ defmodule AshStrangler.Sql.Notify do
 
       -- Key only. See the moduledoc: a payload built from row data can exceed
       -- the 7999-byte ceiling and abort the LEGACY application's transaction.
-      PERFORM pg_notify('#{channel}', json_build_object(
-        'resource', '#{resource_name}',
-        'legacy_id', affected.#{key.from},
-        'op', lower(TG_OP)
-      )::text);
+      -- The block is a savepoint, so a notify that fails anyway is logged and
+      -- the legacy write still commits.
+      BEGIN
+        PERFORM pg_notify('#{channel}', json_build_object(
+          'resource', '#{resource_name}',
+          'legacy_id', affected.#{key.from},
+          'op', lower(TG_OP)
+        )::text);
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'ash_strangler notify on % skipped: % (%)', TG_TABLE_NAME, SQLERRM, SQLSTATE;
+      END;
 
       -- The return value of an AFTER row trigger is ignored.
       RETURN NULL;
