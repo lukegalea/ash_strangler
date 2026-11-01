@@ -96,6 +96,11 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 - **Trigger failure isolation:** the ledger's insert and wake, and the notify
   trigger's `pg_notify`, run in a savepoint. A failure, such as a dropped
   ledger table, raises a `WARNING`, and the legacy write commits.
+- **Drift compares an IN-list `CHECK` on its value set:** a `CHECK` that is
+  exactly `column IN (...)` no longer reports a change when only its text
+  differs. A database built by migrations prints some IN lists (a varchar list
+  cast to `text[]`) differently from the same constraint after a dump and
+  reload, which is how the locked catalog is made.
 
 ## [0.4.0] - 2026-10-29
 

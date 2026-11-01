@@ -257,3 +257,10 @@ watch blocks write nothing, so they do not take a transaction id.
 
 `drift` ignores triggers whose names start with `strangler_`, because those
 are this package's own.
+
+A `CHECK` that is exactly `column IN (...)` compares on its columns, values
+and validity, not its text. The locked catalog has been through a dump and
+reload and a live database built by migrations has not, and `pg_dump` does not
+round-trip the text of every IN list: a varchar list stored as
+`(ARRAY['a'::character varying])::text[]` reloads as
+`ARRAY[('a'::character varying)::text]`. Both admit the same rows.
