@@ -253,6 +253,33 @@ defmodule AshStrangler.SnapshotTest do
         refute Enum.any?(report.differences, &String.starts_with?(&1.id, "trigger"))
       end)
     end
+
+    test "an IN-list CHECK compares on its values, not its text" do
+      Snapshot.with_scratch_database(config(), fn live ->
+        :ok = Snapshot.load(@fixture, live)
+
+        # What a dump and reload does to a varchar IN list: same values, other text.
+        execute(live, [
+          "ALTER TABLE clinic.patients DROP CONSTRAINT patients_status_check, " <>
+            "ADD CONSTRAINT patients_status_check CHECK (status = ANY " <>
+            "(ARRAY['active'::varchar, 'archived'::varchar]::text[]))"
+        ])
+
+        assert {:ok, %{differences: [], allowed: []}} = Snapshot.drift(@fixture, live)
+
+        execute(live, [
+          "ALTER TABLE clinic.patients DROP CONSTRAINT patients_status_check, " <>
+            "ADD CONSTRAINT patients_status_check CHECK (status = ANY " <>
+            "(ARRAY['active'::varchar, 'closed'::varchar]::text[]))"
+        ])
+
+        assert {:ok, %{differences: [difference]}} = Snapshot.drift(@fixture, live)
+        assert difference.id == "check clinic.patients.patients_status_check"
+
+        assert Snapshot.describe(difference) =~
+                 ~s|values ["active", "archived"] -> ["active", "closed"]|
+      end)
+    end
   end
 
   describe "mix ash_strangler.snapshot" do

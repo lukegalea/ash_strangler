@@ -492,9 +492,23 @@ defmodule AshStrangler.Snapshot.Catalog do
       keyed("primary_key", %{key => locked["primary_key"]}, %{key => live["primary_key"]}) ++
       keyed("unique #{key}.", named.("unique"), live_named.("unique"), "") ++
       keyed("foreign_key #{key}.", named.("foreign_keys"), live_named.("foreign_keys"), "") ++
-      keyed("check #{key}.", named.("checks"), live_named.("checks"), "") ++
+      Enum.reject(
+        keyed("check #{key}.", named.("checks"), live_named.("checks"), ""),
+        &same_value_set?/1
+      ) ++
       keyed("trigger #{key}.", named.("triggers"), live_triggers, "")
   end
+
+  # A CHECK that is exactly `column IN (...)` compares on its value set, not
+  # its text. The locked side has been through a dump and reload and a live
+  # database has not, and pg_dump does not round-trip every IN list's text: a
+  # varchar list stored as `(ARRAY['a'::character varying])::text[]` reloads as
+  # `ARRAY[('a'::character varying)::text]`. Same columns, values and validity
+  # admit the same rows.
+  defp same_value_set?(%{change: :changed, locked: %{"values" => [_ | _]} = locked, live: live}),
+    do: Map.delete(locked, "definition") == Map.delete(live, "definition")
+
+  defp same_value_set?(_difference), do: false
 
   defp keyed(kind, locked, live, separator \\ " ") do
     locked = locked || %{}
