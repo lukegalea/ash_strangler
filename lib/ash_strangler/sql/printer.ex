@@ -737,9 +737,19 @@ defmodule AshStrangler.Sql.Printer do
 
   defp column_name(twin, path, attribute) do
     case AshStrangler.Twin.resource_at(twin, path) do
-      {:ok, resource} -> AshStrangler.Twin.column!(resource, attribute)
+      {:ok, resource} -> resource |> AshStrangler.Twin.column!(attribute) |> identifier()
       {:error, _} -> to_string(attribute)
     end
+  end
+
+  # A legacy column is whatever the legacy schema named it. PostgreSQL folds an
+  # unquoted identifier to lowercase, so `effectiveDate` printed bare reads a
+  # column `effectivedate` that does not exist. Lowercase identifiers stay bare,
+  # which keeps the common case readable.
+  defp identifier(column) do
+    if column =~ ~r/^[a-z_][a-z0-9_$]*$/,
+      do: column,
+      else: ~s("#{String.replace(column, ~s("), ~s(""))}")
   end
 
   @doc """

@@ -26,8 +26,10 @@ defmodule AshStrangler.Snapshot.Types do
   The parse is deliberately conservative. PostgreSQL normalises `IN (...)` to
   `= ANY (ARRAY[...])`, and only that shape (the whole constraint, over one
   column, with literal operands) is read. A value set combined with anything
-  else produces `:string` and a note: a `one_of` that is too wide is as wrong as
-  one that is too narrow.
+  else (`OR`, `AND`, a `NOT VALID` constraint that does not hold yet) produces
+  `:string` and a note: a `one_of` that is too wide is as wrong as one that is
+  too narrow, and the drift gate compares a value set in place of the text, so
+  a set read from part of a constraint would hide a change to the rest of it.
   """
 
   @types %{
@@ -101,11 +103,9 @@ defmodule AshStrangler.Snapshot.Types do
   def check_values(definition, column) do
     body = strip_check(definition)
 
-    with true <- any_form?(body, column),
-         [_ | _] = literals <- literals(body) do
-      {:ok, literals}
-    else
-      _ -> equality_form(body, column)
+    case any_form(body, column) do
+      {:ok, values} -> {:ok, values}
+      :error -> equality_form(body, column)
     end
   end
 
@@ -141,13 +141,34 @@ defmodule AshStrangler.Snapshot.Types do
     """
     `#{column["name"]}` carries a CHECK constraint this generator did not parse:
 
-      #{check["definition"]}
+    #{wrap(check["definition"])}
 
     Only `CHECK (col IN (...))` -- which PostgreSQL stores as `= ANY (ARRAY[...])`
     -- yields a value set. Without one there is no domain to enumerate, so a
     `decode` over this column cannot be proven total at compile time and
     `mix ash_strangler.check` measures it against the rows instead.
     """
+  end
+
+  # A definition can run to hundreds of characters, and a note becomes a
+  # comment in a host's source file, under its formatter and line-length check.
+  # Broken at spaces into lines of at most 72 characters (a longer word stays
+  # whole) and indented two.
+  defp wrap(definition) do
+    definition
+    |> String.split(" ")
+    |> Enum.reduce([], fn
+      word, [] ->
+        [word]
+
+      word, [line | rest] when byte_size(line) + byte_size(word) < 72 ->
+        [line <> " " <> word | rest]
+
+      word, lines ->
+        [word | lines]
+    end)
+    |> Enum.reverse()
+    |> Enum.map_join("\n", &("  " <> &1))
   end
 
   defp untyped_note(column) do
@@ -196,16 +217,32 @@ defmodule AshStrangler.Snapshot.Types do
     |> Kernel.==(0)
   end
 
-  defp any_form?(body, column) do
-    Regex.match?(~r/^\(?"?#{Regex.escape(column)}"?\)?(::[a-z ]+)?\s*=\s*ANY\s*\(/i, body) and
-      String.contains?(body, "ARRAY[")
+  # One array element: a quoted literal, cast or not, parenthesised or not --
+  # `'a'::text`, `'a'::character varying`, `('a'::character varying)::text`.
+  @element ~S/\(?'(?:[^']|'')*'(?:::[a-z_ ]+)?\)?(?:::[a-z_ ]+)?/
+
+  # The whole body, anchored at both ends, so a value set joined to anything
+  # else (`OR`, `AND`, a trailing `NOT VALID`) does not match: only the array's
+  # own span is read for literals, never the rest of the expression.
+  defp any_form(body, column) do
+    pattern =
+      ~S|^\(?"?| <>
+        Regex.escape(column) <>
+        ~S|"?\)?(?:::[a-z_ ]+)?\s*=\s*ANY\s*\(\s*(\(?ARRAY\[| <>
+        @element <>
+        ~S|(?:,\s*| <> @element <> ~S|)*\]\)?(?:::[a-z_ ]+\[\])?)\s*\)$|
+
+    case Regex.run(Regex.compile!(pattern, "i"), body) do
+      [_match, array] -> {:ok, literals(array)}
+      nil -> :error
+    end
   end
 
   # Quoted literals are scanned rather than the ARRAY body split on commas: a
   # value may contain a comma, and `''` is how a quote is escaped inside one.
-  defp literals(body) do
+  defp literals(array) do
     ~r/'((?:[^']|'')*)'/
-    |> Regex.scan(body)
+    |> Regex.scan(array)
     |> Enum.map(fn [_match, literal] -> String.replace(literal, "''", "'") end)
   end
 

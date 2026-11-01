@@ -240,8 +240,11 @@ per write; `ledger?` is a coupling held for as long as the trigger exists.
 
 ## A broken ledger never breaks the legacy write
 
-The trigger's insert and its wake run inside `BEGIN ... EXCEPTION WHEN OTHERS`.
-If `legacy_change_events` is missing, full, or locked out by a bad grant, the
+Everything the trigger does after its first line runs inside `BEGIN ...
+EXCEPTION WHEN OTHERS`: building the row image, the changed columns, the insert
+and the wake. If `legacy_change_events` is missing, full, or locked out by a bad
+grant, or a legacy migration has renamed or dropped a column the image names
+(PL/pgSQL records no dependency on it, so nothing stops that migration), the
 trigger raises a `WARNING` naming the relation and the error, and the legacy
 write commits without a ledger row. The drain then has a gap, and
 reconciliation is what finds it. The alternative would be a legacy

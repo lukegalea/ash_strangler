@@ -224,8 +224,11 @@ defmodule AshStrangler.UuidV8 do
     do: raise(ArgumentError, "expected an integer for a #{width}-bit part, got: #{inspect(part)}")
 
   # The SQL mirror of `offset!/2`: the column's two's complement bits in the
-  # part's width, sign bit flipped. `integer::bit(n)` keeps the rightmost n bits.
-  defp part_bits(16, part), do: "((#{part})::int4::bit(16) # X'8000')"
+  # part's width, sign bit flipped. `integer::bit(n)` keeps the rightmost n bits,
+  # so a value too wide for its part would wrap silently; each part is first
+  # cast to the integer type of its own width, which raises instead, as
+  # `offset!/2` does.
+  defp part_bits(16, part), do: "((#{part})::int2::int4::bit(16) # X'8000')"
   defp part_bits(32, part), do: "((#{part})::int4::bit(32) # X'80000000')"
   defp part_bits(64, part), do: "((#{part})::int8::bit(64) # X'8000000000000000')"
 

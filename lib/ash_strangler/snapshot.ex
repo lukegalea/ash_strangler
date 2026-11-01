@@ -72,6 +72,12 @@ defmodule AshStrangler.Snapshot do
 
   # --- normalise ---------------------------------------------------------
 
+  # One `pg_dump` TOC entry whose object name (the last word of its `Name:`,
+  # which for a trigger is `<table> <trigger>`) starts `strangler_`, up to the
+  # next entry's header or the end of the script.
+  defp strangler_objects,
+    do: ~r/^--\n-- Name: (?:[^;\n]* )?strangler_[^; \n]*; Type: [^\n]*\n--\n.*?(?=^--\n-- |\z)/ms
+
   @doc """
   Normalises a `pg_dump` script into a file a reviewer can diff and a plain
   SQL client can load.
@@ -87,10 +93,18 @@ defmodule AshStrangler.Snapshot do
     * `CREATE SCHEMA x;` becomes `CREATE SCHEMA IF NOT EXISTS x;`, so the script
       loads into a database where the extension preamble already created the
       schema, or where `public` exists, which is every database.
+    * Every object named `strangler_*` (the triggers, trigger functions and
+      key indexes this package installs) is dropped with its `-- Name:` block.
+      They are the strangle, not the legacy schema, so a capture taken where a
+      strangle already runs records the same schema as one taken before it.
+      `pg_dump -n` emits a trigger on a dumped table even when its function
+      lives in a schema it does not dump, so without this such a capture would
+      not even load.
   """
   @spec normalise(String.t()) :: String.t()
   def normalise(dump) do
     dump
+    |> String.replace(strangler_objects(), "")
     |> String.split("\n")
     |> Enum.reject(
       &(String.starts_with?(&1, "\\") or

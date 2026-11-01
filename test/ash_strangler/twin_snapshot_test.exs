@@ -209,6 +209,59 @@ defmodule AshStrangler.TwinSnapshotTest do
     end
   end
 
+  describe "gen.twin output a host can keep without repair" do
+    test "two keys to one table get two relationships, named from their attributes", %{
+      catalog: catalog
+    } do
+      catalog =
+        update_in(catalog, ["relations", "clinic.visits"], fn visits ->
+          [patient] = Enum.filter(visits["columns"], &(&1["name"] == "patient_id"))
+          [key] = visits["foreign_keys"]
+
+          extra =
+            for column <- ~w(referringPatientId billedPatientId) do
+              {%{patient | "name" => column, "not_null" => false},
+               %{key | "name" => "visits_#{column}_fkey", "columns" => [column]}}
+            end
+
+          visits
+          |> Map.update!("columns", &(&1 ++ Enum.map(extra, fn {column, _} -> column end)))
+          |> Map.update!("foreign_keys", &(&1 ++ Enum.map(extra, fn {_, fk} -> fk end)))
+        end)
+
+      source = render(catalog, "clinic.visits", probe_name(), %{secrets: []})
+
+      assert source =~ "belongs_to :patient, "
+      assert source =~ "belongs_to :referring_patient, "
+      assert source =~ "belongs_to :billed_patient, "
+    end
+
+    test "an unparsed CHECK is quoted in lines short enough for a line-length check", %{
+      catalog: catalog
+    } do
+      values = Enum.map_join(1..12, ", ", &"'value_number_#{&1}'::text")
+
+      catalog =
+        update_in(catalog, ["relations", "clinic.patients", "checks"], fn [check] ->
+          [
+            %{
+              check
+              | "values" => nil,
+                "definition" => "CHECK (((status IS NULL) OR (status = ANY (ARRAY[#{values}]))))"
+            }
+          ]
+        end)
+
+      source = render(catalog, "clinic.patients", probe_name())
+
+      assert source =~ "did not parse"
+      assert source =~ "'value_number_12'::text]))))"
+      # Comments, which a line-length check reads; strings and heredocs it skips.
+      comments = source |> String.split("\n") |> Enum.filter(&(String.trim(&1) =~ ~r/^#/))
+      assert Enum.filter(comments, &(String.length(&1) > 98)) == []
+    end
+  end
+
   describe "V-SNAPSHOT" do
     test "names every column a hand edit made disagree with the catalog", %{catalog: catalog} do
       module = probe_name()
@@ -435,6 +488,35 @@ defmodule AshStrangler.TwinSnapshotTest do
             )
 
           assert %{rows: [[2]]} = query.("SELECT count(*) FROM shop.accounts")
+        end)
+      end)
+    end
+
+    test "a column the image names, renamed or dropped by the legacy schema, does not abort its writes" do
+      Snapshot.with_scratch_database(AshStrangler.TestRepo.config(), fn config ->
+        Snapshot.with_connection(config, fn conn ->
+          query = &Postgrex.query!(conn, &1, [])
+          query.("CREATE SCHEMA shop")
+          query.(@table)
+          Enum.each(AshStrangler.Sql.Ledger.build(Account), &query.(&1.up))
+          query.("INSERT INTO shop.accounts (login, pin) VALUES ('ada', '1234')")
+
+          query.("ALTER TABLE shop.accounts RENAME COLUMN login TO username")
+
+          for statement <- [
+                "INSERT INTO shop.accounts (username, pin) VALUES ('grace', '5678')",
+                "UPDATE shop.accounts SET pin = '0000' WHERE id = 1",
+                "DELETE FROM shop.accounts WHERE id = 2"
+              ] do
+            assert {:ok, %{num_rows: 1}} = Postgrex.query(conn, statement, [])
+          end
+
+          query.("ALTER TABLE shop.accounts DROP COLUMN username")
+
+          assert {:ok, %{num_rows: 1}} =
+                   Postgrex.query(conn, "UPDATE shop.accounts SET pin = '1'", [])
+
+          assert %{rows: [[1]]} = query.("SELECT count(*) FROM legacy_change_events")
         end)
       end)
     end
