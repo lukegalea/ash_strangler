@@ -132,7 +132,7 @@ the drain or for supplementary capture:
 | `id` | the table | bigserial — the cursor the drain follows and the wake names |
 | `source_schema`, `source_table`, `operation` | the trigger | `TG_TABLE_SCHEMA`, `TG_TABLE_NAME`, `lower(TG_OP)` |
 | `primary_key` | the trigger | the mapped key column as jsonb — what the listener's derivation consumes |
-| `old_row`, `new_row` | the trigger | `to_jsonb(OLD)` / `to_jsonb(NEW)`; `NULL` where there is no image |
+| `old_row`, `new_row` | the trigger | the twin's columns of `OLD` / `NEW` as jsonb (`AshStrangler.Sql.Ledger.image_columns/1`), never `to_jsonb(OLD)`, so a column the twin declares secret is never written; `NULL` where there is no image |
 | `changed_columns` | the trigger | per-key jsonb comparison; an INSERT's is the whole row |
 | `transaction_id` | the trigger | `txid_current()` — one id per legacy transaction, so a multi-row write is reconstructable |
 | `transaction_timestamp` | the trigger | `transaction_timestamp()` — the legacy write's own clock, not the drain's |
@@ -237,3 +237,14 @@ of processed rows (a housekeeping `DELETE` of `processed_at < now() - interval`
 is fine — the drain has consumed them), and treat removing the trigger as the
 migration against the old system that it is. `notify?` alone was a cost paid
 per write; `ledger?` is a coupling held for as long as the trigger exists.
+
+## A broken ledger never breaks the legacy write
+
+The trigger's insert and its wake run inside `BEGIN ... EXCEPTION WHEN OTHERS`.
+If `legacy_change_events` is missing, full, or locked out by a bad grant, the
+trigger raises a `WARNING` naming the relation and the error, and the legacy
+write commits without a ledger row. The drain then has a gap, and
+reconciliation is what finds it. The alternative would be a legacy
+application that stops accepting writes because the strangler's side of the
+database is broken, and that is never the trade to make. The per-row
+subtransaction this costs is described in the "Snapshots" guide.

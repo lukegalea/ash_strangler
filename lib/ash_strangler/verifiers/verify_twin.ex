@@ -105,13 +105,20 @@ defmodule AshStrangler.Verifiers.VerifyTwin do
       {:ok, resource} ->
         # `exists(payments, ...)` puts the *relationship* in the reference list, so
         # a name that resolves to either is resolved.
-        if Ash.Resource.Info.attribute(resource, attribute) ||
-             Ash.Resource.Info.relationship(resource, attribute) do
-          :ok
-        else
-          {:error,
-           "#{inspect(resource)} has no attribute #{inspect(attribute)}. It declares: " <>
-             (resource |> Twin.columns() |> Enum.sort() |> Enum.map_join(", ", &inspect/1))}
+        cond do
+          Ash.Resource.Info.attribute(resource, attribute) ||
+              Ash.Resource.Info.relationship(resource, attribute) ->
+            :ok
+
+          to_string(attribute) in Twin.secrets(resource) ->
+            {:error,
+             "`#{attribute}` is declared secret on #{inspect(resource)}. A secret column never " <>
+               "crosses into a mapping, a view, a ledger image or a notification, so no mapping may read it."}
+
+          true ->
+            {:error,
+             "#{inspect(resource)} has no attribute #{inspect(attribute)}. It declares: " <>
+               (resource |> Twin.columns() |> Enum.sort() |> Enum.map_join(", ", &inspect/1))}
         end
     end
   end

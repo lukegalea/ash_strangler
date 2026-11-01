@@ -135,7 +135,22 @@ incomplete backfill produces missing rows, not an error.
    `one_of` makes the compiler refuse correct mappings. Fix the constraint or let
    `check` measure it.
 
-4. **`source` takes the twin module.** `source "legacy.users"` is refused with
+4. **Pin twins to a snapshot, and keep secrets out of them.** For a schema
+   someone else migrates, capture it once (`mix ash_strangler.snapshot capture`)
+   and generate twins with `--from-snapshot`. The twin then carries
+   `twin do snapshot "…/catalog.json" end`, and V-SNAPSHOT fails compilation,
+   naming the column, when the twin and the catalog disagree. Do not hand-edit
+   the twin to silence it: regenerate it, or capture a new snapshot if the legacy
+   schema really moved. Gate CI on `snapshot verify` (the files match their lock)
+   and on `snapshot drift` (the live database matches the catalog). A column that
+   must never leave the legacy database is declared `secrets [:col]` (or
+   `--secret schema.table.col`): the twin has no attribute for it, a mapping that
+   names it does not compile, and ledger images are built from the twin's
+   columns, so it is never written. A twin that matters without being mapped,
+   for example a membership table, can be `watch "channel"`ed for key-only
+   notifications. See the "Snapshots" guide.
+
+5. **`source` takes the twin module.** `source "legacy.users"` is refused with
    `expected module in :twin option`. The relation name, the schema, and the
    column names all come off the twin; there is nowhere to write them twice.
 

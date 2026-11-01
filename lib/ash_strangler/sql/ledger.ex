@@ -94,7 +94,7 @@ defmodule AshStrangler.Sql.Ledger do
 
   The trigger fills what only the database knows: `source_schema`,
   `source_table`, `operation`, `primary_key` (the mapped key column, as
-  jsonb), `old_row`/`new_row` (`to_jsonb(OLD)`/`to_jsonb(NEW)`),
+  jsonb), `old_row`/`new_row` (the row image, below),
   `changed_columns` (per-key jsonb comparison — an UPDATE that writes a column
   back with its current value counts as changed, which is the honest reading:
   PostgreSQL cannot distinguish it from a write, and neither can this), and
@@ -113,6 +113,34 @@ defmodule AshStrangler.Sql.Ledger do
   the old application's user was, and inventing a value would be worse than
   admitting there is none.
 
+  ## The row image is the twin's columns, never the whole row
+
+  `old_row`/`new_row` are `jsonb_build_object` over `image_columns/1`: the
+  twin's columns in the legacy phases, the resource's own stored columns in
+  `:read_from_new`. Never `to_jsonb(OLD)`. The legacy row can hold what must
+  not leave it (a password digest, an invite token), and a twin's `secrets`
+  are exactly the columns it does not carry, so an image built from the twin
+  cannot copy them into this table. `AshStrangler.Verifiers.VerifyLedger`
+  refuses a ledger whose image would name a declared secret anyway.
+
+  ## A ledger failure never fails the legacy write
+
+  The insert and the wake run inside a plpgsql `BEGIN ... EXCEPTION` block,
+  which is a savepoint: if the ledger table is gone, renamed, full or locked
+  out, the error is caught, logged with `RAISE WARNING` and the legacy write
+  commits without its event. The legacy application's availability does not
+  depend on this table. The kill switch is therefore safe in both directions:
+  drop the trigger to stop capture, or lose the table and keep the legacy
+  system running.
+
+  The price is honest and twofold. An event can be missing, so the
+  reconciler's sweep, not the ledger, is the completeness guarantee while the
+  table is unhealthy. And each savepoint that writes takes a subtransaction
+  id: a single legacy transaction writing more than 64 rows overflows the
+  backend's subtransaction cache, which slows snapshot visibility checks for
+  other sessions until it commits. Bulk legacy writes on a ledgered relation
+  are where to look first if that ever shows up.
+
   ## One SQL command per statement, necessarily
 
   As everywhere in this package: an Ecto migration's `execute/1` runs on the
@@ -121,7 +149,7 @@ defmodule AshStrangler.Sql.Ledger do
   the parser is concerned.
   """
 
-  alias AshStrangler.{Info, Key, Source}
+  alias AshStrangler.{Info, Key, Source, Twin}
 
   @events_table ~s("legacy_change_events")
 
@@ -137,6 +165,26 @@ defmodule AshStrangler.Sql.Ledger do
   """
   @spec events_table() :: String.t()
   def events_table, do: @events_table
+
+  @doc """
+  The columns the ledger's row image carries for `resource_or_dsl`.
+
+  In `:read_from_new` the trigger sits on the resource's own table, so the
+  image is its stored attributes' columns; in every other phase it is the
+  twin's columns. Either way it is a list taken from a declaration, so a
+  secret column, which the twin does not carry, is not in it.
+  """
+  @spec image_columns(Ash.Resource.t() | Spark.Dsl.t()) :: [String.t()]
+  def image_columns(resource_or_dsl) do
+    if Info.strangler_phase!(resource_or_dsl) == :read_from_new do
+      resource_or_dsl
+      |> Ash.Resource.Info.attributes()
+      |> Enum.map(&to_string(&1.source || &1.name))
+    else
+      twin = Info.twin(resource_or_dsl)
+      Enum.map(Twin.columns(twin), &Twin.column!(twin, &1))
+    end
+  end
 
   @doc """
   Builds the ledger table, index, function and trigger for `resource_or_dsl`.
@@ -195,7 +243,7 @@ defmodule AshStrangler.Sql.Ledger do
       },
       %{
         name: :"strangler_ledger_#{schema}_#{table}_function",
-        up: function_up(function, channel, key_column),
+        up: function_up(function, channel, key_column, image_columns(resource_or_dsl)),
         # Functions drop CASCADE so a trigger that outlived its function by a
         # rollback cannot block the drop.
         down: "DROP FUNCTION IF EXISTS #{function}() CASCADE;"
@@ -252,7 +300,7 @@ defmodule AshStrangler.Sql.Ledger do
     """
   end
 
-  defp function_up(function, channel, key_column) do
+  defp function_up(function, channel, key_column, columns) do
     """
     CREATE OR REPLACE FUNCTION #{function}() RETURNS trigger
     SET search_path FROM CURRENT
@@ -268,16 +316,16 @@ defmodule AshStrangler.Sql.Ledger do
       affected := COALESCE(NEW, OLD);
 
       IF (TG_OP = 'DELETE') THEN
-        old_row := to_jsonb(OLD);
+        old_row := #{image("OLD", columns)};
         new_row := NULL;
         changed := NULL;
       ELSIF (TG_OP = 'INSERT') THEN
         old_row := NULL;
-        new_row := to_jsonb(NEW);
+        new_row := #{image("NEW", columns)};
         changed := new_row;
       ELSE
-        old_row := to_jsonb(OLD);
-        new_row := to_jsonb(NEW);
+        old_row := #{image("OLD", columns)};
+        new_row := #{image("NEW", columns)};
         changed := (
           SELECT COALESCE(jsonb_object_agg(pair.key, pair.value), '{}'::jsonb)
             FROM jsonb_each(new_row) AS pair
@@ -299,35 +347,61 @@ defmodule AshStrangler.Sql.Ledger do
 
       -- Committed WITH the legacy write or not at all: that is the whole
       -- guarantee the ledger exists for, and it is why this is a synchronous
-      -- insert rather than a queue.
-      INSERT INTO #{@events_table}
-        (source_schema, source_table, operation, primary_key, old_row, new_row,
-         changed_columns, transaction_id, transaction_timestamp,
-         source_system, source_correlation_id, source_request_id, source_user,
-         actor_confidence)
-      VALUES
-        (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
-         jsonb_build_object('#{key_column}', affected.#{key_column}),
-         old_row, new_row, changed,
-         txid_current(), transaction_timestamp(),
-         nullif(current_setting('ash_strangler.origin', true), ''),
-         nullif(current_setting('ash_strangler.correlation_id', true), ''),
-         nullif(current_setting('ash_strangler.causation_id', true), ''),
-         nullif(current_setting('ash_strangler.actor', true), ''),
-         actor_confidence)
-      RETURNING id INTO event_id;
+      -- insert rather than a queue. The block is a savepoint: a ledger that
+      -- cannot be written is logged and skipped, never allowed to abort the
+      -- legacy application's write.
+      BEGIN
+        INSERT INTO #{@events_table}
+          (source_schema, source_table, operation, primary_key, old_row, new_row,
+           changed_columns, transaction_id, transaction_timestamp,
+           source_system, source_correlation_id, source_request_id, source_user,
+           actor_confidence)
+        VALUES
+          (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
+           jsonb_build_object('#{key_column}', affected.#{key_column}),
+           old_row, new_row, changed,
+           txid_current(), transaction_timestamp(),
+           nullif(current_setting('ash_strangler.origin', true), ''),
+           nullif(current_setting('ash_strangler.correlation_id', true), ''),
+           nullif(current_setting('ash_strangler.causation_id', true), ''),
+           nullif(current_setting('ash_strangler.actor', true), ''),
+           actor_confidence)
+        RETURNING id INTO event_id;
 
-      -- The wake, key-only. The event id is a bigint, so the payload is a
-      -- handful of bytes no matter how wide the row is -- the 7999-byte
-      -- pg_notify ceiling aborts the LEGACY application's transaction, and a
-      -- drain re-reads the durable row anyway.
-      PERFORM pg_notify('#{channel}', 'wake:' || event_id);
+        -- The wake, key-only. The event id is a bigint, so the payload is a
+        -- handful of bytes no matter how wide the row is -- the 7999-byte
+        -- pg_notify ceiling aborts the LEGACY application's transaction, and a
+        -- drain re-reads the durable row anyway.
+        PERFORM pg_notify('#{channel}', 'wake:' || event_id);
+      EXCEPTION WHEN OTHERS THEN
+        RAISE WARNING 'ash_strangler ledger for %.% skipped: % (%)',
+          TG_TABLE_SCHEMA, TG_TABLE_NAME, SQLERRM, SQLSTATE;
+      END;
 
       -- The return value of an AFTER row trigger is ignored.
       RETURN NULL;
     END $strangler$ LANGUAGE plpgsql;
     """
   end
+
+  # `jsonb_build_object` takes at most 100 arguments, so a wide row is built
+  # 50 columns at a time and concatenated.
+  defp image(_record, []), do: "'{}'::jsonb"
+
+  defp image(record, columns) do
+    columns
+    |> Enum.chunk_every(50)
+    |> Enum.map_join(" || ", fn chunk ->
+      "jsonb_build_object(" <>
+        Enum.map_join(
+          chunk,
+          ", ",
+          &"'#{String.replace(&1, "'", "''")}', #{record}.#{quote_ident(&1)}"
+        ) <> ")"
+    end)
+  end
+
+  defp quote_ident(column), do: ~s("#{String.replace(column, ~s("), ~s(""))}")
 
   defp trigger_up(relation, trigger, function) do
     """

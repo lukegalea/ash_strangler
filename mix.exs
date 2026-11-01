@@ -167,9 +167,12 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/backfill-and-reconciliation.md",
         "documentation/topics/notifications.md",
         "documentation/topics/the-change-ledger.md",
+        "documentation/topics/snapshots.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},
+        {"documentation/dsls/DSL-AshStrangler.Twin.md",
+         search_data: Spark.Docs.search_data_for(AshStrangler.Twin)},
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -261,8 +264,9 @@ defmodule AshStrangler.MixProject do
         "docs",
         "spark.replace_doc_links"
       ],
-      "spark.formatter": "spark.formatter --extensions AshStrangler.Resource",
-      "spark.cheat_sheets": "spark.cheat_sheets --extensions AshStrangler.Resource"
+      "spark.formatter": "spark.formatter --extensions AshStrangler.Resource,AshStrangler.Twin",
+      "spark.cheat_sheets":
+        "spark.cheat_sheets --extensions AshStrangler.Resource,AshStrangler.Twin"
     ]
   end
 end

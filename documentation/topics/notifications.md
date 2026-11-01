@@ -322,6 +322,7 @@ that, and no amount of work in this listener would change it.
 | **On commit only** | A `pg_notify` inside a rolled-back transaction delivers nothing — correct, and what you want. |
 | **Savepoint-safe** | Savepoint rollback discards notifications too, so this is safe inside an `Ecto.Multi` or any subtransaction. |
 | **Deduplicated per transaction** | PostgreSQL collapses duplicate `(channel, payload)` pairs within one transaction. |
+| **Never fatal to the legacy write** | The trigger's `pg_notify` runs in a savepoint. A failure, such as a full notification queue, is logged with `RAISE WARNING` and the legacy write commits. |
 
 That last row has a consequence worth stating as its own rule: **a row updated
 twice in one transaction produces one event, so this can never be used to count

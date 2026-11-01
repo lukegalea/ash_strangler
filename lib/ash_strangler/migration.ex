@@ -23,7 +23,8 @@ defmodule AshStrangler.Migration do
   Every statement for `resource`, ordered so that running them in sequence
   works from an empty database.
 
-  Returns `[]` for a resource with no strangler mapping.
+  A watched twin (`twin do watch "channel" end`) gets its watch trigger
+  (`AshStrangler.Sql.Watch`). Returns `[]` for anything else.
   """
   @spec statements(Ash.Resource.t()) :: [%{name: atom(), up: String.t(), down: String.t()}]
   def statements(resource) do
@@ -81,21 +82,24 @@ defmodule AshStrangler.Migration do
             Observation.Store.statements()
       end
     else
-      []
+      if AshStrangler.Twin.twin?(resource), do: Sql.Watch.build(resource), else: []
     end
   end
 
   @doc """
-  Every strangler-mapped resource across the configured domains, or across
-  `domains` when given.
+  Every strangler-mapped resource and every watched twin across the configured
+  domains, or across `domains` when given.
   """
   @spec resources(list(module()) | nil) :: [Ash.Resource.t()]
   def resources(domains \\ nil) do
     (domains || Ash.Info.domains(Mix.Project.config()[:app]))
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
-    |> Enum.filter(&AshStrangler.Info.strangled?/1)
+    |> Enum.filter(&(AshStrangler.Info.strangled?(&1) or watched?(&1)))
     |> Enum.uniq()
   end
+
+  defp watched?(resource),
+    do: AshStrangler.Twin.twin?(resource) and AshStrangler.Twin.watch(resource) != nil
 
   @doc """
   Renders an Ecto migration module for the given resources.
