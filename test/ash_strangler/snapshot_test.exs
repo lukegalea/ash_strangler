@@ -47,6 +47,8 @@ defmodule AshStrangler.SnapshotTest do
       -- Dumped from database version 18.6
       -- Dumped by pg_dump version 18.6
 
+      SET statement_timeout = 0;
+      SET transaction_timeout = 0;
       CREATE SCHEMA public;
       CREATE SCHEMA IF NOT EXISTS clinic;
 
@@ -58,6 +60,8 @@ defmodule AshStrangler.SnapshotTest do
 
       refute normalised =~ "restrict"
       refute normalised =~ "Dumped"
+      refute normalised =~ "transaction_timeout"
+      assert normalised =~ "SET statement_timeout = 0;"
       assert normalised =~ "CREATE SCHEMA IF NOT EXISTS public;"
       assert normalised =~ "CREATE SCHEMA IF NOT EXISTS clinic;"
       refute normalised =~ "IF NOT EXISTS IF NOT EXISTS"
@@ -179,11 +183,14 @@ defmodule AshStrangler.SnapshotTest do
           "INSERT INTO meta.migrations VALUES ('001_init'), ('002_visits'), ('003_rooms')"
         ])
 
-        assert {:ok, lock} =
-                 Snapshot.capture(dir, source,
-                   schemas: ["clinic"],
-                   head_from: %{"app" => "meta.migrations.name"}
-                 )
+        lock =
+          case Snapshot.capture(dir, source,
+                 schemas: ["clinic"],
+                 head_from: %{"app" => "meta.migrations.name"}
+               ) do
+            {:ok, lock} -> lock
+            {:error, message} -> flunk(message)
+          end
 
         assert lock["heads"] == %{"app" => %{"head" => "003_rooms", "count" => 3}}
         assert lock["captured"]["pg_dump"] =~ "pg_dump"

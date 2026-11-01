@@ -80,6 +80,10 @@ defmodule AshStrangler.Snapshot do
       in `\\restrict <random key>` / `\\unrestrict`, which changes on every run.
     * The `-- Dumped from` / `-- Dumped by` version lines are dropped; the lock
       records tool versions instead.
+    * `SET transaction_timeout = 0;` is dropped. `pg_dump` 17 and later emit
+      it, servers before 17 reject it, and a schema-only load has no use for
+      it: without this, a capture taken with a newer `pg_dump` will not derive
+      on an older server.
     * `CREATE SCHEMA x;` becomes `CREATE SCHEMA IF NOT EXISTS x;`, so the script
       loads into a database where the extension preamble already created the
       schema, or where `public` exists, which is every database.
@@ -88,7 +92,10 @@ defmodule AshStrangler.Snapshot do
   def normalise(dump) do
     dump
     |> String.split("\n")
-    |> Enum.reject(&(String.starts_with?(&1, "\\") or &1 =~ ~r/^-- Dumped (from|by) /))
+    |> Enum.reject(
+      &(String.starts_with?(&1, "\\") or
+          &1 =~ ~r/^(-- Dumped (from|by) |SET transaction_timeout = )/)
+    )
     |> Enum.map_join(
       "\n",
       &String.replace(&1, ~r/^CREATE SCHEMA (?!IF NOT EXISTS )/, "CREATE SCHEMA IF NOT EXISTS ")
