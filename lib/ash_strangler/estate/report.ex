@@ -78,7 +78,8 @@ defmodule AshStrangler.Estate.Report do
     declaration_problems = declaration_problems(estate, catalog)
     {claims, writers, resource_problems} = resource_claims(Estate.resources(estate), catalog)
     {plugin_claims, claim_problems} = plugin_claims(estate, catalog)
-    claims = claims ++ plugin_claims
+    # A twin both listed and used as a source would otherwise claim its secrets twice.
+    claims = Enum.uniq(claims ++ plugin_claims)
 
     report = %{
       report

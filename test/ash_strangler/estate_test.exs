@@ -351,8 +351,10 @@ defmodule AshStrangler.EstateTest do
       assert problem.check == :resources
       assert problem.message =~ "String is neither a strangled resource nor a twin"
 
-      # Listed directly, a twin claims its secrets and nothing else.
-      resources = "[AshStrangler.Test.Lending.Legacy.Members]"
+      # Listed directly, a twin claims its secrets and nothing else, once.
+      resources =
+        "[AshStrangler.Test.Lending.Legacy.Members, AshStrangler.Test.Lending.Legacy.Members]"
+
       report = Estate.evaluate(probe(@clean, resources: resources, plugins: "[]"))
 
       assert [%{kind: :secret}] = report.relations["lending.members"].columns["pin_hash"].claims
