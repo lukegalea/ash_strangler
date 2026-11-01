@@ -133,7 +133,7 @@ defmodule AshStrangler.Test.Lending.Book do
   end
 
   attributes do
-    attribute :id, :integer, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
     attribute :title, :string, public?: true
     attribute :isbn, :string, public?: true
     attribute :branch_id, :integer, public?: true
@@ -147,7 +147,7 @@ defmodule AshStrangler.Test.Lending.Book do
     phase :read_from_legacy
 
     source AshStrangler.Test.Lending.Legacy.Books do
-      key :id, from: :id, strategy: :identity
+      key :id, from: :id, strategy: {:uuid_v5, namespace: "6f1d2c3b-8a4e-4c5d-9e7f-0a1b2c3d4e5f"}
       map :title, from: :title
       map :isbn, from: :isbn
       map :branch_id, from: :branch_id
@@ -171,7 +171,7 @@ defmodule AshStrangler.Test.Lending.Member do
   end
 
   attributes do
-    attribute :id, :integer, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
     attribute :email, :string, public?: true
     attribute :full_name, :string, public?: true
     attribute :branch_id, :integer, public?: true
@@ -185,7 +185,7 @@ defmodule AshStrangler.Test.Lending.Member do
     phase :read_from_legacy
 
     source AshStrangler.Test.Lending.Legacy.Members do
-      key :id, from: :id, strategy: :identity
+      key :id, from: :id, strategy: {:uuid_v5, namespace: "6f1d2c3b-8a4e-4c5d-9e7f-0a1b2c3d4e5f"}
       map :email, from: :email
       map :full_name, from: :full_name
       map :branch_id, from: :branch_id
@@ -209,7 +209,7 @@ defmodule AshStrangler.Test.Lending.Loan do
   end
 
   attributes do
-    attribute :id, :integer, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
     attribute :book_id, :integer, public?: true
     attribute :member_id, :integer, public?: true
     attribute :due_on, :date, public?: true
@@ -225,7 +225,7 @@ defmodule AshStrangler.Test.Lending.Loan do
     phase :read_from_legacy
 
     source AshStrangler.Test.Lending.Legacy.Loans do
-      key :id, from: :id, strategy: :identity
+      key :id, from: :id, strategy: {:uuid_v5, namespace: "6f1d2c3b-8a4e-4c5d-9e7f-0a1b2c3d4e5f"}
       map :book_id, from: :book_id
       map :member_id, from: :member_id
       map :due_on, from: :due_on

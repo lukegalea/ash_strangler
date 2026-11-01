@@ -319,7 +319,7 @@ defmodule AshStrangler.EstateTest do
             end
 
             attributes do
-              attribute :id, :integer, primary_key?: true, allow_nil?: false, writable?: false
+              attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
               attribute :title, :string, public?: true
             end
 
@@ -331,7 +331,7 @@ defmodule AshStrangler.EstateTest do
               phase :read_from_legacy
 
               source AshStrangler.Test.Lending.Legacy.Books do
-                key :id, from: :id, strategy: :identity
+                key :id, from: :id, strategy: {:uuid_v5, namespace: "6f1d2c3b-8a4e-4c5d-9e7f-0a1b2c3d4e5f"}
                 map :title, from: :title
               end
             end
