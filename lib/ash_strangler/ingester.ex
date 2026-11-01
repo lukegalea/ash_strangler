@@ -105,6 +105,10 @@ defmodule AshStrangler.Ingester do
     {:ok, {:uuid_v5, ns}}
   end
 
+  defp require_supported_strategy(_resource, %{strategy: {:uuid_v8, registry, kind}}) do
+    {:ok, {:uuid_v8, registry, kind}}
+  end
+
   defp require_supported_strategy(_resource, %{strategy: :identity}) do
     {:ok, :identity}
   end
@@ -113,7 +117,8 @@ defmodule AshStrangler.Ingester do
     {:error,
      """
      #{inspect(resource)}'s key strategy is #{inspect(other)}, and the ingester
-     can only spell `{:uuid_v5, namespace: "..."}` and `:identity`.
+     can only spell `{:uuid_v8, Registry, :kind}`, `{:uuid_v5, namespace: "..."}`
+     and `:identity`.
      """}
   end
 
@@ -239,6 +244,17 @@ defmodule AshStrangler.Ingester do
               AshStrangler.KeyDerivation.name("#{ctx.relation}", legacy_key)
             )
 
+          Ash.get(#{inspect(ctx.resource)}, id, locate_opts())
+        end
+    """
+  end
+
+  defp locate_fn(%{id_derivation: {:uuid_v8, registry, kind}} = ctx) do
+    """
+        # The packed key is a bijection asserted against the view's SQL; never
+        # re-implement the packing.
+        defp locate(legacy_key) do
+          id = AshStrangler.KeyKinds.encode(#{inspect(registry)}, #{inspect(kind)}, [legacy_key])
           Ash.get(#{inspect(ctx.resource)}, id, locate_opts())
         end
     """

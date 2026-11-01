@@ -34,6 +34,7 @@ defmodule AshStrangler.Dsl do
   | `coalesce` | partial | `NULLIF` |
   | `concat` | partial | `split_part` |
   | `collapse` | partial | the per-clause `set:` |
+  | `reference` | total bijection | the packed key's decode |
   | `map` with a free `expr(...)` | opaque | none — `read_only?: true` and `because:` |
 
   `writable?` is gone as an author declaration. A mapping is writable when this
@@ -509,18 +510,91 @@ defmodule AshStrangler.Dsl do
     table — a lookup table is a second source of truth and a migration-time join
     on every row.
     """,
-    examples: [~S|key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e...71"}|],
+    examples: [
+      ~S|key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e...71"}|,
+      ~S|key :id, from: :id, strategy: {:uuid_v8, MyApp.Keys, :member}|,
+      ~S|key :id, from: [:branch_id, :copy_no], strategy: {:uuid_v8, MyApp.Keys, :copy}|
+    ],
     target: AshStrangler.Key,
     args: [:attribute],
+    transform: {AshStrangler.Key, :transform, []},
     schema: [
       attribute: [type: :atom, required: true, doc: "The resource's primary key attribute."],
-      from: [type: :atom, required: true, doc: "The legacy key column, as a twin attribute."],
+      from: [
+        type: {:or, [:atom, {:list, :atom}]},
+        required: true,
+        doc: """
+        The legacy key column, as a twin attribute. A list of columns is a
+        composite key, and only a packed (`:uuid_v8`) strategy can derive one.
+        """
+      ],
       strategy: [
         type: :any,
         required: true,
         doc: """
-        How to derive it. `{:uuid_v5, namespace: "..."}` hashes the legacy key
-        into a stable uuid; `:identity` passes it through unchanged.
+        How to derive it:
+
+        * `{:uuid_v8, Registry, :kind}` packs the legacy integers into an
+          invertible version 8 UUID tagged with the kind (see
+          `AshStrangler.KeyKinds`). The id decodes back to the legacy key.
+        * `{:uuid_v5, namespace: "..."}` hashes the legacy key into a stable,
+          one-way uuid.
+        * `:identity` passes a legacy uuid through unchanged.
+        """
+      ]
+    ]
+  }
+
+  @reference %Spark.Dsl.Entity{
+    name: :reference,
+    describe: """
+    An attribute holding another row's packed key: a foreign key, mapped.
+
+        reference :member_id, kind: {MyApp.Keys, :member}, from: :member_id
+
+    The attribute reads the key of kind `kind` packed from the legacy
+    columns in `from`, so it equals the id of the row it points at by
+    construction, wherever that row is mapped. The reverse is the decode, so a
+    reference is writable: a write stores the legacy integers the id packs,
+    and an id of any other kind fails the write rather than storing a wrong
+    integer.
+
+    `AshStrangler.Verifiers.VerifyReferences` proves closure from the twin's
+    snapshot: a validated foreign key from `from` to the kind's columns, or
+    `from` being those columns. Where no such constraint exists, `soft:`
+    records why, and `mix ash_strangler.check` counts the dangling rows.
+    """,
+    examples: [
+      ~S|reference :member_id, kind: {MyApp.Keys, :member}, from: :member_id|,
+      ~S|reference :copy_id, kind: {MyApp.Keys, :copy}, from: [:branch_id, :copy_no]|,
+      """
+      reference :referred_by_id,
+        kind: {MyApp.Keys, :member},
+        from: :referrer_id,
+        soft: "Referrals predate the members table's foreign keys."
+      """
+    ],
+    target: AshStrangler.Reference,
+    args: [:attribute],
+    transform: {AshStrangler.Reference, :transform, []},
+    schema: [
+      attribute: [type: :atom, required: true, doc: "The resource attribute."],
+      kind: [
+        type: {:tuple, [:atom, :atom]},
+        required: true,
+        doc: "`{Registry, :kind}`: the key kind of the row referred to."
+      ],
+      from: [
+        type: {:or, [:atom, {:list, :atom}]},
+        required: true,
+        doc: "The legacy columns holding the referred-to row's parts, in the kind's order."
+      ],
+      soft: [
+        type: :string,
+        doc: """
+        Why no validated foreign key backs this reference. Required when the
+        snapshot proves no closure; refused when it does. Every soft reference
+        becomes a dangling-row count in `mix ash_strangler.check`.
         """
       ]
     ]
@@ -629,7 +703,8 @@ defmodule AshStrangler.Dsl do
     @negate,
     @affine,
     @constant,
-    @unmapped
+    @unmapped,
+    @reference
   ]
 
   @source %Spark.Dsl.Entity{

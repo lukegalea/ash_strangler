@@ -114,6 +114,10 @@ if Code.ensure_loaded?(Igniter) do
       * `--from-snapshot` — a `catalog.json` to generate from instead of the
         database, and to pin the twin to. See `AshStrangler.Snapshot`.
       * `--secret` — `schema.table.column`, repeatable: a column to leave off.
+      * `--system-actor` — a policy check module matching the host's system
+        actor. The twin gets `authorizers: [Ash.Policy.Authorizer]` and
+        `twin do system_actor Check end`, so only that actor reads it. Kept on
+        regeneration.
       * `--dry-run` — print the diff and write nothing.
     """
 
@@ -132,7 +136,8 @@ if Code.ensure_loaded?(Igniter) do
           repo: :string,
           domain: :string,
           from_snapshot: :string,
-          secret: :keep
+          secret: :keep,
+          system_actor: :string
         ],
         aliases: [r: :relation, m: :module, d: :domain]
       }
@@ -149,7 +154,7 @@ if Code.ensure_loaded?(Igniter) do
 
       with {:ok, targets, repo} <- resolve(igniter.args.positional[:module], options),
            {:ok, secrets} <- secrets(options) do
-        generate(igniter, targets, repo, secrets, options[:from_snapshot])
+        generate(igniter, targets, repo, secrets, options)
       else
         {:error, message} -> Igniter.add_issue(igniter, message)
       end
@@ -307,7 +312,9 @@ if Code.ensure_loaded?(Igniter) do
 
     # --- generation --------------------------------------------------------
 
-    defp generate(igniter, targets, repo, secrets, snapshot) do
+    defp generate(igniter, targets, repo, secrets, options) do
+      snapshot = options[:from_snapshot]
+
       with {:ok, catalog} <- catalog(targets, repo, snapshot),
            :ok <- present(targets, catalog, snapshot) do
         Enum.reduce(
@@ -318,7 +325,8 @@ if Code.ensure_loaded?(Igniter) do
             catalog: catalog,
             targets: targets,
             secrets: Map.get(secrets, &1.relation, []),
-            snapshot: snapshot
+            snapshot: snapshot,
+            system_actor: options[:system_actor]
           })
         )
       else
@@ -411,6 +419,7 @@ if Code.ensure_loaded?(Igniter) do
           secrets: Enum.uniq(existing.secrets ++ run.secrets),
           snapshot: snapshot,
           watch: existing.watch,
+          system_actor: run.system_actor || existing.system_actor,
           command: command(twin, run.repo, snapshot)
         })
 
@@ -578,11 +587,22 @@ if Code.ensure_loaded?(Igniter) do
            %{
              secrets: zipper |> literal(:secrets) |> List.wrap() |> Enum.map(&to_string/1),
              watch: literal(zipper, :watch),
-             snapshot: literal(zipper, :snapshot)
+             snapshot: literal(zipper, :snapshot),
+             system_actor: source_text(zipper, :system_actor)
            }}
 
         {:error, igniter} ->
-          {igniter, %{secrets: [], watch: nil, snapshot: nil}}
+          {igniter, %{secrets: [], watch: nil, snapshot: nil, system_actor: nil}}
+      end
+    end
+
+    # A module alias is not a literal, so it is carried over as source text.
+    defp source_text(zipper, name) do
+      with {:ok, call} <- Igniter.Code.Function.move_to_function_call(zipper, name, 1),
+           {:ok, argument} <- Igniter.Code.Function.move_to_nth_argument(call, 0) do
+        argument |> Sourceror.Zipper.node() |> Sourceror.to_string()
+      else
+        _ -> nil
       end
     end
 

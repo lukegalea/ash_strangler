@@ -69,6 +69,19 @@ defmodule AshStrangler.GenTwinTest do
     refute twin =~ ~r/attribute\(?:password_digest/
   end
 
+  test "--system-actor adds the policy authorizer and survives regeneration" do
+    igniter =
+      test_project()
+      |> generate(["--system-actor", "MyApp.Checks.SystemActor"])
+      |> apply_igniter!()
+      |> generate([])
+
+    twin = content(igniter, @path)
+
+    assert twin =~ "authorizers: [Ash.Policy.Authorizer]"
+    assert twin =~ ~r/system_actor\(?MyApp.Checks.SystemActor/
+  end
+
   test "a malformed --secret is an issue, not a guess" do
     test_project()
     |> generate(["--secret", "password_digest"])

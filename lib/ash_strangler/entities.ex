@@ -148,6 +148,50 @@ defmodule AshStrangler.Key do
   @moduledoc "How the modern primary key is derived from the legacy key."
   defstruct [:attribute, :from, :strategy, :__spark_metadata__]
   @type t :: %__MODULE__{}
+
+  @doc "The legacy key columns, as a list (one element unless the key is composite)."
+  @spec columns(t()) :: [atom()]
+  def columns(%__MODULE__{from: from}), do: List.wrap(from)
+
+  @doc "True when the key is derived from more than one legacy column."
+  @spec composite?(t()) :: boolean()
+  def composite?(%__MODULE__{from: from}), do: is_list(from)
+
+  @doc false
+  # A one-element list is a single column; a packed strategy's registry is
+  # compiled before the resource that names it, so verifiers can read it.
+  def transform(%__MODULE__{} = key) do
+    key = %{key | from: AshStrangler.Reference.normalize_from(key.from)}
+
+    with {:uuid_v8, registry, _kind} when is_atom(registry) <- key.strategy do
+      Code.ensure_compiled(registry)
+    end
+
+    {:ok, key}
+  end
+end
+
+defmodule AshStrangler.Reference do
+  @moduledoc """
+  An attribute holding another row's packed key, derived from the legacy
+  foreign key columns. See the `reference` entity.
+  """
+  defstruct [:attribute, :kind, :from, :soft, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+
+  @doc "The legacy columns, as a list."
+  @spec columns(t()) :: [atom()]
+  def columns(%__MODULE__{from: from}), do: List.wrap(from)
+
+  @doc false
+  def transform(%__MODULE__{kind: {registry, _kind}} = reference) do
+    Code.ensure_compiled(registry)
+    {:ok, %{reference | from: normalize_from(reference.from)}}
+  end
+
+  @doc false
+  def normalize_from([single]), do: single
+  def normalize_from(from), do: from
 end
 
 defmodule AshStrangler.Source do

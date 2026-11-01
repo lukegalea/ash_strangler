@@ -1,0 +1,14 @@
+{
+  "captured": null,
+  "derived_on": "PostgreSQL 18.4",
+  "files": {
+    "catalog.json": "e60c602b21bcb18f67637f838dbbae56b608a1ae804165013aa81fb00da3eec6",
+    "schema.sql": "0623476a212726a6e308ed2163609f15cdabce3662206af02ec61c5810126ed1"
+  },
+  "format": "ash_strangler.lock/1",
+  "generator": "ash_strangler 0.4.0",
+  "heads": {},
+  "schemas": [
+    "library"
+  ]
+}

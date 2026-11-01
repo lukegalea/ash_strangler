@@ -132,6 +132,10 @@ defmodule AshStrangler.Obligations do
     do: coalesce_obligations(entry, context)
 
   defp per_mapping(%Concat{} = entry, context), do: concat_obligations(entry, context)
+
+  defp per_mapping(%AshStrangler.Reference{soft: soft} = entry, context) when is_binary(soft),
+    do: soft_reference_obligations(entry, context)
+
   defp per_mapping(_entry, _context), do: []
 
   # --- decode ------------------------------------------------------------------
@@ -770,6 +774,56 @@ defmodule AshStrangler.Obligations do
     FROM #{relation(context)}
     WHERE NOT (#{guards})
     """
+  end
+
+  # --- reference: closure the snapshot cannot prove ----------------------------
+
+  # A soft reference has no validated foreign key behind it, so closure is a
+  # fact about the data: count the rows whose parts name no row of the kind's
+  # home relation.
+  defp soft_reference_obligations(
+         %AshStrangler.Reference{kind: {registry, kind}} = entry,
+         context
+       ) do
+    columns = AshStrangler.Reference.columns(entry)
+
+    homes =
+      registry
+      |> AshStrangler.KeyKinds.kind!(kind)
+      |> AshStrangler.KeyKind.columns()
+      |> Enum.zip(columns)
+      |> Enum.group_by(fn {{home, _part}, _from} -> home end)
+
+    present = Enum.map_join(columns, " AND ", &"r.#{column(context, &1)} IS NOT NULL")
+
+    missing =
+      Enum.map_join(homes, "\n   OR ", fn {home, pairs} ->
+        matches =
+          Enum.map_join(pairs, " AND ", fn {{_home, part}, from} ->
+            "h.#{part} = r.#{column(context, from)}"
+          end)
+
+        "NOT EXISTS (SELECT 1 FROM #{home} AS h WHERE #{matches})"
+      end)
+
+    [
+      %{
+        obligation: :reference_closure,
+        attribute: entry.attribute,
+        severity: :warning,
+        message: """
+        `reference #{inspect(entry.attribute)}` is soft: no validated foreign key backs it
+        (#{entry.soft}). Every row whose parts name no #{inspect(kind)} row reads an id
+        that resolves to nothing, so the count below is measured, not proven.
+        """,
+        assertion: """
+        SELECT count(*) AS dangling_references
+        FROM #{relation(context)} AS r
+        WHERE #{present}
+          AND (#{missing})
+        """
+      }
+    ]
   end
 
   defp relation(%{twin: twin}), do: AshStrangler.Twin.relation(twin)
