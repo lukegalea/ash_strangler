@@ -71,6 +71,20 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
   reference.
 - **`AshStrangler.Twin` DSL reference** (`documentation/dsls/DSL-AshStrangler.Twin.md`)
   and the "Snapshots" guide.
+- **Estates:** `use AshStrangler.Estate` declares one disposition for every
+  relation and column of a snapshot catalog. `mapped` and `secret` are computed
+  from the listed resources' mappings and their twins; `carried`, `deferred`
+  (`wave:`, `target:`), `legacy_only` and `dead` are declared with `because:`;
+  `residue` lists live-only relations and `open_reference` accepts a foreign
+  key that is not closed. `VerifyEstate` checks declarations against the
+  catalog at compile time. The `:ash_strangler_estate` Mix compiler checks
+  coverage (exactly one disposition per column), whole-relation consistency,
+  writer linearity across resources and foreign-key closure from mapped
+  columns, and runs plug-ins. `AshStrangler.Estate.Plugin` lets a host claim
+  columns its own machinery reads and add its own checks.
+  `mix ash_strangler.estate --manifest` exports the `ash_strangler.estate/1`
+  manifest; `AshStrangler.Estate.drift_allow/1` turns residue into drift allow
+  patterns. The "Estates" guide and the `AshStrangler.Estate.Dsl` reference.
 
 ### Changes
 

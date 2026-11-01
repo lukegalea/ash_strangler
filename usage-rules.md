@@ -458,6 +458,8 @@ incomplete backfill produces missing rows, not an error.
 
 37. **Baseline before stream consumption, with the ledger already installed.** `mix ash_strangler.baseline Resource --repo Repo` takes a REPEATABLE READ snapshot and keyset-scans the forward mapping. The ledger trigger captures commits outside the snapshot. A baseline means "seen as executed", never "happened now"; no MAX(id) fence, because id order is not commit order. Reconciliation is the consumer's job via source event and transaction ids.
 
+38. **Account for the whole legacy schema in one estate.** `use AshStrangler.Estate` with `estate do snapshot "…/catalog.json"; resources [...] end`, and enable the `:ash_strangler_estate` compiler (`compilers: Mix.compilers() ++ [:ash_strangler_estate]`, `config :my_app, ash_strangler_estates: [MyApp.Legacy.Estate]`). Every catalog column then has exactly one disposition: `mapped` and `secret` are computed from the resources' mappings and their twins, plug-in kinds come from a plug-in's `claims/2`, and everything else is declared `carried`, `deferred` (`wave:`, `target:`), `legacy_only` or `dead`, each with `because:`. Never declare a column a mapping reads; never declare a whole relation that anything reads. A mapped foreign key must be validated and reference mapped or claimed columns, or be an `open_reference`. Relations a live database has and the catalog does not are `residue`; `AshStrangler.Estate.drift_allow/1` feeds them to drift. Host rules (vocabulary, hazard columns, surface reach) belong in a plug-in's `check/1`, which must not touch a database. Export the manifest with `mix ash_strangler.estate Estate --manifest FILE`. See the "Estates" guide.
+
 ---
 
 ## What the verifiers cannot check

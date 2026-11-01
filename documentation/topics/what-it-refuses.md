@@ -1099,6 +1099,19 @@ writers through the reverse view fire no Ash notifier. The compatibility
 `Sql.Notify` trigger remains refused there; PostgreSQL rejects row-level
 triggers on views.
 
+### A legacy column nobody decided about
+
+**`VerifyEstate`** and the **`:ash_strangler_estate`** compiler (see the
+"Estates" guide) check the other direction from `VerifyCompleteMapping`.
+Every column of the snapshot catalog has exactly one disposition: computed
+from a mapping, a twin's secrets or a plug-in claim, or declared `carried`,
+`deferred`, `legacy_only` or `dead` with a reason. They refuse a column with
+none, a declaration on a column a mapping reads, a declaration for a column
+the catalog does not have, a whole relation declared while something reads
+it, two resources writing one column, and a mapped foreign key that is
+`NOT VALID` or points at columns nothing maps, unless it is an
+`open_reference`.
+
 # What replaced the checks that are gone
 
 Two verifiers were deleted. Recording where each of their rules went matters,
