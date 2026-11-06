@@ -119,6 +119,15 @@ defmodule AshStrangler.Obligations do
   def assertions(resource_or_dsl),
     do: resource_or_dsl |> check() |> Enum.reject(&is_nil(&1.assertion))
 
+  @doc """
+  How the rows of a finding's `assertion` are read: `:count` for a `SELECT count(*)` (one integer,
+  the number of violations), `:rows` for one row per offending value. A value column is cast to
+  text so that an offending `0` is never mistaken for a count of none.
+  """
+  @spec assertion_shape(String.t()) :: :count | :rows
+  def assertion_shape(assertion),
+    do: if(assertion =~ ~r/\A\s*SELECT count\(\*\)/i, do: :count, else: :rows)
+
   # --- dispatch ----------------------------------------------------------------
   #
   # Grouped here rather than beside each combinator's obligations, so the set of
@@ -753,7 +762,7 @@ defmodule AshStrangler.Obligations do
     known = entry.values |> Map.keys() |> Enum.map_join(", ", &Printer.literal/1)
 
     """
-    SELECT DISTINCT #{column(context, entry.from)} AS value_with_no_decode_entry
+    SELECT DISTINCT #{column(context, entry.from)}::text AS value_with_no_decode_entry
     FROM #{relation(context)}
     WHERE #{column(context, entry.from)} IS NOT NULL
       AND #{column(context, entry.from)} NOT IN (#{known})

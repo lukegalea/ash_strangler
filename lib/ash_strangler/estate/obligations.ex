@@ -120,7 +120,7 @@ defmodule AshStrangler.Estate.Obligations do
         summary: finding.message,
         denominator: "the rows the assertion returns",
         sql: finding.assertion,
-        shape: :rows,
+        shape: Obligations.assertion_shape(finding.assertion),
         severity: finding.severity,
         source: inspect(module)
       }
@@ -207,6 +207,11 @@ defmodule AshStrangler.Estate.Obligations do
 
   defp interpret(:census, other),
     do: {:error, "a census returns one row of two integers, got #{inspect(other.rows)}"}
+
+  defp interpret(:count, %{rows: [[n]]}) when is_integer(n), do: {:ok, n, nil, nil}
+
+  defp interpret(:count, other),
+    do: {:error, "a count returns one row of one integer, got #{inspect(other.rows)}"}
 
   defp interpret(:rows, %{rows: []}), do: {:ok, 0, nil, nil}
   defp interpret(:rows, %{rows: [[0]]}), do: {:ok, 0, nil, nil}
