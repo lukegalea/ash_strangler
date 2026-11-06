@@ -10,7 +10,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.EventsBridge do
   resource over `strangler_observations` that the host mounts beside its
   event log for a unified timeline.
 
-      mix ash_strangler.gen.events_bridge MyApp.Clm --repo MyApp.Repo
+      mix ash_strangler.gen.events_bridge MyApp.Contracts --repo MyApp.Repo
 
   The bridge has no create/update/destroy -- observations are never
   replayable as actions, and an action event ("Luke ran `Contract.archive`")

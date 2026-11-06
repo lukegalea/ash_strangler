@@ -10,7 +10,7 @@ defmodule Mix.Tasks.AshStrangler.Baseline do
   snapshot of the legacy relation projected through the forward mapping,
   stamped with one baseline_group and the current mapping version.
 
-      mix ash_strangler.baseline MyApp.Clm.Contract --repo MyApp.Repo
+      mix ash_strangler.baseline MyApp.Contracts.Contract --repo MyApp.Repo
 
   Requires the resource to carry `ledger? true` — the ledger trigger is what
   makes the snapshot/stream handoff lossless. The baseline is idempotent per

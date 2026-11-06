@@ -66,7 +66,7 @@ defmodule AshStrangler.BaselineTest do
 
   defp fetch_other_id(not_this) do
     %Postgrex.Result{rows: rows} =
-      TestRepo.query!("SELECT id FROM legacy.clm_contracts WHERE id <> $1", [
+      TestRepo.query!("SELECT id FROM legacy.contracts WHERE id <> $1", [
         Ecto.UUID.dump!(not_this)
       ])
 
@@ -92,7 +92,7 @@ defmodule AshStrangler.BaselineTest do
     {:ok, _} = Baseline.run(Contract, repo: TestRepo, isolation: :caller)
 
     # The stream takes over: a legacy edit lands as an observation.
-    TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'edited' WHERE id = $1", [
+    TestRepo.query!("UPDATE legacy.contracts SET name = 'edited' WHERE id = $1", [
       Ecto.UUID.dump!(id)
     ])
 
@@ -140,16 +140,16 @@ defmodule AshStrangler.BaselineTest do
           Ecto.UUID.dump!(group)
         ])
 
-        TestRepo.query!("DELETE FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("DELETE FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(id)
         ])
 
         TestRepo.query!(
           "DELETE FROM \"legacy_change_events\" WHERE source_schema = $1 AND source_table = $2 AND primary_key ->> 'id' = $3",
-          ["legacy", "clm_contracts", to_string(id)]
+          ["legacy", "contracts", to_string(id)]
         )
 
-        TestRepo.query!("DELETE FROM legacy.clm_parties WHERE id = $1", [
+        TestRepo.query!("DELETE FROM legacy.parties WHERE id = $1", [
           Ecto.UUID.dump!(party_id)
         ])
       end

@@ -34,7 +34,7 @@ collapse :lifecycle_state do
 
   state :cancelled,
     representation: {:refuse,
-                     reason: "legacy clm_contracts has no cancelled encoding; cancelling is refused while legacy is authoritative"}
+                     reason: "legacy contracts has no cancelled encoding; cancelling is refused while legacy is authoritative"}
 
   state :draft, when: :otherwise, set: [processed: false, verified: false]
 end

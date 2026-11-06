@@ -10,7 +10,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.Observer do
   `AshStrangler.Observation.Processor.drain/4` — the observation mode's
   counterpart to `mix ash_strangler.gen.ingester`.
 
-      mix ash_strangler.gen.observer MyApp.Clm.Contract MyApp.Repo
+      mix ash_strangler.gen.observer MyApp.Contracts.Contract MyApp.Repo
 
   The worker claims the resource's unprocessed ledger events `FOR UPDATE
   SKIP LOCKED` WITHOUT marking them processed (the materialisation ingester

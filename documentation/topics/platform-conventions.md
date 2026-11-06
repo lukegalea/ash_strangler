@@ -57,7 +57,7 @@ rewrite or delete the old application's data through the INSTEAD OF triggers.
 Call the host hook at the top of the replay path:
 
 ```elixir
-AshStrangler.AshEvents.refuse_replay!(MyApp.Clm.Contract)
+AshStrangler.AshEvents.refuse_replay!(MyApp.Contracts.Contract)
 AshEvents.Replay.replay(...)
 ```
 

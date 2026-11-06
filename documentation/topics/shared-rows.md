@@ -26,7 +26,7 @@ scope.
 | Projected observations + consumer receipts | `strangler_observations`, `strangler_receipts` | Derived delivery state; the source ledger remains intact. |
 
 The Contract fixture is the runnable example: one `Contract` resource over
-`legacy.clm_contracts`, with `negotiating_notes` beside it, an organization id
+`legacy.contracts`, with `negotiating_notes` beside it, an organization id
 derived through the client party, and a lifecycle collapsed from legacy flags.
 See `AshStrangler.Test.Legacy.ContractMapping` and
 `AshStrangler.Test.Contract`.

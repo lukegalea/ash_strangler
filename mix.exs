@@ -44,7 +44,7 @@ defmodule AshStrangler.MixProject do
   # fixture schema, and the mapped resources the round-trip tests read through.
   # The twin fixtures must compile BEFORE the resources whose mappings resolve
   # through them at compile time: `contract.ex`'s fragment names
-  # `AshStrangler.Test.Legacy.ClmContracts`, and a Spark verifier runs while the
+  # `AshStrangler.Test.Legacy.Contracts`, and a Spark verifier runs while the
   # file that declared it is still compiling. Glob order put `contract.ex`
   # first; these two entries pin the twins ahead of the directory.
   defp elixirc_paths(:test),
@@ -94,14 +94,14 @@ defmodule AshStrangler.MixProject do
       # asserts they still match.
       {:ash_diagram, "~> 0.2", optional: true},
       {:ash_state_machine, "~> 0.2", only: [:dev, :test]},
-      # Luke's fork, pinned to match Keystone's mix.lock (d71f6d0). Optional:
+      # Luke's fork, pinned to match the host's mix.lock (d71f6d0). Optional:
       # only the AshEvents replay guard and the events-bridge fixture touch it.
       {:ash_events,
        github: "lukegalea/ash_events",
        branch: "temporal-as-of-support-0.7",
        only: [:dev, :test],
        optional: true},
-      # Keystone uses 2.0.x. The archival verifier's tests need the extension
+      # The host uses 2.0.x. The archival verifier's tests need the extension
       # present in dev/test; the verifier itself is guarded by
       # Code.ensure_loaded? so a consumer without archival never pays for it.
       {:ash_archival, "~> 2.0", only: [:dev, :test], optional: true},

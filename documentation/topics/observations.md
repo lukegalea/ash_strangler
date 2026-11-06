@@ -85,7 +85,7 @@ is present. Absent context stays absent: origin `:unknown`, no fabricated
 
 ## Baseline at watch start
 
-`mix ash_strangler.baseline MyApp.Clm.Contract --repo MyApp.Repo` takes a
+`mix ash_strangler.baseline MyApp.Contracts.Contract --repo MyApp.Repo` takes a
 `REPEATABLE READ` snapshot, reads the ledger `max(id)` inside it, keyset-scans
 the legacy relation, and projects each row as `category: :baseline` with one
 `baseline_group`. The trigger is already installed, so every commit outside
@@ -101,7 +101,7 @@ source event and transaction ids.
 ## Inspect and replay
 
 ```sh
-mix ash_strangler.observations --resource MyApp.Clm.Contract
+mix ash_strangler.observations --resource MyApp.Contracts.Contract
 mix ash_strangler.observations --quarantined --consumer MyApp.Observer
 mix ash_strangler.observations --inspect <observation-uuid>
 mix ash_strangler.observations --replay --consumer MyApp.Observer

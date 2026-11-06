@@ -38,7 +38,7 @@ defmodule AshStrangler.AshEvents do
   Wired at the top of the host's replay path:
 
       def replay_my_events do
-        AshStrangler.AshEvents.refuse_replay!(MyApp.Clm.Contract)
+        AshStrangler.AshEvents.refuse_replay!(MyApp.Contracts.Contract)
         AshEvents.Replay.replay(...)  # host's own replay
       end
   """

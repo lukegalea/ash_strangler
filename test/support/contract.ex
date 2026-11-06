@@ -17,7 +17,7 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
   strangler do
     phase :dual_write
 
-    source AshStrangler.Test.Legacy.ClmContracts do
+    source AshStrangler.Test.Legacy.Contracts do
       # The observation fixture: the durable ledger plus its observers. The
       # channel is this fixture's own -- the wake payload on a shared channel
       # would race whatever else listens on the default.
@@ -26,7 +26,7 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
       notify_channel "ash_strangler_contract_observation"
       observers([AshStrangler.Test.RecordingObserver])
 
-      # The legacy key IS the canonical id -- clm_contracts was born with uuid
+      # The legacy key IS the canonical id -- contracts was born with uuid
       # primary keys -- so the host mints the id on create and the INSERT
       # trigger passes it into the legacy key column. No lookup table, both
       # directions.
@@ -84,7 +84,7 @@ defmodule AshStrangler.Test.Legacy.ContractMapping do
           representation:
             {:refuse,
              reason:
-               "legacy clm_contracts has no cancelled encoding; cancelling is refused while legacy is authoritative"}
+               "legacy contracts has no cancelled encoding; cancelling is refused while legacy is authoritative"}
 
         state :draft, when: :otherwise, set: [processed: false, verified: false]
       end
@@ -94,7 +94,7 @@ end
 
 defmodule AshStrangler.Test.Contract do
   @moduledoc """
-  The shared-rows fixture: one resource over `legacy.clm_contracts` — the
+  The shared-rows fixture: one resource over `legacy.contracts` — the
   handoff §5 contract — with the mapping entirely external (see
   `AshStrangler.Test.Legacy.ContractMapping`).
 
@@ -112,7 +112,7 @@ defmodule AshStrangler.Test.Contract do
     fragments: [AshStrangler.Test.Legacy.ContractMapping]
 
   postgres do
-    table "clm_contracts_view"
+    table "contracts_view"
     schema "strangler"
     repo AshStrangler.TestRepo
     migrate? false
@@ -309,5 +309,5 @@ defmodule AshStrangler.Test.Contract do
   end
 
   @doc "The extension table's qualified name, for raw SQL assertions."
-  def extension_table, do: ~s("strangler"."clm_contracts_view_extension")
+  def extension_table, do: ~s("strangler"."contracts_view_extension")
 end

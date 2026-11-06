@@ -105,7 +105,7 @@ defmodule AshStrangler.ObservationTest do
       names = ["v1", "v2", "v3"]
 
       Enum.each(names, fn name ->
-        TestRepo.query!("UPDATE legacy.clm_contracts SET name = $1 WHERE id = $2", [
+        TestRepo.query!("UPDATE legacy.contracts SET name = $1 WHERE id = $2", [
           name,
           Ecto.UUID.dump!(record.id)
         ])
@@ -129,7 +129,7 @@ defmodule AshStrangler.ObservationTest do
     test "replay duplicates neither observations nor effects" do
       record = draft_contract!()
 
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'replayed' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'replayed' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 
@@ -171,7 +171,7 @@ defmodule AshStrangler.ObservationTest do
     test "a legacy write without context stays unknown" do
       record = draft_contract!()
 
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'legacy edit' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'legacy edit' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 
@@ -203,7 +203,7 @@ defmodule AshStrangler.ObservationTest do
     test "an erroring observer accumulates attempts without effects, then recovers" do
       record = draft_contract!()
 
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'receipted' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'receipted' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 
@@ -251,7 +251,7 @@ defmodule AshStrangler.ObservationTest do
     test "quarantine is immediate and stops auto-retry" do
       record = draft_contract!()
 
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'quarantined' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'quarantined' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 

@@ -11,19 +11,19 @@ to sync by hand.
 
 ```elixir
 defmodule MyApp.Legacy.ContractMapping do
-  use AshStrangler.Mapping, resource: MyApp.Clm.Contract
+  use AshStrangler.Mapping, resource: MyApp.Contracts.Contract
 
   strangler do
     phase :dual_write
 
-    source MyApp.Legacy.ClmContracts do
+    source MyApp.Legacy.Contracts do
       key :id, from: :id, strategy: :identity
       map :name, from: :name
     end
   end
 end
 
-defmodule MyApp.Clm.Contract do
+defmodule MyApp.Contracts.Contract do
   use Ash.Resource,
     domain: MyApp.Domain,
     data_layer: AshPostgres.DataLayer,
