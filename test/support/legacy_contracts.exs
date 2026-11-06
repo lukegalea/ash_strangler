@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
-defmodule AshStrangler.Test.Legacy.ClmParties do
+defmodule AshStrangler.Test.Legacy.Parties do
   @moduledoc """
-  The twin for `legacy.clm_parties` — the shared counterparty rows.
+  The twin for `legacy.parties` — the shared counterparty rows.
 
   `organization_id` is the tenant column this whole fixture hangs off: a
   contract derives its tenant from its client party's organization, which is
@@ -17,7 +17,7 @@ defmodule AshStrangler.Test.Legacy.ClmParties do
     extensions: [AshStrangler.Twin]
 
   postgres do
-    table "clm_parties"
+    table "parties"
     schema "legacy"
     repo AshStrangler.TestRepo
     migrate? false
@@ -34,14 +34,14 @@ defmodule AshStrangler.Test.Legacy.ClmParties do
   end
 end
 
-defmodule AshStrangler.Test.Legacy.ClmContracts do
+defmodule AshStrangler.Test.Legacy.Contracts do
   @moduledoc """
-  The twin for `legacy.clm_contracts`, columns exactly per handoff §5.
+  The twin for `legacy.contracts`, columns exactly per handoff §5.
 
   The two `belongs_to` relationships are what `expr(service_provider_party.name)`
   and `tenant :organization_id, derive: expr(client_party.organization_id)`
   resolve through. `define_attribute? false` because the FK columns are already
-  declared attributes — the Keystone twin's repair, and the reason the twin
+  declared attributes — the host twin's repair, and the reason the twin
   does not grow a second copy of each id column.
   """
 
@@ -51,7 +51,7 @@ defmodule AshStrangler.Test.Legacy.ClmContracts do
     extensions: [AshStrangler.Twin]
 
   postgres do
-    table "clm_contracts"
+    table "contracts"
     schema "legacy"
     repo AshStrangler.TestRepo
     migrate? false
@@ -77,12 +77,12 @@ defmodule AshStrangler.Test.Legacy.ClmContracts do
   end
 
   relationships do
-    belongs_to :service_provider_party, AshStrangler.Test.Legacy.ClmParties do
+    belongs_to :service_provider_party, AshStrangler.Test.Legacy.Parties do
       define_attribute? false
       public? true
     end
 
-    belongs_to :client_party, AshStrangler.Test.Legacy.ClmParties do
+    belongs_to :client_party, AshStrangler.Test.Legacy.Parties do
       define_attribute? false
       public? true
     end

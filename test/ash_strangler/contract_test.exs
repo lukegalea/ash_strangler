@@ -4,7 +4,7 @@
 
 defmodule AshStrangler.ContractTest do
   @moduledoc """
-  The shared-rows acceptance properties, over `legacy.clm_contracts`:
+  The shared-rows acceptance properties, over `legacy.contracts`:
 
     1. a legacy SQL edit is visible through the canonical resource with no
        sync job of any kind;
@@ -61,7 +61,7 @@ defmodule AshStrangler.ContractTest do
 
   defp legacy_flags!(id) do
     %Postgrex.Result{rows: [[processed, verified]]} =
-      TestRepo.query!("SELECT processed, verified FROM legacy.clm_contracts WHERE id = $1", [
+      TestRepo.query!("SELECT processed, verified FROM legacy.contracts WHERE id = $1", [
         Ecto.UUID.dump!(id)
       ])
 
@@ -74,7 +74,7 @@ defmodule AshStrangler.ContractTest do
 
       # The legacy application's own write path: raw SQL, no Ash, no trigger
       # from this package's side. Nothing to sync -- there is one row.
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'after' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'after' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 
@@ -88,7 +88,7 @@ defmodule AshStrangler.ContractTest do
       assert %{vendor_name: name} = Ash.reload!(record) |> Map.from_struct()
       assert is_binary(name)
 
-      TestRepo.query!("UPDATE legacy.clm_parties SET name = 'New Vendor' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.parties SET name = 'New Vendor' WHERE id = $1", [
         Ecto.UUID.dump!(vendor_id)
       ])
 
@@ -102,7 +102,7 @@ defmodule AshStrangler.ContractTest do
       update!(record, :negotiate_terms, %{name: "v2", payment_term: "net-60"})
 
       %Postgrex.Result{rows: [[name, term]]} =
-        TestRepo.query!("SELECT name, payment_term FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("SELECT name, payment_term FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(record.id)
         ])
 
@@ -129,8 +129,8 @@ defmodule AshStrangler.ContractTest do
       %Postgrex.Result{rows: [[legacy_id, org_id]]} =
         TestRepo.query!(
           "SELECT c.id, client_party.organization_id
-             FROM legacy.clm_contracts c
-             LEFT JOIN legacy.clm_parties client_party ON client_party.id = c.client_party_id
+             FROM legacy.contracts c
+             LEFT JOIN legacy.parties client_party ON client_party.id = c.client_party_id
             WHERE c.id = $1",
           [Ecto.UUID.dump!(record.id)]
         )
@@ -182,7 +182,7 @@ defmodule AshStrangler.ContractTest do
 
       # And the shared columns are untouched by the extension write.
       %Postgrex.Result{rows: [[name]]} =
-        TestRepo.query!("SELECT name FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("SELECT name FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(record.id)
         ])
 
@@ -254,7 +254,7 @@ defmodule AshStrangler.ContractTest do
       assert is_nil(notes)
 
       %Postgrex.Result{rows: [[value]]} =
-        TestRepo.query!("SELECT value FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("SELECT value FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(record.id)
         ])
 
@@ -285,7 +285,7 @@ defmodule AshStrangler.ContractTest do
       assert ext_rows == 0
 
       %Postgrex.Result{num_rows: 0} =
-        TestRepo.query!("SELECT 1 FROM legacy.clm_contracts WHERE name = 'doomed'")
+        TestRepo.query!("SELECT 1 FROM legacy.contracts WHERE name = 'doomed'")
     end
   end
 
@@ -323,7 +323,7 @@ defmodule AshStrangler.ContractTest do
       assert legacy_flags!(record.id) == {true, false}
 
       %Postgrex.Result{rows: [[archived]]} =
-        TestRepo.query!("SELECT archived FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("SELECT archived FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(record.id)
         ])
 
@@ -334,7 +334,7 @@ defmodule AshStrangler.ContractTest do
       assert record.lifecycle_state == :archived
 
       %Postgrex.Result{rows: [[archived]]} =
-        TestRepo.query!("SELECT archived FROM legacy.clm_contracts WHERE id = $1", [
+        TestRepo.query!("SELECT archived FROM legacy.contracts WHERE id = $1", [
           Ecto.UUID.dump!(record.id)
         ])
 
@@ -357,7 +357,7 @@ defmodule AshStrangler.ContractTest do
 
       # An unrelated legacy edit does not disturb the extension state, and the
       # read-back still says negotiating.
-      TestRepo.query!("UPDATE legacy.clm_contracts SET payment_term = 'net-30' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET payment_term = 'net-30' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 
@@ -401,7 +401,7 @@ defmodule AshStrangler.ContractTest do
       assert record.lifecycle_state == :draft
 
       TestRepo.query!(
-        "UPDATE legacy.clm_contracts SET expiry_date = CURRENT_DATE - 1 WHERE id = $1",
+        "UPDATE legacy.contracts SET expiry_date = CURRENT_DATE - 1 WHERE id = $1",
         [Ecto.UUID.dump!(record.id)]
       )
 

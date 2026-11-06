@@ -51,21 +51,21 @@ defmodule AshStrangler.Test.LegacySchema do
   )
   """
 
-  # The shared-rows fixture schema: `clm_parties` carries the tenant column a
-  # contract derives from; `clm_contracts` is exactly the handoff §5 shape.
+  # The shared-rows fixture schema: `parties` carries the tenant column a
+  # contract derives from; `contracts` is exactly the handoff §5 shape.
   # The CHECK on `value` exists so a test can force a legacy-side constraint
   # violation mid-command — the atomicity proof needs a failure that happens
   # INSIDE the legacy write, after the transaction opened.
-  @clm_parties_table """
-  CREATE TABLE legacy.clm_parties (
+  @parties_table """
+  CREATE TABLE legacy.parties (
     id              uuid PRIMARY KEY,
     name            text NOT NULL,
     organization_id uuid NOT NULL
   )
   """
 
-  @clm_contracts_table """
-  CREATE TABLE legacy.clm_contracts (
+  @contracts_table """
+  CREATE TABLE legacy.contracts (
     id                       uuid PRIMARY KEY,
     name                     text NOT NULL,
     description              text,
@@ -82,7 +82,7 @@ defmodule AshStrangler.Test.LegacySchema do
     renewal_start_date       date,
     renewal_end_date         date,
     metadata                 jsonb NOT NULL DEFAULT '{}',
-    CONSTRAINT clm_contracts_value_non_negative CHECK (value IS NULL OR value >= 0)
+    CONSTRAINT contracts_value_non_negative CHECK (value IS NULL OR value >= 0)
   )
   """
 
@@ -108,8 +108,8 @@ defmodule AshStrangler.Test.LegacySchema do
 
     execute!(@users_table)
     execute!("CREATE UNIQUE INDEX index_users_on_login ON legacy.users (login)")
-    execute!(@clm_parties_table)
-    execute!(@clm_contracts_table)
+    execute!(@parties_table)
+    execute!(@contracts_table)
 
     # The observation tests' consumer effects: idempotent by the delivery
     # contract's own key.

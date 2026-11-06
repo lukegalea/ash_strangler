@@ -9,7 +9,7 @@ defmodule Mix.Tasks.AshStrangler.Observations do
   Lists, inspects and replays observations and their receipts.
 
       mix ash_strangler.observations                                   # recent, all
-      mix ash_strangler.observations --resource MyApp.Clm.Contract
+      mix ash_strangler.observations --resource MyApp.Contracts.Contract
       mix ash_strangler.observations --consumer MyApp.MyObserver
       mix ash_strangler.observations --quarantined                     # one consumer
       mix ash_strangler.observations --inspect <observation-uuid>      # full envelope

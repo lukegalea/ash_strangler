@@ -21,12 +21,12 @@ schema changes: a twin is a snapshot.
 
 ```elixir
 defmodule MyApp.Legacy.ContractMapping do
-  use AshStrangler.Mapping, resource: MyApp.Clm.Contract
+  use AshStrangler.Mapping, resource: MyApp.Contracts.Contract
 
   strangler do
     phase :dual_write
 
-    source MyApp.Legacy.ClmContracts do
+    source MyApp.Legacy.Contracts do
       key :id, from: :id, strategy: :identity
       map :name, from: :name
       extension [:negotiating_notes, :created_by_id]
@@ -78,7 +78,7 @@ reconciler are how you earn the next phase.
 Set `notify? true`, `ledger? true`, and the consumers:
 
 ```elixir
-source MyApp.Legacy.ClmContracts do
+source MyApp.Legacy.Contracts do
   notify? true
   ledger? true
   observers: [MyApp.ContractObserver]
@@ -90,13 +90,13 @@ The ledger trigger writes an event in the same legacy transaction. Start the
 Oban worker rendered by:
 
 ```sh
-mix ash_strangler.gen.observer MyApp.Clm.Contract MyApp.Repo
+mix ash_strangler.gen.observer MyApp.Contracts.Contract MyApp.Repo
 ```
 
 Then take the watch-start baseline:
 
 ```sh
-mix ash_strangler.baseline MyApp.Clm.Contract --repo MyApp.Repo
+mix ash_strangler.baseline MyApp.Contracts.Contract --repo MyApp.Repo
 ```
 
 The baseline is a snapshot, not a business event. Keep the generated worker's
@@ -119,7 +119,7 @@ No context means unknown; nothing infers that the write came from legacy.
 ## 7. Inspect and recover
 
 ```sh
-mix ash_strangler.observations --resource MyApp.Clm.Contract
+mix ash_strangler.observations --resource MyApp.Contracts.Contract
 mix ash_strangler.observations --quarantined
 mix ash_strangler.observations --inspect <uuid>
 mix ash_strangler.observations --replay --consumer MyApp.ContractObserver
@@ -130,7 +130,7 @@ idempotence. The source ledger is retained: observation replay never truncates
 it. For a unified host event timeline, render the read-only bridge:
 
 ```sh
-mix ash_strangler.gen.events_bridge MyApp.Clm --repo MyApp.Repo
+mix ash_strangler.gen.events_bridge MyApp.Contracts --repo MyApp.Repo
 ```
 
 Action events remain replayable host commands; observations remain read-only

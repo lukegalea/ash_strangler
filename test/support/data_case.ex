@@ -66,7 +66,7 @@ defmodule AshStrangler.DataCase do
   end
 
   @doc """
-  Inserts a party into `legacy.clm_parties` with raw SQL and returns its id.
+  Inserts a party into `legacy.parties` with raw SQL and returns its id.
   """
   def insert_legacy_party!(attrs \\ %{}) do
     attrs = Map.new(attrs)
@@ -76,7 +76,7 @@ defmodule AshStrangler.DataCase do
     %Postgrex.Result{rows: [[raw_id]]} =
       AshStrangler.TestRepo.query!(
         """
-        INSERT INTO legacy.clm_parties (id, name, organization_id)
+        INSERT INTO legacy.parties (id, name, organization_id)
         VALUES ($1, $2, $3)
         RETURNING id
         """,
@@ -92,7 +92,7 @@ defmodule AshStrangler.DataCase do
   end
 
   @doc """
-  Inserts a contract into `legacy.clm_contracts` with raw SQL and returns its
+  Inserts a contract into `legacy.contracts` with raw SQL and returns its
   id. Raw SQL on purpose — the read-through test needs a row the legacy
   application wrote, through a path this package never touches.
   """
@@ -107,7 +107,7 @@ defmodule AshStrangler.DataCase do
     %Postgrex.Result{rows: [[raw_id]]} =
       AshStrangler.TestRepo.query!(
         """
-        INSERT INTO legacy.clm_contracts
+        INSERT INTO legacy.contracts
           (id, name, description, value, payment_term, client_party_id, service_provider_party_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id

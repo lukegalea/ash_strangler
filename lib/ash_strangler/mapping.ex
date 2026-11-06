@@ -12,19 +12,19 @@ defmodule AshStrangler.Mapping do
   and the resource attaches it with `fragments:`.
 
       defmodule VendorpmKeystone.Legacy.ContractMapping do
-        use AshStrangler.Mapping, resource: VendorpmKeystone.Clm.Contract
+        use AshStrangler.Mapping, resource: MyApp.Contracts.Contract
 
         strangler do
           phase :dual_write
 
-          source VendorpmKeystone.Legacy.ClmContracts do
+          source MyApp.Legacy.Contracts do
             key :id, from: :id, strategy: :identity
             map :name, from: :name
           end
         end
       end
 
-      defmodule VendorpmKeystone.Clm.Contract do
+      defmodule MyApp.Contracts.Contract do
         use Ash.Resource,
           data_layer: AshPostgres.DataLayer,
           fragments: [VendorpmKeystone.Legacy.ContractMapping]

@@ -199,7 +199,7 @@ defmodule AshStrangler.EventsBridgeTest do
       record = draft_contract!(name: "seam-v1")
 
       # legacy-side write
-      TestRepo.query!("UPDATE legacy.clm_contracts SET name = 'seam-legacy' WHERE id = $1", [
+      TestRepo.query!("UPDATE legacy.contracts SET name = 'seam-legacy' WHERE id = $1", [
         Ecto.UUID.dump!(record.id)
       ])
 

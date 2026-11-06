@@ -20,8 +20,8 @@ defmodule AshStrangler.Test.Legacy do
 
   resources do
     resource AshStrangler.Test.Legacy.Users
-    resource AshStrangler.Test.Legacy.ClmParties
-    resource AshStrangler.Test.Legacy.ClmContracts
+    resource AshStrangler.Test.Legacy.Parties
+    resource AshStrangler.Test.Legacy.Contracts
   end
 end
 
