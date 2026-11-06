@@ -19,7 +19,7 @@ defmodule AshStrangler.Union.Info do
   `twin_derived?/1` is true for `:column` and `:expression`.
   """
 
-  alias AshStrangler.Union.{Column, Constant, Legacy, Owned, Unmapped}
+  alias AshStrangler.Union.{Column, Constant, Legacy, Owned, TenantKey, Unmapped}
   alias AshStrangler.Union.Map, as: MapEntry
 
   @type kind :: :column | :expression | :constant | :null | :owned
@@ -29,6 +29,10 @@ defmodule AshStrangler.Union.Info do
 
   @spec view(module() | Spark.Dsl.t()) :: String.t() | nil
   def view(union), do: Spark.Dsl.Extension.get_opt(union, [:union], :view, nil)
+
+  @doc "The tenant column (estate check E5), or `nil`."
+  @spec tenant(module() | Spark.Dsl.t()) :: atom() | nil
+  def tenant(union), do: Spark.Dsl.Extension.get_opt(union, [:union], :tenant, nil)
 
   @doc "The canonical key column."
   @spec key(module() | Spark.Dsl.t()) :: atom()
@@ -111,6 +115,8 @@ defmodule AshStrangler.Union.Info do
 
     Map.put(acc, attribute, kind)
   end
+
+  defp put_kind(%TenantKey{attribute: attribute}, acc), do: Map.put(acc, attribute, :expression)
 
   defp put_kind(%Constant{attribute: attribute}, acc), do: Map.put(acc, attribute, :constant)
 

@@ -20,7 +20,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
   use Spark.Dsl.Verifier
 
   alias AshStrangler.{Expr, Twin}
-  alias AshStrangler.Union.{Constant, Info, Unmapped}
+  alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
   alias AshStrangler.Union.Map, as: MapEntry
   alias Spark.Dsl.Verifier
 
@@ -115,6 +115,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
       Enum.flat_map(branch.mappings, fn
         %MapEntry{attribute: a} -> [a]
         %Constant{attribute: a} -> [a]
+        %TenantKey{attribute: a} -> [a]
         %Unmapped{attributes: as} -> as
       end)
 
@@ -125,6 +126,9 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
         %MapEntry{from: from} ->
           missing(branch.twin, for({[], c} <- Expr.refs(from), do: c), "map")
+
+        %TenantKey{} = key ->
+          missing(branch.twin, TenantKey.columns(key), "tenant_of")
 
         _ ->
           []

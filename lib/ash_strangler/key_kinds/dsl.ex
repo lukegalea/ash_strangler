@@ -7,12 +7,13 @@ defmodule AshStrangler.KeyKind do
   One kind of packed key: a 12-bit tag and the legacy integer columns it packs.
   See `AshStrangler.KeyKinds`.
   """
-  defstruct [:name, :tag, :parts, :__spark_metadata__]
+  defstruct [:name, :tag, :parts, :__spark_metadata__, tenant?: false]
 
   @type t :: %__MODULE__{
           name: atom(),
           tag: pos_integer(),
-          parts: [{String.t(), AshStrangler.UuidV8.width()}]
+          parts: [{String.t(), AshStrangler.UuidV8.width()}],
+          tenant?: boolean()
         }
 
   @doc "The width of each part, in order."
@@ -32,6 +33,16 @@ defmodule AshStrangler.KeyKind do
       _ -> {nil, qualified}
     end
   end
+end
+
+defmodule AshStrangler.LogicalKind do
+  @moduledoc """
+  One kind of logical key: a 12-bit tag and no legacy home. See
+  `AshStrangler.KeyKinds.logical/3`.
+  """
+  defstruct [:name, :tag, :__spark_metadata__]
+
+  @type t :: %__MODULE__{name: atom(), tag: pos_integer()}
 end
 
 defmodule AshStrangler.KeyKinds.Dsl do
@@ -67,7 +78,37 @@ defmodule AshStrangler.KeyKinds.Dsl do
         type: {:list, {:tuple, [:string, {:in, [16, 32, 64]}]}},
         required: true,
         doc: ~S|The packed columns, `[{"schema.table.column", width}]`, most significant first.|
+      ],
+      tenant?: [
+        type: :boolean,
+        default: false,
+        doc: """
+        Whether this kind names a tenant. Estate check E5 requires every
+        legacy branch of a tenant-scoped union to derive its tenant column
+        through a kind with this set.
+        """
       ]
+    ]
+  }
+
+  @logical %Spark.Dsl.Entity{
+    name: :logical,
+    describe: """
+    A kind of row that has no single legacy home: a row derived from another
+    (a slot of a legacy row, an element of one of its jsonb arrays, a
+    synthesized event). Its id is a name-based UUID version 5 over the
+    declared components, in a namespace that holds the estate tag and this
+    kind's tag (`AshStrangler.KeyKinds.logical/3`). It is deterministic and
+    cannot be decoded: the row is found through its parent.
+
+    The tag shares the 12-bit space of `kind` and is never reused.
+    """,
+    examples: [~S|logical :line, 0x010|],
+    target: AshStrangler.LogicalKind,
+    args: [:name, :tag],
+    schema: [
+      name: [type: :atom, required: true, doc: "The kind's name."],
+      tag: [type: :pos_integer, required: true, doc: "The 12-bit tag, `0x001..0xFFF`."]
     ]
   }
 
@@ -89,7 +130,7 @@ defmodule AshStrangler.KeyKinds.Dsl do
       end
       """
     ],
-    entities: [@kind],
+    entities: [@kind, @logical],
     schema: [
       estate: [
         type: :non_neg_integer,

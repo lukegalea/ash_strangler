@@ -19,6 +19,7 @@ end
 # that rolls back, so they share this schema and never rebuild it.
 LegacySchema.install!()
 AshStrangler.Test.Clinic.install!()
+AshStrangler.Test.ClinicDerived.install!()
 
 Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
 

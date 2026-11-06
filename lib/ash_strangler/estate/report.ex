@@ -93,7 +93,8 @@ defmodule AshStrangler.Estate.Report do
         coverage_problems(report) ++
         writer_problems(report) ++
         reference_problems(report, catalog) ++
-        Phases.problems(report, Phases.entries(Estate.resources(estate)))
+        Phases.problems(report, Phases.entries(Estate.resources(estate))) ++
+        AshStrangler.Estate.Tenancy.problems(Estate.resources(estate))
 
     report = %{report | problems: problems}
     %{report | problems: problems ++ plugin_problems(report)}
@@ -262,6 +263,9 @@ defmodule AshStrangler.Estate.Report do
       AshStrangler.Migration.union?(module) ->
         union_claims(module, catalog)
 
+      AshStrangler.Migration.derived?(module) ->
+        derived_claims(module, catalog)
+
       function_exported?(module, :spark_dsl_config, 0) and Info.strangled?(module) ->
         strangled_claims(module, catalog)
 
@@ -345,18 +349,55 @@ defmodule AshStrangler.Estate.Report do
     {claims, writers, missing_columns(claims, catalog, union)}
   end
 
+  # A derived view reads its twin through its key columns, its filters and its
+  # mappings. It writes nothing.
+  defp derived_claims(derived, catalog) do
+    alias AshStrangler.Derived.Info, as: DerivedInfo
+
+    twin = DerivedInfo.twin(derived)
+    sources = DerivedInfo.sources(derived)
+
+    mapped = for source <- sources, mapping <- source.mappings, a <- mapping_reads(mapping), do: a
+
+    filtered =
+      for expression <- [DerivedInfo.filter(derived) | Enum.map(sources, & &1.filter)],
+          expression != nil,
+          {[], attribute} <- AshStrangler.Expr.refs(expression),
+          do: attribute
+
+    jsonb = for %{kind: :element, from: from} <- sources, do: from
+
+    claims =
+      for attribute <- Enum.uniq(DerivedInfo.from(derived) ++ mapped ++ filtered ++ jsonb) do
+        %Claim{
+          relation: relation(twin),
+          column: Twin.column!(twin, attribute),
+          kind: :mapped,
+          by: derived
+        }
+      end
+
+    claims = claims ++ secret_claims([twin])
+    {claims, [], missing_columns(claims, catalog, derived)}
+  end
+
   defp branch_reads(%{twin: twin, keys: keys, mappings: mappings}) do
     key_attrs = Enum.flat_map(keys, &AshStrangler.Key.columns/1)
 
-    mapped =
-      Enum.flat_map(mappings, fn
-        %{from: from} when is_atom(from) -> [from]
-        %{from: from} -> for {[], attribute} <- AshStrangler.Expr.refs(from), do: attribute
-        _ -> []
-      end)
+    mapped = Enum.flat_map(mappings, &mapping_reads/1)
 
     for attribute <- Enum.uniq(key_attrs ++ mapped), do: {attribute, twin}
   end
+
+  defp mapping_reads(%AshStrangler.Union.TenantKey{} = key),
+    do: AshStrangler.Union.TenantKey.columns(key)
+
+  defp mapping_reads(%{from: from}) when is_atom(from), do: [from]
+
+  defp mapping_reads(%{from: from}),
+    do: for({[], attribute} <- AshStrangler.Expr.refs(from), do: attribute)
+
+  defp mapping_reads(_other), do: []
 
   defp branch_writes(%{mappings: mappings}) do
     for %{from: from} <- mappings,

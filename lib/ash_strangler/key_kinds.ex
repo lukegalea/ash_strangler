@@ -48,7 +48,7 @@ defmodule AshStrangler.KeyKinds do
 
   use Spark.Dsl, default_extensions: [extensions: [AshStrangler.KeyKinds.Dsl]]
 
-  alias AshStrangler.{KeyKind, UuidV8}
+  alias AshStrangler.{KeyDerivation, KeyKind, UuidV8}
   alias Spark.Dsl.Extension
 
   @typedoc "A registry module defined with `use AshStrangler.KeyKinds`."
@@ -66,9 +66,18 @@ defmodule AshStrangler.KeyKinds do
   @spec reserved(registry() | Spark.Dsl.t()) :: [pos_integer()]
   def reserved(registry), do: Extension.get_opt(registry, [:key_kinds], :reserved, [])
 
-  @doc "Every kind, in declaration order."
+  @doc "Every packed kind, in declaration order."
   @spec kinds(registry() | Spark.Dsl.t()) :: [KeyKind.t()]
-  def kinds(registry), do: Extension.get_entities(registry, [:key_kinds])
+  def kinds(registry),
+    do: registry |> Extension.get_entities([:key_kinds]) |> Enum.filter(&is_struct(&1, KeyKind))
+
+  @doc "Every logical kind, in declaration order."
+  @spec logical_kinds(registry() | Spark.Dsl.t()) :: [AshStrangler.LogicalKind.t()]
+  def logical_kinds(registry),
+    do:
+      registry
+      |> Extension.get_entities([:key_kinds])
+      |> Enum.filter(&is_struct(&1, AshStrangler.LogicalKind))
 
   @doc "The kind named `name`, or `nil`."
   @spec kind(registry() | Spark.Dsl.t(), atom()) :: KeyKind.t() | nil
@@ -148,4 +157,74 @@ defmodule AshStrangler.KeyKinds do
     kind = kind!(registry, name)
     UuidV8.part_sql(estate(registry), kind.tag, KeyKind.widths(kind), index, uuid_sql)
   end
+
+  # --- logical keys ----------------------------------------------------------
+
+  # Fixed, so the namespace of a kind depends only on the estate and the tag.
+  @logical_root "5a1d3f0e-9c3b-5c7e-8d52-0b1f6a4e7c11"
+
+  # ASCII unit separator: it joins components and is not a character of any
+  # sensible key value.
+  @separator <<31>>
+
+  @doc "The logical kind named `name`; raises `ArgumentError` when the registry has none."
+  @spec logical_kind!(registry() | Spark.Dsl.t(), atom()) :: AshStrangler.LogicalKind.t()
+  def logical_kind!(registry, name) do
+    Enum.find(logical_kinds(registry), &(&1.name == name)) ||
+      raise ArgumentError,
+            "#{inspect(registry)} declares no logical key kind #{inspect(name)}; it declares " <>
+              inspect(Enum.map(logical_kinds(registry), & &1.name))
+  end
+
+  @doc """
+  The UUID version 5 namespace of the logical kind `name`: a function of the
+  estate tag and the kind's tag alone, so two estates (or two kinds) never
+  share one.
+  """
+  @spec logical_namespace(registry() | Spark.Dsl.t(), atom()) :: String.t()
+  def logical_namespace(registry, name) do
+    kind = logical_kind!(registry, name)
+    KeyDerivation.uuid_v5(@logical_root, "estate:#{hex(estate(registry), 4)}:tag:#{hex(kind.tag, 3)}")
+  end
+
+  @doc """
+  The id of the `name` row derived from `components` (integers, strings or
+  UUIDs, in a fixed order). `nil` when any component is `nil`.
+
+  Agrees with `logical_sql/3`.
+  """
+  @spec logical(registry() | Spark.Dsl.t(), atom(), [term()]) :: String.t() | nil
+  def logical(registry, name, components) do
+    if Enum.any?(components, &is_nil/1) do
+      nil
+    else
+      KeyDerivation.uuid_v5(
+        logical_namespace(registry, name),
+        Enum.map_join(components, @separator, &to_string/1)
+      )
+    end
+  end
+
+  @doc """
+  The SQL expression (type `uuid`) of a `name` logical key over `component_sql`,
+  one SQL expression per component. `NULL` when any component is `NULL`.
+  Agrees with `logical/3`.
+  """
+  @spec logical_sql(registry() | Spark.Dsl.t(), atom(), [String.t()]) :: String.t()
+  def logical_sql(registry, name, component_sql) do
+    namespace = AshStrangler.Sql.Printer.literal(logical_namespace(registry, name))
+    texts = Enum.map(component_sql, &"(#{&1})::text")
+    nulls = Enum.map_join(component_sql, " OR ", &"(#{&1}) IS NULL")
+
+    "CASE WHEN #{nulls} THEN NULL ELSE uuid_generate_v5(#{namespace}::uuid, #{Enum.join(texts, " || chr(31) || ")}) END"
+  end
+
+  @doc "True when `name` is a packed kind of the registry declared `tenant?: true`."
+  @spec tenant_kind?(registry() | Spark.Dsl.t(), atom()) :: boolean()
+  def tenant_kind?(registry, name) do
+    match?(%KeyKind{tenant?: true}, kind(registry, name))
+  end
+
+  defp hex(value, width),
+    do: value |> Integer.to_string(16) |> String.pad_leading(width, "0")
 end

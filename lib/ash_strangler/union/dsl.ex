@@ -9,7 +9,7 @@ defmodule AshStrangler.Union.Dsl do
   """
 
   alias AshStrangler.Dsl.Combinators
-  alias AshStrangler.Union.{Column, Constant, Legacy, Map, Owned, Unmapped}
+  alias AshStrangler.Union.{Column, Constant, Legacy, Map, Owned, TenantKey, Unmapped}
 
   @phases [:read_from_legacy, :dual_write, :read_from_new, :decommissioned]
 
@@ -77,6 +77,31 @@ defmodule AshStrangler.Union.Dsl do
     schema: [attribute: [type: :atom, required: true], value: [type: :any, required: true]]
   }
 
+  @tenant_of %Spark.Dsl.Entity{
+    name: :tenant_of,
+    describe: """
+    A column read as a packed key (`AshStrangler.KeyKinds`) of the legacy
+    row's own columns. It is how a branch derives the union's `tenant`: estate
+    check E5 requires `kind` to be declared `tenant?: true`. Read-only.
+    """,
+    examples: [~S|tenant_of :clinic, kind: {Clinic.Keys, :clinic}, from: :clinic_id|],
+    target: TenantKey,
+    args: [:attribute],
+    schema: [
+      attribute: [type: :atom, required: true],
+      kind: [
+        type: {:tuple, [:module, :atom]},
+        required: true,
+        doc: "`{Registry, :kind}`: a packed kind of the registry."
+      ],
+      from: [
+        type: {:or, [:atom, {:list, :atom}]},
+        required: true,
+        doc: "The twin column (or columns, in kind order) the key packs."
+      ]
+    ]
+  }
+
   @unmapped %Spark.Dsl.Entity{
     name: :unmapped,
     describe: "Columns this branch has no source for. They read NULL; the reason is recorded.",
@@ -113,7 +138,7 @@ defmodule AshStrangler.Union.Dsl do
     ],
     target: Legacy,
     args: [:name],
-    entities: [keys: [@key], mappings: [@map, @constant, @unmapped]],
+    entities: [keys: [@key], mappings: [@map, @constant, @tenant_of, @unmapped]],
     schema: [
       name: [type: :atom, required: true],
       twin: [type: :module, required: true, doc: "The twin of the branch's legacy relation."],
@@ -149,7 +174,15 @@ defmodule AshStrangler.Union.Dsl do
         doc: "The schema of the view and the owned table."
       ],
       view: [type: :string, required: true, doc: "The canonical relation's name."],
-      key: [type: :atom, default: :id, doc: "The canonical key column (uuid)."]
+      key: [type: :atom, default: :id, doc: "The canonical key column (uuid)."],
+      tenant: [
+        type: :atom,
+        doc: """
+        The column that scopes a row to a tenant. Every legacy branch must derive
+        it with `tenant_of` through a `tenant?: true` kind, and the column must be
+        `null?: false` (estate check E5).
+        """
+      ]
     ]
   }
 
@@ -159,4 +192,8 @@ defmodule AshStrangler.Union.Dsl do
 
   @doc false
   def phases, do: @phases
+
+  @doc false
+  # The column, map, constant and unmapped entities, shared with `AshStrangler.Derived.Dsl`.
+  def shared_entities, do: %{column: @column, map: @map, constant: @constant, tenant_of: @tenant_of, unmapped: @unmapped}
 end
