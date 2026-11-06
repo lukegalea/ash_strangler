@@ -14,10 +14,12 @@ defmodule AshStrangler.DerivedTest do
   alias AshStrangler.KeyKinds
   alias AshStrangler.Test.ClinicDerived.{Keys, Properties}
 
+  @visits "clinic_derived.visits"
+
   defp q!(sql, params \\ []), do: TestRepo.query!(sql, params, mode: :savepoint).rows
 
   defp visit!(id, attrs \\ []) do
-    q!("INSERT INTO clinic_derived.visits VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)", [
+    q!("INSERT INTO clinic_derived.visits VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $1)", [
       id,
       attrs[:lead],
       attrs[:booked_at],
@@ -118,6 +120,17 @@ defmodule AshStrangler.DerivedTest do
     end
   end
 
+  test "the census counts a value at the path that is not an array as one refused element" do
+    visit!(1, metadata: %{propertyIds: [12, 12.5]})
+    visit!(2, metadata: %{propertyIds: 12})
+    visit!(3, metadata: %{propertyIds: "12"})
+    visit!(4, metadata: %{propertyIds: %{a: 12}})
+    visit!(5, metadata: %{other: 1})
+    visit!(6, metadata: %{propertyIds: nil})
+    [source] = Info.elements(Properties)
+    assert [[4, 5]] = q!(Sql.element_census_sql(Properties, source))
+  end
+
   test "a tenant_of column is the packed key of its kind over the legacy columns" do
     visit!(5, metadata: %{propertyIds: [1]})
     [[clinic]] = q!("SELECT clinic FROM clinic_derived.properties")
@@ -131,9 +144,13 @@ defmodule AshStrangler.DerivedTest do
       [[guest]] = q!("SELECT id FROM clinic_derived.staff WHERE __source = 'guest'")
       [[property]] = q!("SELECT id FROM clinic_derived.properties")
 
-      assert Ecto.UUID.cast!(lead) == KeyKinds.logical(Keys, :staff, [1, "lead"])
-      assert Ecto.UUID.cast!(guest) == KeyKinds.logical(Keys, :staff, [1, "guest", "bo"])
-      assert Ecto.UUID.cast!(property) == KeyKinds.logical(Keys, :property, [1, "listed", 4])
+      assert Ecto.UUID.cast!(lead) == KeyKinds.logical(Keys, :staff, [1, @visits, "lead"])
+
+      assert Ecto.UUID.cast!(guest) ==
+               KeyKinds.logical(Keys, :staff, [1, @visits, "guest", "bo"])
+
+      assert Ecto.UUID.cast!(property) ==
+               KeyKinds.logical(Keys, :property, [1, @visits, "listed", 4])
     end
 
     test "distinct sources, kinds and parents get distinct keys" do
@@ -145,6 +162,29 @@ defmodule AshStrangler.DerivedTest do
       ]
 
       assert length(Enum.uniq(keys)) == 4
+    end
+
+    test "a separator or backslash inside a component cannot move a boundary" do
+      assert KeyKinds.logical(Keys, :staff, ["x\u001fy", "z"]) !=
+               KeyKinds.logical(Keys, :staff, ["x", "y\u001fz"])
+
+      assert KeyKinds.logical(Keys, :staff, ["x\\", "z"]) !=
+               KeyKinds.logical(Keys, :staff, ["x", "\\z"])
+    end
+
+    test "SQL escapes the same way" do
+      guest = "a\u001fb\\c"
+      visit!(1, details: %{guests: [guest]}, metadata: %{propertyIds: []})
+      [[id]] = q!("SELECT id FROM clinic_derived.staff WHERE __source = 'guest'")
+
+      assert Ecto.UUID.cast!(id) ==
+               KeyKinds.logical(Keys, :staff, [1, @visits, "guest", guest])
+    end
+
+    test "two views of one kind do not share ids for the same source name and parent" do
+      names = [@visits, "clinic_derived.orders"]
+      [a, b] = for n <- names, do: KeyKinds.logical(Keys, :staff, [5, n, "lead"])
+      assert a != b
     end
 
     test "a component is not smeared into its neighbour" do

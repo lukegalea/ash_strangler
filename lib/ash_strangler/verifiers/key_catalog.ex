@@ -49,6 +49,25 @@ defmodule AshStrangler.Verifiers.KeyCatalog do
     end)
   end
 
+  @doc """
+  True when `columns` of the relation `name` are the kind's own columns on its own relation, or a
+  validated foreign key maps them, column for column, onto the kind's columns.
+  """
+  def closed?(name, relation, columns, %KeyKind{} = kind) do
+    home = KeyKind.columns(kind)
+
+    home == Enum.map(columns, &{name, &1}) or
+      Enum.any?(relation["foreign_keys"], &backs?(&1, columns, home))
+  end
+
+  defp backs?(foreign_key, columns, home) do
+    target = foreign_key["references"]
+    mapping = Enum.zip(foreign_key["columns"], target["columns"]) |> Map.new()
+
+    foreign_key["validated"] and MapSet.new(foreign_key["columns"]) == MapSet.new(columns) and
+      Enum.map(columns, &{target["relation"], mapping[&1]}) == home
+  end
+
   @doc "True when some non-partial unique set (or the primary key) lies within `columns`."
   def unique?(relation, columns) do
     within = MapSet.new(columns)

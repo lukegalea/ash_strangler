@@ -47,17 +47,30 @@ defmodule AshStrangler.Derived.Sql do
   The census of an `element` source over the live rows: how many elements the
   guard refuses and how many there are. One row, two `bigint` columns
   (`refused`, `total`).
+
+  A value present at the path that is not an array (a number, a string, an
+  object) yields no element, so the view drops it: each such value counts as
+  one refused element and one in the total. A missing path or a JSON null is
+  an empty list, not a refusal.
   """
   @spec element_census_sql(module() | Spark.Dsl.t(), Source.t()) :: String.t()
   def element_census_sql(derived, %Source{kind: :element} = source) do
     twin = Info.twin(derived)
     frame = Printer.bare_frame(twin)
+    scalar = ~s[jsonb_typeof(#{array(source, frame)}) NOT IN ('array', 'null')]
 
     """
-    SELECT count(*) FILTER (WHERE "__e"."__v" IS NULL)::bigint AS refused, count(*)::bigint AS total
-    FROM #{Twin.relation(twin)}
-    CROSS JOIN LATERAL #{lateral(source, frame)}
-    #{where(derived, source, frame, [])}
+    WITH "e" AS (
+      SELECT count(*) FILTER (WHERE "__e"."__v" IS NULL) AS "refused", count(*) AS "total"
+      FROM #{Twin.relation(twin)}
+      CROSS JOIN LATERAL #{lateral(source, frame)}
+      #{where(derived, source, frame, [])}
+    ), "s" AS (
+      SELECT count(*) AS "n" FROM #{Twin.relation(twin)}
+      #{where(derived, source, frame, [scalar])}
+    )
+    SELECT ("e"."refused" + "s"."n")::bigint AS refused, ("e"."total" + "s"."n")::bigint AS total
+    FROM "e", "s"
     """
   end
 
@@ -145,7 +158,13 @@ defmodule AshStrangler.Derived.Sql do
 
   defp key_sql(derived, source, frame) do
     from = Enum.map(Info.from(derived), &frame.({[], &1}))
-    own = [Printer.literal(to_string(source.name))]
+
+    # The twin's relation keeps two views of one kind apart when their `from` values and source names agree.
+    own = [
+      Printer.literal(AshStrangler.Verifiers.KeyCatalog.relation_name(Info.twin(derived))),
+      Printer.literal(to_string(source.name))
+    ]
+
     element = if source.kind == :element, do: [~s("__e"."__v")], else: []
 
     KeyKinds.logical_sql(Info.registry(derived), Info.kind(derived), from ++ own ++ element)

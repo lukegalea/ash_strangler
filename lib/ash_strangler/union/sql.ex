@@ -220,6 +220,9 @@ defmodule AshStrangler.Union.Sql do
     #{refusals}  IF NEW."__branch" IS NOT NULL AND NEW."__branch" <> #{Printer.literal(to_string(owned))} THEN
         RAISE EXCEPTION 'strangler: unknown branch %', NEW."__branch";
       END IF;
+      IF NEW.#{key} IS NOT NULL AND EXISTS (SELECT 1 FROM #{Info.view_name(union)} WHERE #{key} = NEW.#{key}) THEN
+        RAISE EXCEPTION 'strangler: key % already exists in #{Info.view(union)}', NEW.#{key} USING ERRCODE = 'unique_violation';
+      END IF;
       new_id := coalesce(NEW.#{key}, gen_random_uuid());
       INSERT INTO #{Info.owned_table(union)} (#{names}) VALUES (new_id#{if values == "", do: "", else: ", " <> values});
       SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{key} = new_id;
@@ -256,6 +259,7 @@ defmodule AshStrangler.Union.Sql do
         RAISE EXCEPTION 'strangler: unknown branch %', OLD."__branch";
       END IF;
       SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{key} = OLD.#{key};
+      IF NOT FOUND THEN RAISE EXCEPTION 'row % is no longer in #{Info.view(union)} after the update', OLD.#{key}; END IF;
       RETURN NEW;
     END;
     """
@@ -290,16 +294,25 @@ defmodule AshStrangler.Union.Sql do
     frame = Printer.bare_frame(b.twin)
     kinds = Info.lens_kinds(union, b.name)
 
+    key_sources = Enum.flat_map(b.keys, &List.wrap(&1.from))
+
     {writable, read_only} =
       union
       |> Info.columns()
-      |> Enum.split_with(fn c -> kinds[c.name] == :column and simple?(b, c.name) end)
+      |> Enum.split_with(fn c ->
+        kinds[c.name] == :column and simple?(b, c.name) and
+          source_attr(b, c.name) not in key_sources
+      end)
 
     guards =
       Enum.map_join(read_only, "", fn c ->
+        reason =
+          if kinds[c.name] == :column and source_attr(b, c.name) in key_sources,
+            do: "column #{c.name} is read from a legacy column that forms the row's key",
+            else: "column #{c.name} has no legacy column to write on this branch"
+
         "    IF NEW.#{q(c.name)} IS DISTINCT FROM OLD.#{q(c.name)} THEN\n      " <>
-          refusal(b, :update, "column #{c.name} has no legacy column to write on this branch") <>
-          "\n    END IF;\n"
+          refusal(b, :update, reason) <> "\n    END IF;\n"
       end)
 
     write =
@@ -310,7 +323,7 @@ defmodule AshStrangler.Union.Sql do
           Enum.map_join(
             writable,
             ", ",
-            &"#{frame.({[], source_attr(b, &1.name)})} = NEW.#{q(&1.name)}"
+            &"#{frame.({[], source_attr(b, &1.name)})} = CAST(NEW.#{q(&1.name)} AS #{legacy_type(b, &1.name)})"
           )
 
         "    UPDATE #{Twin.relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
@@ -333,6 +346,9 @@ defmodule AshStrangler.Union.Sql do
 
     "#{View.key_sql(key, Twin.relation(b.twin), Printer.bare_frame(b.twin))} = OLD.#{q(Info.key(union))}"
   end
+
+  # The legacy column's own type, so the write needs no assignment cast from the declared type.
+  defp legacy_type(b, column), do: Printer.pg_type!(Twin.type!(b.twin, source_attr(b, column)))
 
   # A `map from: :column` is writable; `from: expr(...)` that is a bare reference is too.
   defp simple?(b, column), do: source_attr(b, column) != nil

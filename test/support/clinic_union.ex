@@ -28,6 +28,8 @@ defmodule AshStrangler.Test.Clinic.Legacy.NorthVisits do
   attributes do
     attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
     attribute :patient_name, :string, allow_nil?: false, public?: true
+    attribute :clinic_id, :integer, public?: true
+    attribute :site_id, :integer, public?: true
     attribute :seen_on, :date, public?: true
   end
 
@@ -53,6 +55,7 @@ defmodule AshStrangler.Test.Clinic.Legacy.SouthVisits do
   attributes do
     attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
     attribute :name, :string, allow_nil?: false, public?: true
+    attribute :clinic_id, :integer, public?: true
     attribute :date, :date, public?: true
     attribute :remarks, :string, public?: true
   end

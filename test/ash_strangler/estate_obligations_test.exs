@@ -297,6 +297,98 @@ defmodule AshStrangler.EstateObligationsTest do
 
       assert statuses != [] and Enum.all?(statuses, &(&1 in ["warn", "fail"]))
     end
+
+    test "a count assertion reports the count, not the number of rows it returned" do
+      resource = AshStrangler.EstateObligationsTest.Defaulted
+      for _ <- 1..37, do: insert_legacy_user!(email: "none@example.com")
+
+      report = Obligations.report(estate([resource]), repo: TestRepo)
+
+      assert [%{"violations" => 37, "status" => "warn"}] =
+               for({id, row} <- by_id(report), String.contains?(id, ".email"), do: row)
+    end
+
+    test "an undecoded value of 0 is a violation, not a clean zero" do
+      n = System.unique_integer([:positive])
+
+      TestRepo.query!(
+        "CREATE TABLE clinic_union.dec#{n} (id integer PRIMARY KEY, status integer)",
+        [],
+        mode: :savepoint
+      )
+
+      {modules, _io} =
+        with_io(:stderr, fn ->
+          """
+          defmodule AshStrangler.EstateObligationsTest.DecTwin#{n} do
+            use Ash.Resource,
+              domain: AshStrangler.EstateObligationsTest.Domain,
+              data_layer: AshPostgres.DataLayer,
+              extensions: [AshStrangler.Twin]
+
+            postgres do
+              table "dec#{n}"
+              schema "clinic_union"
+              repo AshStrangler.TestRepo
+              migrate? false
+            end
+
+            attributes do
+              attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+              attribute :status, :integer, public?: true
+            end
+
+            actions do
+              defaults [:read]
+            end
+          end
+
+          defmodule AshStrangler.EstateObligationsTest.Dec#{n} do
+            use Ash.Resource,
+              domain: AshStrangler.EstateObligationsTest.Domain,
+              data_layer: AshPostgres.DataLayer,
+              extensions: [AshStrangler.Resource]
+
+            postgres do
+              table "dec#{n}_v"
+              schema "strangler"
+              repo AshStrangler.TestRepo
+              migrate? false
+            end
+
+            attributes do
+              attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+              attribute :s, :atom, public?: true, constraints: [one_of: [:a, :b]]
+            end
+
+            actions do
+              defaults [:read]
+            end
+
+            strangler do
+              phase :read_from_legacy
+
+              source AshStrangler.EstateObligationsTest.DecTwin#{n} do
+                key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+                decode :s, from: :status, values: %{"1": :a, "2": :b}
+              end
+            end
+          end
+          """
+          |> Code.compile_string()
+          |> Enum.map(&elem(&1, 0))
+        end)
+
+      resource = List.last(modules)
+      TestRepo.query!("INSERT INTO clinic_union.dec#{n} VALUES (1, 0)", [], mode: :savepoint)
+
+      report = Obligations.report(estate([resource]), repo: TestRepo)
+
+      assert [%{"violations" => 1, "status" => status}] =
+               for({id, row} <- by_id(report), String.starts_with?(id, "GetTotal"), do: row)
+
+      assert status in ["warn", "fail"]
+    end
   end
 
   describe "mix ash_strangler.check --estate" do

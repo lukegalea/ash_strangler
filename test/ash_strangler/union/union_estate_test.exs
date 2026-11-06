@@ -112,6 +112,95 @@ defmodule AshStrangler.UnionEstateTest do
     end
   end
 
+  describe "the carry rule and a column only another module reads" do
+    @main_ns "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"
+
+    test "the entry's own mapping carries a column; another module's claim does not" do
+      path = Path.join(System.tmp_dir!(), "ash_strangler_phase_catalog.json")
+      catalog = @catalog |> File.read!() |> Jason.decode!()
+
+      column = fn name, type ->
+        %{
+          "array" => false,
+          "default" => nil,
+          "generated" => nil,
+          "identity" => nil,
+          "name" => name,
+          "not_null" => false,
+          "type" => type,
+          "udt" => "pg_catalog." <> type
+        }
+      end
+
+      relation = %{
+        catalog["relations"]["clinic_union.north_visits"]
+        | "columns" => [
+            column.("id", "int4"),
+            column.("lead_nurse", "text"),
+            column.("booked_at", "timestamptz"),
+            column.("details", "jsonb"),
+            column.("metadata", "jsonb"),
+            column.("clinic_id", "int4")
+          ]
+      }
+
+      relations = Map.put(catalog["relations"], "clinic_derived.visits", relation)
+      File.write!(path, Jason.encode!(%{catalog | "relations" => relations}))
+
+      name = "AshStrangler.UnionEstateTest.Moved#{System.unique_integer([:positive])}"
+
+      moved =
+        compile("""
+        defmodule #{name} do
+          use AshStrangler.Union
+
+          union do
+            schema "clinic_derived"
+            view "booked"
+
+            column :booked, :utc_datetime_usec
+
+            legacy :main do
+              twin AshStrangler.Test.ClinicDerived.Legacy.Visits
+              phase :read_from_new
+              refused_because "legacy writes"
+              key :id, strategy: {:uuid_v5, namespace: "#{@main_ns}"}
+              map :booked, from: :booked_at
+            end
+
+            owned :native
+          end
+        end
+        """)
+
+      estate_name = "AshStrangler.UnionEstateTest.F#{System.unique_integer([:positive])}"
+
+      report =
+        compile("""
+        defmodule #{estate_name} do
+          use AshStrangler.Estate
+
+          estate do
+            snapshot #{inspect(path)}
+            resources #{inspect([moved, AshStrangler.Test.ClinicDerived.Staff, AshStrangler.Test.ClinicDerived.Properties])}
+          end
+        end
+        """)
+        |> Estate.evaluate()
+
+      subjects = report |> phase_problems() |> Enum.map(& &1.subject) |> Enum.sort()
+
+      assert subjects == [
+               "clinic_derived.visits.clinic_id",
+               "clinic_derived.visits.details",
+               "clinic_derived.visits.lead_nurse",
+               "clinic_derived.visits.metadata"
+             ]
+
+      assert Enum.any?(phase_problems(report), &(&1.message =~ "read only by"))
+    end
+  end
+
   describe "the lattice rule" do
     test "no one may read a relation a branch has decommissioned" do
       decommissioned = union(:decommissioned, :dual_write, "visits")

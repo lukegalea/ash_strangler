@@ -17,7 +17,9 @@ defmodule AshStrangler.Estate.Phases do
   be lost. Every column of the entry's relation must therefore be mapped by that
   entry's own resource or union, or declared `carried` or `dead`. A column
   left `deferred` or `legacy_only` (whether by itself or through a declaration
-  of the whole relation) blocks the move, and the problem names it. Until then
+  of the whole relation) blocks the move, and so does a column only another
+  module reads: its data would not be in the storage the entry moved to. The
+  problem names the column. Until then
   `deferred` and `legacy_only` mean "not needed yet", and a resource below
   `:read_from_new` is not held to the rule. A secret column is the twin's to
   carry and is not checked here.
@@ -92,13 +94,12 @@ defmodule AshStrangler.Estate.Phases do
           )
         ]
 
+      %{^relation => %{declared: %{kind: kind}}} when kind in [:carried, :dead] ->
+        []
+
       %{^relation => %{columns: columns}} ->
         for {column, info} <- Enum.sort(columns), blocked?(info, entry) do
-          problem(
-            entry,
-            "#{relation}.#{column}",
-            "#{relation}.#{column} is declared #{info.declared.kind} (#{info.declared.because})"
-          )
+          problem(entry, "#{relation}.#{column}", "#{relation}.#{column} #{why(info, entry)}")
         end
 
       _ ->
@@ -110,7 +111,29 @@ defmodule AshStrangler.Estate.Phases do
   defp blocked?(%{declared: %{kind: kind}}, _entry) when kind in [:deferred, :legacy_only],
     do: true
 
-  defp blocked?(_info, _entry), do: false
+  defp blocked?(%{declared: %{}}, _entry), do: false
+
+  defp blocked?(%{declared: nil, claims: claims}, entry),
+    do: not Enum.any?(claims, &carries?(&1, entry))
+
+  defp carries?(%{kind: :secret}, _entry), do: true
+  defp carries?(%{kind: :mapped, by: by}, entry), do: by == entry.module
+  defp carries?(_claim, _entry), do: false
+
+  defp why(%{declared: %{kind: kind, because: because}}, _entry),
+    do: "is declared #{kind} (#{because})"
+
+  defp why(%{claims: claims}, entry) do
+    others = for %{kind: :mapped, by: by} <- claims, by != entry.module, do: inspect(by)
+
+    case others do
+      [] ->
+        "is not mapped by #{inspect(entry.module)}"
+
+      _ ->
+        "is read only by #{Enum.join(Enum.uniq(others), ", ")}, not mapped by #{inspect(entry.module)}"
+    end
+  end
 
   defp carry_message(entry, message),
     do:

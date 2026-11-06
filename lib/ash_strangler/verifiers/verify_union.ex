@@ -12,6 +12,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     * a branch's twin is a twin, and everything a branch reads is a column of it;
     * a branch has exactly one `key`, a supported strategy over twin columns,
       and answers every column exactly once (`map`, `constant` or `unmapped`);
+    * on a `:dual_write` branch no two columns map from one legacy column;
     * two branches never share a key namespace (their ids would collide).
 
   Every refusal names the branch and the column.
@@ -78,7 +79,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
     if Code.ensure_compiled(branch.twin) == {:module, branch.twin} and Twin.twin?(branch.twin) do
       Enum.map(
-        key_problems(branch, key) ++ mapping_problems(branch, columns),
+        key_problems(branch, key) ++
+          mapping_problems(branch, columns) ++ shared_source_problems(branch),
         &(at <> &1)
       ) ++
         if(String.trim(branch.refused_because) == "",
@@ -144,6 +146,25 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
       reads
     ])
   end
+
+  # A dual-write update SETs each legacy column once; two columns mapped from one cannot both be written.
+  defp shared_source_problems(%{phase: :dual_write, mappings: mappings}) do
+    mappings
+    |> Enum.filter(&(is_struct(&1, MapEntry) and is_atom(&1.from)))
+    |> Enum.group_by(& &1.from, & &1.attribute)
+    |> Enum.flat_map(fn
+      {from, [_, _ | _] = attributes} ->
+        [
+          "columns #{Enum.map_join(attributes, ", ", &inspect/1)} are all mapped from #{inspect(from)}, " <>
+            "which a :dual_write update cannot set twice: map all but one with `from: expr(#{from})`"
+        ]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp shared_source_problems(_branch), do: []
 
   defp missing(twin, columns, what) do
     attrs = Twin.columns(twin)
