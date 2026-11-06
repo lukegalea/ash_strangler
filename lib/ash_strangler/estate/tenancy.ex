@@ -17,6 +17,9 @@ defmodule AshStrangler.Estate.Tenancy do
       can be checked against;
     * the `tenant_of` kind exists in its registry (compile-time verifiers
       cannot see another module's registry, so it is checked here);
+    * the `tenant_of` columns are the kind's own home columns, or have a validated
+      foreign key onto them in the estate's catalog: packing any other column
+      would put rows under a tenant that does not exist (tenant closure);
     * the tenant column is declared `null?: false`, so an owned row cannot
       lack a tenant.
 
@@ -24,32 +27,35 @@ defmodule AshStrangler.Estate.Tenancy do
   carries `check: :tenant`.
   """
 
-  alias AshStrangler.{Derived, KeyKinds, Migration}
+  alias AshStrangler.{Derived, KeyKind, KeyKinds, Migration}
   alias AshStrangler.Estate.Report
   alias AshStrangler.Union
+  alias AshStrangler.Verifiers.KeyCatalog
   alias AshStrangler.Union.TenantKey
 
-  @doc "The E5 problems of the `modules` of an estate."
-  @spec problems([module()]) :: [Report.problem()]
-  def problems(modules), do: Enum.flat_map(modules, &module_problems/1)
+  @doc "The E5 problems of the `modules` of an estate, closure read from its `catalog`."
+  @spec problems([module()], map()) :: [Report.problem()]
+  def problems(modules, catalog),
+    do: Enum.flat_map(modules, &module_problems(&1, catalog["relations"] || %{}))
 
-  defp module_problems(module) do
+  defp module_problems(module, relations) do
     cond do
       not Code.ensure_loaded?(module) ->
         []
 
       Migration.union?(module) ->
-        scoped(module, Union.Info, Union.Info.branches(module), "branch")
+        scoped(module, Union.Info, Union.Info.branches(module), "branch", relations, & &1.twin)
 
       Migration.derived?(module) ->
-        scoped(module, Derived.Info, Derived.Info.sources(module), "source")
+        twin = Derived.Info.twin(module)
+        scoped(module, Derived.Info, Derived.Info.sources(module), "source", relations, fn _ -> twin end)
 
       true ->
         []
     end
   end
 
-  defp scoped(module, info, units, noun) do
+  defp scoped(module, info, units, noun, relations, twin_of) do
     case info.tenant(module) do
       nil ->
         []
@@ -57,7 +63,7 @@ defmodule AshStrangler.Estate.Tenancy do
       column ->
         nullable(module, info, column) ++
           for unit <- units,
-              message <- unit_problems(unit, column),
+              message <- unit_problems(unit, column, twin_of.(unit), relations),
               do: problem(module, unit, noun, column, message)
     end
   end
@@ -75,9 +81,9 @@ defmodule AshStrangler.Estate.Tenancy do
     end
   end
 
-  defp unit_problems(unit, column) do
+  defp unit_problems(unit, column, twin, relations) do
     case answer(unit.mappings, column) do
-      %TenantKey{kind: {registry, kind}} ->
+      %TenantKey{kind: {registry, kind}} = key ->
         cond do
           not KeyKinds.registry?(registry) ->
             ["#{inspect(registry)} is not a key-kind registry"]
@@ -86,7 +92,7 @@ defmodule AshStrangler.Estate.Tenancy do
             ["#{inspect(registry)} declares no kind #{inspect(kind)}"]
 
           KeyKinds.tenant_kind?(registry, kind) ->
-            []
+            closure(key, KeyKinds.kind(registry, kind), twin, relations)
 
           true ->
             ["kind #{inspect(kind)} of #{inspect(registry)} is not declared `tenant?: true`"]
@@ -97,6 +103,26 @@ defmodule AshStrangler.Estate.Tenancy do
 
       other ->
         ["answers the tenant column with #{describe(other)}, not `tenant_of` a tenant key kind"]
+    end
+  end
+
+  # The packed columns must be the tenant's own, or have a validated foreign key onto it.
+  defp closure(key, kind, twin, relations) do
+    name = KeyCatalog.relation_name(twin)
+    from = TenantKey.columns(key)
+    home = Enum.map_join(KeyKind.columns(kind), ", ", fn {rel, col} -> "#{rel}.#{col}" end)
+
+    with {:ok, columns} <- KeyCatalog.columns(twin, from),
+         relation when is_map(relation) <- relations[name] do
+      if length(columns) == length(kind.parts) and KeyCatalog.closed?(name, relation, columns, kind),
+        do: [],
+        else: [
+          "`tenant_of` packs #{Enum.map_join(columns, ", ", &"#{name}.#{&1}")}, which is not #{home} " <>
+            "and has no validated foreign key onto it, so a row may be shown under a tenant that does not exist"
+        ]
+    else
+      {:error, attribute} -> ["`tenant_of` reads #{inspect(attribute)}, which #{inspect(twin)} does not have"]
+      nil -> ["the estate catalog has no relation `#{name}`, so tenant closure cannot be shown"]
     end
   end
 

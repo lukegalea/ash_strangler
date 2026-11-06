@@ -16,10 +16,59 @@ defmodule AshStrangler.TenancyTest do
 
   alias AshStrangler.Estate
 
-  @catalog "test/fixtures/snapshot/clinic_union/catalog.json"
+  @fixture "test/fixtures/snapshot/clinic_union/catalog.json"
+  @catalog Path.join(System.tmp_dir!(), "ash_strangler_tenancy_catalog.json")
   @keys "AshStrangler.Test.ClinicDerived.Keys"
   @north "AshStrangler.Test.Clinic.Legacy.NorthVisits"
   @south "AshStrangler.Test.Clinic.Legacy.SouthVisits"
+
+  # The union fixture's catalog, with the columns the tenant keys read: `clinic_id` closes onto the
+  # clinics relation by a validated foreign key; `site_id` has none.
+  setup_all do
+    catalog = @fixture |> File.read!() |> Jason.decode!()
+
+    fk = %{
+      "columns" => ["clinic_id"],
+      "name" => "visits_clinic_id_fkey",
+      "on_delete" => "no_action",
+      "on_update" => "no_action",
+      "references" => %{"columns" => ["id"], "relation" => "clinic_derived.clinics"},
+      "validated" => true
+    }
+
+    column = fn name ->
+      %{
+        "array" => false,
+        "default" => nil,
+        "generated" => nil,
+        "identity" => nil,
+        "name" => name,
+        "not_null" => false,
+        "type" => "integer",
+        "udt" => "pg_catalog.int4"
+      }
+    end
+
+    relations =
+      for {name, extra} <- [
+            {"clinic_union.north_visits", [column.("clinic_id"), column.("site_id")]},
+            {"clinic_union.south_visits", [column.("clinic_id")]}
+          ],
+          into: catalog["relations"] do
+        relation = catalog["relations"][name]
+
+        {name,
+         %{relation | "columns" => relation["columns"] ++ extra, "foreign_keys" => [fk]}}
+      end
+
+    derived =
+      relations["clinic_union.south_visits"]
+      |> Map.put("columns", [column.("id"), column.("clinic_id")])
+
+    relations = Map.put(relations, "clinic_derived.visits", derived)
+    File.write!(@catalog, Jason.encode!(%{catalog | "relations" => relations}))
+    :ok
+  end
 
   defp compile(source) do
     {modules, _io} =
@@ -71,7 +120,7 @@ defmodule AshStrangler.TenancyTest do
     """)
   end
 
-  defp problems(module) do
+  defp problems(module, catalog \\ @catalog) do
     name = unique("E")
 
     compile("""
@@ -79,7 +128,7 @@ defmodule AshStrangler.TenancyTest do
       use AshStrangler.Estate
 
       estate do
-        snapshot #{inspect(@catalog)}
+        snapshot #{inspect(catalog)}
         resources [#{inspect(module)}]
         deferred "clinic_union.north_visits", wave: :later, target: "X", because: "later"
         deferred "clinic_union.south_visits", wave: :later, target: "X", because: "later"
@@ -91,11 +140,38 @@ defmodule AshStrangler.TenancyTest do
     |> Enum.filter(&(&1.check == :tenant))
   end
 
-  defp tenant_of(kind, from \\ :id),
+  defp tenant_of(kind, from \\ :clinic_id),
     do: "tenant_of :clinic, kind: {#{@keys}, #{inspect(kind)}}, from: #{inspect(from)}"
 
   test "a tenant key kind on every legacy branch is closed" do
     assert problems(union(tenant_of(:clinic), tenant_of(:clinic))) == []
+  end
+
+  test "a tenant key packing a column that is not the tenant is refused" do
+    assert [%{message: message}] =
+             problems(union(tenant_of(:clinic, :id), tenant_of(:clinic)))
+
+    assert message =~ "branch :north"
+    assert message =~ "clinic_union.north_visits.id, which is not clinic_derived.clinics.id"
+    assert message =~ "no validated foreign key"
+  end
+
+  test "a column with no foreign key onto the tenant is refused" do
+    assert [%{message: message}] =
+             problems(union(tenant_of(:clinic, :site_id), tenant_of(:clinic)))
+
+    assert message =~ "clinic_union.north_visits.site_id"
+  end
+
+  test "a relation the catalog lacks cannot show closure" do
+    assert [%{message: message}] =
+             problems(
+               union(tenant_of(:clinic), tenant_of(:clinic)),
+               "test/fixtures/snapshot/lending/catalog.json"
+             )
+             |> Enum.take(1)
+
+    assert message =~ "the estate catalog has no relation"
   end
 
   test "a union without a tenant column is not tenant-scoped" do

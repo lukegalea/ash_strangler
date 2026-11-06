@@ -17,7 +17,7 @@ defmodule AshStrangler.DerivedTest do
   defp q!(sql, params \\ []), do: TestRepo.query!(sql, params, mode: :savepoint).rows
 
   defp visit!(id, attrs \\ []) do
-    q!("INSERT INTO clinic_derived.visits VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)", [
+    q!("INSERT INTO clinic_derived.visits VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $1)", [
       id,
       attrs[:lead],
       attrs[:booked_at],

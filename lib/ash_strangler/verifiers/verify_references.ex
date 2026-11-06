@@ -60,7 +60,7 @@ defmodule AshStrangler.Verifiers.VerifyReferences do
       case KeyCatalog.relation(twin) do
         {:ok, _catalog, relation} ->
           KeyCatalog.width_problems(relation, columns, kind, false) ++
-            closure_problems(reference, closed?(twin, relation, columns, kind), kind)
+            closure_problems(reference, KeyCatalog.closed?(KeyCatalog.relation_name(twin), relation, columns, kind), kind)
 
         :unpinned ->
           closure_problems(reference, :unpinned, kind)
@@ -101,22 +101,6 @@ defmodule AshStrangler.Verifiers.VerifyReferences do
 
   defp integer?(twin, attribute),
     do: Ash.Resource.Info.attribute(twin, attribute).type == Ash.Type.Integer
-
-  defp closed?(twin, relation, columns, kind) do
-    name = KeyCatalog.relation_name(twin)
-    home = KeyKind.columns(kind)
-
-    home == Enum.map(columns, &{name, &1}) or
-      Enum.any?(relation["foreign_keys"], &backs?(&1, columns, home))
-  end
-
-  defp backs?(foreign_key, columns, home) do
-    target = foreign_key["references"]
-    mapping = Enum.zip(foreign_key["columns"], target["columns"]) |> Map.new()
-
-    foreign_key["validated"] and MapSet.new(foreign_key["columns"]) == MapSet.new(columns) and
-      Enum.map(columns, &{target["relation"], mapping[&1]}) == home
-  end
 
   defp closure_problems(%Reference{soft: nil}, true, _kind), do: []
   defp closure_problems(%Reference{soft: soft}, false, _kind) when is_binary(soft), do: []

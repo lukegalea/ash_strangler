@@ -44,6 +44,7 @@ defmodule AshStrangler.Test.ClinicDerived.Legacy.Visits do
     attribute :booked_at, :utc_datetime_usec, public?: true
     attribute :details, :map, public?: true
     attribute :metadata, :map, public?: true
+    attribute :clinic_id, :integer, public?: true
   end
 
   actions do
@@ -119,7 +120,7 @@ defmodule AshStrangler.Test.ClinicDerived.Properties do
       path(["propertyIds"])
       type :integer
       value(:property)
-      tenant_of(:clinic, kind: {AshStrangler.Test.ClinicDerived.Keys, :clinic}, from: :id)
+      tenant_of(:clinic, kind: {AshStrangler.Test.ClinicDerived.Keys, :clinic}, from: :clinic_id)
       map :visit, from: :id
     end
   end
@@ -135,7 +136,7 @@ defmodule AshStrangler.Test.ClinicDerived do
       "CREATE SCHEMA clinic_derived",
       """
       CREATE TABLE clinic_derived.visits (
-        id integer PRIMARY KEY, lead_nurse text, booked_at timestamptz, details jsonb, metadata jsonb
+        id integer PRIMARY KEY, lead_nurse text, booked_at timestamptz, details jsonb, metadata jsonb, clinic_id integer
       )
       """
     ]
