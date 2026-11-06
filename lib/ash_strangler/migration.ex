@@ -28,6 +28,23 @@ defmodule AshStrangler.Migration do
   """
   @spec statements(Ash.Resource.t()) :: [%{name: atom(), up: String.t(), down: String.t()}]
   def statements(resource) do
+    if union?(resource) do
+      AshStrangler.Union.Sql.statements(resource)
+    else
+      resource_statements(resource)
+    end
+  end
+
+  @doc "Whether `module` is an `AshStrangler.Union`."
+  @spec union?(term()) :: boolean()
+  def union?(module) when is_atom(module) do
+    Code.ensure_loaded?(module) and function_exported?(module, :spark_dsl_config, 0) and
+      AshStrangler.Union.Dsl in Spark.extensions(module)
+  end
+
+  def union?(_other), do: false
+
+  defp resource_statements(resource) do
     if AshStrangler.Info.strangled?(resource) do
       case AshStrangler.Info.strangler_phase!(resource) do
         :decommissioned ->
@@ -88,13 +105,15 @@ defmodule AshStrangler.Migration do
 
   @doc """
   Every strangler-mapped resource and every watched twin across the configured
-  domains, or across `domains` when given.
+  domains, or across `domains` when given, then the unions listed in
+  `config :ash_strangler, unions: [...]`.
   """
   @spec resources(list(module()) | nil) :: [Ash.Resource.t()]
   def resources(domains \\ nil) do
     (domains || Ash.Info.domains(Mix.Project.config()[:app]))
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
     |> Enum.filter(&(AshStrangler.Info.strangled?(&1) or watched?(&1)))
+    |> Enum.concat(Application.get_env(:ash_strangler, :unions, []))
     |> Enum.uniq()
   end
 

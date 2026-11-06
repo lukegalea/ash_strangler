@@ -462,6 +462,28 @@ incomplete backfill produces missing rows, not an error.
 
 ---
 
+## Union sources
+
+One canonical relation over several legacy tables plus rows the new system owns
+is an `AshStrangler.Union`, not a resource with a `strangler` block: `use
+AshStrangler.Union`, a `union do ... end` with `column`s, one `legacy` branch
+per twin (`twin`, `phase`, `refused_because`, one `key`, and a `map`,
+`constant` or `unmapped` for every column) and one `owned` branch. List it in
+`config :ash_strangler, unions: [...]` and the usual `gen.migration` generates
+the owned table, key indexes, view and `INSTEAD OF` triggers.
+
+- Inserts always land in the owned branch. Do not try to insert into a legacy
+  branch.
+- A legacy row's update or delete is refused in `:read_from_legacy` (as
+  `AshStrangler.Error.BranchWriteRefused`, with the declared reason) and carried
+  to the legacy table in `:dual_write`. Give every branch its own key namespace.
+- Each branch answers every column; `unmapped` reads NULL.
+- Host checks read `AshStrangler.Union.Info` (`lens_kinds/2`, `phase/2`), not the
+  generated SQL.
+- Put a union in an estate's `resources` and check E8 holds its phases to the
+  carry rule: nothing at `:read_from_new` with a `deferred` or `legacy_only`
+  column. See `documentation/topics/unions.md`.
+
 ## What the verifiers cannot check
 
 They see one version of the code and have no memory of the previous one, so they

@@ -28,7 +28,7 @@ defmodule AshStrangler.Estate.Report do
   """
 
   alias AshStrangler.{Estate, Info, Lens, Snapshot, Twin}
-  alias AshStrangler.Estate.{Claim, Disposition}
+  alias AshStrangler.Estate.{Claim, Disposition, Phases}
 
   defstruct [
     :estate,
@@ -91,7 +91,9 @@ defmodule AshStrangler.Estate.Report do
         resource_problems ++
         claim_problems ++
         coverage_problems(report) ++
-        writer_problems(report) ++ reference_problems(report, catalog)
+        writer_problems(report) ++
+        reference_problems(report, catalog) ++
+        Phases.problems(report, Phases.entries(Estate.resources(estate)))
 
     report = %{report | problems: problems}
     %{report | problems: problems ++ plugin_problems(report)}
@@ -257,6 +259,9 @@ defmodule AshStrangler.Estate.Report do
       not Code.ensure_loaded?(module) ->
         {[], [], [problem(:resources, inspect(module), "#{inspect(module)} is not compiled.")]}
 
+      AshStrangler.Migration.union?(module) ->
+        union_claims(module, catalog)
+
       function_exported?(module, :spark_dsl_config, 0) and Info.strangled?(module) ->
         strangled_claims(module, catalog)
 
@@ -312,6 +317,59 @@ defmodule AshStrangler.Estate.Report do
     twins = Enum.uniq([twin | Enum.map(joins, & &1.relationship.destination)])
     claims = claims ++ secret_claims(twins)
     {claims, writers, missing_columns(claims, catalog, resource)}
+  end
+
+  # Each legacy branch reads its twin through its key and its mappings; a
+  # `:dual_write` branch writes the columns it renames.
+  defp union_claims(union, catalog) do
+    branches = AshStrangler.Union.Info.branches(union)
+
+    read =
+      for branch <- branches, {attribute, twin} <- branch_reads(branch) do
+        {relation(twin), Twin.column!(twin, attribute)}
+      end
+
+    claims =
+      for {relation, column} <- Enum.uniq(read) do
+        %Claim{relation: relation, column: column, kind: :mapped, by: union}
+      end
+
+    writers =
+      for %{phase: :dual_write, twin: twin} = branch <- branches,
+          attribute <- branch_writes(branch),
+          uniq: true do
+        {relation(twin), Twin.column!(twin, attribute), union}
+      end
+
+    claims = claims ++ secret_claims(Enum.uniq(Enum.map(branches, & &1.twin)))
+    {claims, writers, missing_columns(claims, catalog, union)}
+  end
+
+  defp branch_reads(%{twin: twin, keys: keys, mappings: mappings}) do
+    key_attrs = Enum.flat_map(keys, &AshStrangler.Key.columns/1)
+
+    mapped =
+      Enum.flat_map(mappings, fn
+        %{from: from} when is_atom(from) -> [from]
+        %{from: from} -> for {[], attribute} <- AshStrangler.Expr.refs(from), do: attribute
+        _ -> []
+      end)
+
+    for attribute <- Enum.uniq(key_attrs ++ mapped), do: {attribute, twin}
+  end
+
+  defp branch_writes(%{mappings: mappings}) do
+    for %{from: from} <- mappings,
+        attribute <-
+          (if is_atom(from) do
+             [from]
+           else
+             case AshStrangler.Expr.simple_reference(from) do
+               {:ok, attribute} -> [attribute]
+               :error -> []
+             end
+           end),
+        do: attribute
   end
 
   defp secret_claims(twins) do

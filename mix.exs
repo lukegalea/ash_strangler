@@ -170,6 +170,7 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/snapshots.md",
         "documentation/topics/keys-and-references.md",
         "documentation/topics/estates.md",
+        "documentation/topics/unions.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},
@@ -179,6 +180,8 @@ defmodule AshStrangler.MixProject do
          search_data: Spark.Docs.search_data_for(AshStrangler.KeyKinds.Dsl)},
         {"documentation/dsls/DSL-AshStrangler.Estate.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Estate.Dsl)},
+        {"documentation/dsls/DSL-AshStrangler.Union.md",
+         search_data: Spark.Docs.search_data_for(AshStrangler.Union.Dsl)},
         "CHANGELOG.md"
       ],
       groups_for_extras: [
@@ -197,7 +200,8 @@ defmodule AshStrangler.MixProject do
           AshStrangler.Twin,
           AshStrangler.KeyKinds,
           AshStrangler.Estate,
-          AshStrangler.Estate.Plugin
+          AshStrangler.Estate.Plugin,
+          AshStrangler.Union
         ],
         Keys: [
           AshStrangler.UuidV8,
@@ -279,9 +283,9 @@ defmodule AshStrangler.MixProject do
         "spark.replace_doc_links"
       ],
       "spark.formatter":
-        "spark.formatter --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl,AshStrangler.Estate.Dsl",
+        "spark.formatter --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl,AshStrangler.Estate.Dsl,AshStrangler.Union.Dsl",
       "spark.cheat_sheets":
-        "spark.cheat_sheets --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl,AshStrangler.Estate.Dsl"
+        "spark.cheat_sheets --extensions AshStrangler.Resource,AshStrangler.Twin,AshStrangler.KeyKinds.Dsl,AshStrangler.Estate.Dsl,AshStrangler.Union.Dsl"
     ]
   end
 end
