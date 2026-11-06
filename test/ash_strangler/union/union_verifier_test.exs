@@ -189,4 +189,19 @@ defmodule AshStrangler.UnionVerifierTest do
     assert rejection(valid(north: String.replace(@north, ~S|"north writes"|, ~S|" "|))) =~
              "`refused_because` is empty"
   end
+
+  test "two columns mapped from one legacy column on a :dual_write branch" do
+    columns = @columns <> "column :alias, :string"
+    shared = inside(@south, "map :alias, from: :name")
+    north = inside(@north, "unmapped [:alias], because: \"none\"")
+
+    assert rejection(valid(columns: columns, north: north, south: shared)) =~
+             "columns :patient, :alias are all mapped from :name"
+
+    read_only = String.replace(shared, "phase :dual_write", "phase :read_from_legacy")
+    assert :ok = VerifyUnion.verify(probe(valid(columns: columns, north: north, south: read_only)).spark_dsl_config())
+
+    expr = inside(@south, "map :alias, from: expr(name)")
+    assert :ok = VerifyUnion.verify(probe(valid(columns: columns, north: north, south: expr)).spark_dsl_config())
+  end
 end
