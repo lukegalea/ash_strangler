@@ -84,7 +84,11 @@ Insert always lands in the owned branch, and the trigger returns the row it
 stored, so `RETURNING` carries the key and every default. In `:dual_write`, an
 update writes the columns the branch renames (`map :x, from: :column`) and
 refuses a changed column that has no legacy column behind it (an expression, a
-constant or an unmapped column). Updating a key is refused.
+constant or an unmapped column), and one read from a legacy column that forms the
+key. Each value is cast to the legacy column's own type. Two columns mapped from
+one legacy column are refused at compile time on a `:dual_write` branch: map all
+but one with `from: expr(column)`. Updating a key is refused, and so is an
+insert whose supplied key is already in the view.
 
 A refusal is an `AshStrangler.Error.BranchWriteRefused` carrying the branch,
 phase, operation and the declared reason. The triggers raise it in the

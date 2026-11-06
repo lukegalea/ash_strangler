@@ -79,8 +79,8 @@ unaccounted-for column, and the build fails.
 | consistency | a relation declared as a whole has computed claims |
 | writers | two resources write one legacy column |
 | references | a foreign key whose columns are mapped is `NOT VALID`, or references columns nothing maps or claims, and is not declared as an `open_reference`; or an `open_reference` is not needed |
-| phase | a resource or branch at `:read_from_new` or later leaves a column `deferred` or `legacy_only`, or something reads a decommissioned relation (E8) |
-| tenant | a tenant-scoped union or derived view has a branch or source that doesn't derive its tenant through a tenant key kind (E5, below) |
+| phase | a resource or branch at `:read_from_new` or later leaves a column `deferred` or `legacy_only`, or doesn't map it while only another module does, or something reads a decommissioned relation (E8) |
+| tenant | a tenant-scoped union or derived view has a branch or source that doesn't derive its tenant through a tenant key kind whose columns close onto it (E5, below) |
 | plugin | a plug-in's `check/1` returned a message |
 
 The reference rule closes the strangled part of the schema. If a mapped
@@ -102,6 +102,10 @@ three rules:
   (`tenant_of :clinic, kind: {MyApp.Keys, :clinic}, from: :clinic_id`). A
   `map`, an expression, a `constant` or an `unmapped` answer is refused.
 - The kind exists in its registry and is a tenant kind.
+- The columns it packs are the kind's own home columns, or have a validated
+  foreign key onto them in the estate's catalog. Packing any other column would
+  show a row under a tenant that does not exist. A relation the catalog lacks
+  can't show closure.
 - The column is declared `null?: false`, so the owned branch can't hold a row
   with no tenant.
 
@@ -234,7 +238,7 @@ refuses, whether a stored verdict agrees with a derived one. A plug-in's
 the denominator it is measured over. The estate adds its own: the assertions
 that `AshStrangler.Obligations` couldn't decide at compile time for each
 strangled resource, and a census of the elements each `element` source of a
-derived view refuses (`AshStrangler.Estate.Obligations.registry/1`).
+derived view refuses (a non-array value at the path counts as one refused) (`AshStrangler.Estate.Obligations.registry/1`).
 
 ```
 mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json

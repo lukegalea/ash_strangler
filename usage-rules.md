@@ -482,7 +482,8 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   generated SQL.
 - Put a union in an estate's `resources` and check E8 holds its phases to the
   carry rule: nothing at `:read_from_new` with a `deferred` or `legacy_only`
-  column. See `documentation/topics/unions.md`.
+  column, or a column only another module maps. Two union columns never map from
+  one legacy column on a `:dual_write` branch. See `documentation/topics/unions.md`.
 
 ## Derived rows, tenants and obligations
 
@@ -500,8 +501,9 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   can't be decoded. Never reuse a tag.
 - A union or derived view with a `tenant` column derives it on every branch with
   `tenant_of :col, kind: {Registry, :kind}, from: ...` over a kind declared
-  `tenant?: true`, and the column is `null?: false`. Estate check E5 refuses
-  anything else.
+  `tenant?: true`, `from` is the kind's own columns or has a validated foreign key
+  onto them, and the column is `null?: false`. Estate check E5 refuses anything
+  else.
 - Measure what a schema can't prove with `mix ash_strangler.check --estate Estate
   --report FILE`. Bring your own obligations from a plug-in's `obligations/1`
   (an `AshStrangler.Estate.Obligation`: a query, its denominator and a severity).

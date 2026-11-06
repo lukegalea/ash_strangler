@@ -138,6 +138,30 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ### Fixes
 
+- **Union `:dual_write` updates no longer fail for every row.** The trigger
+  casts each value to the legacy column's own type (a declared `:string` over an
+  integer column used to raise), and `VerifyUnion` refuses two columns mapped
+  from one legacy column on a `:dual_write` branch (the update would assign it
+  twice). A column read from the legacy column that forms the key is read-only
+  on that branch, so an update can no longer re-key a row, and the trigger
+  raises if the re-read finds no row.
+- **A union's owned insert refuses a supplied key that is already in the view**,
+  so an id stays unique across branches.
+- **Estate check E5 checks tenant closure.** The columns a `tenant_of` packs
+  must be the tenant kind's own home columns or have a validated foreign key
+  onto them in the estate's catalog; before, any column passed.
+- **Estate check E8's carry rule counts whose column it is.** A column that only
+  another module maps (a derived view over the same twin, say) no longer lets a
+  resource or branch move to `:read_from_new`.
+- **The obligation report counts what an assertion counts.** A `count(*)`
+  assertion reports its number (not one), and an undecoded value of `0` is no
+  longer read as no violations. `Obligation` has a new `:count` shape.
+- **The element census counts a non-array value at the path** (a number, a
+  string, an object) as one refused element, instead of dropping it unseen.
+- **Logical keys include the twin's relation and escape their separator.** Two
+  derived views of one kind no longer give the same id to equal parents, and a
+  backslash or unit separator inside a text component cannot move a boundary.
+  Ids of derived rows change with this release.
 - **The ledger trigger builds its row image inside the savepoint.** A legacy
   migration that renamed or dropped a column the twin still names made every
   write to that table fail with `42703`; the event is now skipped with a
