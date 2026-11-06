@@ -199,9 +199,17 @@ defmodule AshStrangler.UnionVerifierTest do
              "columns :patient, :alias are all mapped from :name"
 
     read_only = String.replace(shared, "phase :dual_write", "phase :read_from_legacy")
-    assert :ok = VerifyUnion.verify(probe(valid(columns: columns, north: north, south: read_only)).spark_dsl_config())
+
+    assert :ok =
+             VerifyUnion.verify(
+               probe(valid(columns: columns, north: north, south: read_only)).spark_dsl_config()
+             )
 
     expr = inside(@south, "map :alias, from: expr(name)")
-    assert :ok = VerifyUnion.verify(probe(valid(columns: columns, north: north, south: expr)).spark_dsl_config())
+
+    assert :ok =
+             VerifyUnion.verify(
+               probe(valid(columns: columns, north: north, south: expr)).spark_dsl_config()
+             )
   end
 end

@@ -57,8 +57,7 @@ defmodule AshStrangler.TenancyTest do
           into: catalog["relations"] do
         relation = catalog["relations"][name]
 
-        {name,
-         %{relation | "columns" => relation["columns"] ++ extra, "foreign_keys" => [fk]}}
+        {name, %{relation | "columns" => relation["columns"] ++ extra, "foreign_keys" => [fk]}}
       end
 
     derived =

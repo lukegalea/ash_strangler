@@ -158,11 +158,13 @@ defmodule AshStrangler.Derived.Sql do
 
   defp key_sql(derived, source, frame) do
     from = Enum.map(Info.from(derived), &frame.({[], &1}))
+
     # The twin's relation keeps two views of one kind apart when their `from` values and source names agree.
     own = [
       Printer.literal(AshStrangler.Verifiers.KeyCatalog.relation_name(Info.twin(derived))),
       Printer.literal(to_string(source.name))
     ]
+
     element = if source.kind == :element, do: [~s("__e"."__v")], else: []
 
     KeyKinds.logical_sql(Info.registry(derived), Info.kind(derived), from ++ own ++ element)

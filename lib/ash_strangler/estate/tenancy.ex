@@ -30,8 +30,8 @@ defmodule AshStrangler.Estate.Tenancy do
   alias AshStrangler.{Derived, KeyKind, KeyKinds, Migration}
   alias AshStrangler.Estate.Report
   alias AshStrangler.Union
-  alias AshStrangler.Verifiers.KeyCatalog
   alias AshStrangler.Union.TenantKey
+  alias AshStrangler.Verifiers.KeyCatalog
 
   @doc "The E5 problems of the `modules` of an estate, closure read from its `catalog`."
   @spec problems([module()], map()) :: [Report.problem()]
@@ -48,7 +48,10 @@ defmodule AshStrangler.Estate.Tenancy do
 
       Migration.derived?(module) ->
         twin = Derived.Info.twin(module)
-        scoped(module, Derived.Info, Derived.Info.sources(module), "source", relations, fn _ -> twin end)
+
+        scoped(module, Derived.Info, Derived.Info.sources(module), "source", relations, fn _ ->
+          twin
+        end)
 
       true ->
         []
@@ -114,15 +117,19 @@ defmodule AshStrangler.Estate.Tenancy do
 
     with {:ok, columns} <- KeyCatalog.columns(twin, from),
          relation when is_map(relation) <- relations[name] do
-      if length(columns) == length(kind.parts) and KeyCatalog.closed?(name, relation, columns, kind),
-        do: [],
-        else: [
-          "`tenant_of` packs #{Enum.map_join(columns, ", ", &"#{name}.#{&1}")}, which is not #{home} " <>
-            "and has no validated foreign key onto it, so a row may be shown under a tenant that does not exist"
-        ]
+      if length(columns) == length(kind.parts) and
+           KeyCatalog.closed?(name, relation, columns, kind),
+         do: [],
+         else: [
+           "`tenant_of` packs #{Enum.map_join(columns, ", ", &"#{name}.#{&1}")}, which is not #{home} " <>
+             "and has no validated foreign key onto it, so a row may be shown under a tenant that does not exist"
+         ]
     else
-      {:error, attribute} -> ["`tenant_of` reads #{inspect(attribute)}, which #{inspect(twin)} does not have"]
-      nil -> ["the estate catalog has no relation `#{name}`, so tenant closure cannot be shown"]
+      {:error, attribute} ->
+        ["`tenant_of` reads #{inspect(attribute)}, which #{inspect(twin)} does not have"]
+
+      nil ->
+        ["the estate catalog has no relation `#{name}`, so tenant closure cannot be shown"]
     end
   end
 

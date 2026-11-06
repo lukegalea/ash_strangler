@@ -127,8 +127,11 @@ defmodule AshStrangler.Estate.Phases do
     others = for %{kind: :mapped, by: by} <- claims, by != entry.module, do: inspect(by)
 
     case others do
-      [] -> "is not mapped by #{inspect(entry.module)}"
-      _ -> "is read only by #{Enum.join(Enum.uniq(others), ", ")}, not mapped by #{inspect(entry.module)}"
+      [] ->
+        "is not mapped by #{inspect(entry.module)}"
+
+      _ ->
+        "is read only by #{Enum.join(Enum.uniq(others), ", ")}, not mapped by #{inspect(entry.module)}"
     end
   end
 

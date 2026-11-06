@@ -217,6 +217,7 @@ defmodule AshStrangler.KeyKinds do
   @spec logical_sql(registry() | Spark.Dsl.t(), atom(), [String.t()]) :: String.t()
   def logical_sql(registry, name, component_sql) do
     namespace = AshStrangler.Sql.Printer.literal(logical_namespace(registry, name))
+
     texts =
       Enum.map(
         component_sql,

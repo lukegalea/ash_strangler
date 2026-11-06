@@ -60,7 +60,11 @@ defmodule AshStrangler.Verifiers.VerifyReferences do
       case KeyCatalog.relation(twin) do
         {:ok, _catalog, relation} ->
           KeyCatalog.width_problems(relation, columns, kind, false) ++
-            closure_problems(reference, KeyCatalog.closed?(KeyCatalog.relation_name(twin), relation, columns, kind), kind)
+            closure_problems(
+              reference,
+              KeyCatalog.closed?(KeyCatalog.relation_name(twin), relation, columns, kind),
+              kind
+            )
 
         :unpinned ->
           closure_problems(reference, :unpinned, kind)

@@ -310,7 +310,10 @@ defmodule AshStrangler.EstateObligationsTest do
 
     test "an undecoded value of 0 is a violation, not a clean zero" do
       n = System.unique_integer([:positive])
-      TestRepo.query!("CREATE TABLE clinic_union.dec#{n} (id integer PRIMARY KEY, status integer)", [], mode: :savepoint)
+
+      TestRepo.query!(
+        "CREATE TABLE clinic_union.dec#{n} (id integer PRIMARY KEY, status integer)",
+        [], mode: :savepoint)
 
       {modules, _io} =
         with_io(:stderr, fn ->
