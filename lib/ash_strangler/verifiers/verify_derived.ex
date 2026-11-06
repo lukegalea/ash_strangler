@@ -42,7 +42,7 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
     sources = Info.sources(dsl)
     columns = Enum.map(Info.columns(dsl), & &1.name)
 
-    if is_atom(twin) and Code.ensure_compiled(twin) == {:module, twin} and Twin.twin?(twin) do
+    if Code.ensure_compiled(twin) == {:module, twin} and Twin.twin?(twin) do
       structure(dsl, sources, columns) ++
         key(dsl, twin) ++
         reads(twin, Info.filter(dsl), "the shared `filter`") ++
@@ -120,15 +120,10 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
   end
 
   defp shape(s, _columns) do
-    for {field, set?} <- [
-          from: s.from,
-          path: s.path != [],
-          type: s.type,
-          value: s.value,
-          ordinal: s.ordinal
-        ],
-        set? not in [nil, false],
-        do: "`#{field}` belongs to an `element`"
+    set = [from: s.from, type: s.type, value: s.value, ordinal: s.ordinal]
+    set = if s.path == [], do: set, else: [{:path, s.path} | set]
+
+    for {field, value} <- set, not is_nil(value), do: "`#{field}` belongs to an `element`"
   end
 
   defp answers(source, columns) do
