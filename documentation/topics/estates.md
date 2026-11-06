@@ -79,6 +79,8 @@ unaccounted-for column, and the build fails.
 | consistency | a relation declared as a whole has computed claims |
 | writers | two resources write one legacy column |
 | references | a foreign key whose columns are mapped is `NOT VALID`, or references columns nothing maps or claims, and is not declared as an `open_reference`; or an `open_reference` is not needed |
+| phase | a resource or branch at `:read_from_new` or later leaves a column `deferred` or `legacy_only`, or something reads a decommissioned relation (E8) |
+| tenant | a tenant-scoped union or derived view has a branch or source that doesn't derive its tenant through a tenant key kind (E5, below) |
 | plugin | a plug-in's `check/1` returned a message |
 
 The reference rule closes the strangled part of the schema. If a mapped
@@ -86,6 +88,24 @@ column points at a row, that row must be reachable in the new model too. When
 that is deliberately not yet true, `open_reference` records the decision. When
 it becomes true, the `open_reference` turns stale and fails until it is
 removed.
+
+### Tenant closure (E5)
+
+A union or a derived view that declares a `tenant` column is tenant-scoped, and
+every row it can show must name its tenant, derived from the legacy row alone.
+Otherwise a join in some mapping could put a row of one tenant behind another.
+E5 holds each legacy branch of a union, and each source of a derived view, to
+three rules:
+
+- It answers the tenant column with `tenant_of`, the packed key of a registry
+  kind declared `tenant?: true`
+  (`tenant_of :clinic, kind: {MyApp.Keys, :clinic}, from: :clinic_id`). A
+  `map`, an expression, a `constant` or an `unmapped` answer is refused.
+- The kind exists in its registry and is a tenant kind.
+- The column is declared `null?: false`, so the owned branch can't hold a row
+  with no tenant.
+
+Each problem names the module, the branch or source and the column.
 
 ## Where the checks run
 
@@ -202,8 +222,49 @@ end
 A claimed column is computed, like a mapped one. A claim may not use a kind the
 estate computes or declares itself (`AshStrangler.Estate.Claim.reserved_kinds/0`).
 `check/1` sees the finished report: every relation, every column's claims,
-declaration and writers, and the problems found so far. Both callbacks are
-optional, and both run on every compile, so they must not touch a database.
+declaration and writers, and the problems found so far. All three callbacks are
+optional. `claims/2` and `check/1` run on every compile, so they must not touch a
+database; `obligations/1` (below) only runs when the report is measured.
+
+## The obligation report
+
+Some things about an estate are facts about rows: how many elements a guard
+refuses, whether a stored verdict agrees with a derived one. A plug-in's
+`obligations/1` returns `AshStrangler.Estate.Obligation`s, each a query with
+the denominator it is measured over. The estate adds its own: the assertions
+that `AshStrangler.Obligations` couldn't decide at compile time for each
+strangled resource, and a census of the elements each `element` source of a
+derived view refuses (`AshStrangler.Estate.Obligations.registry/1`).
+
+```
+mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json
+```
+
+measures them against the legacy database and writes JSON in the
+`ash_strangler.obligations/1` format. `--no-data` skips the queries. The task
+exits 1 when an obligation fails or can't be measured, or when the estate has a
+problem.
+
+| Key | Meaning |
+|---|---|
+| `format` | `"ash_strangler.obligations/1"` |
+| `estate` | the estate module |
+| `catalog` | `path` and `sha256` of the snapshot the run is keyed by |
+| `measured` | `false` when no query ran |
+| `summary` | counts: `total`, `pass`, `warn`, `fail`, `error`, `skipped` |
+| `problems` | the estate's own checks: `check`, `subject`, `message`, sorted |
+| `obligations` | one object each, sorted by `id` |
+
+An obligation object has `id`, `source` (the module that contributed it),
+`summary`, `denominator` (what the count is over, in words), `severity`
+(`"error"` or `"warning"`), `status`, `violations` and `total` (integers, or
+`null` when not measured or when the obligation has no denominator count) and
+`detail` (the error message, or at most ten offending rows).
+
+`status` is `pass` (no violations), `warn` (violations of a warning), `fail`
+(violations of an error), `error` (the query couldn't run) or `skipped`. An
+obligation that couldn't be measured is not green. The report holds no
+timestamp, so the same estate over the same rows gives the same bytes.
 
 ## What it proves, and what it doesn't
 

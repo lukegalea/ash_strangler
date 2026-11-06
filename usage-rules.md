@@ -484,6 +484,29 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   carry rule: nothing at `:read_from_new` with a `deferred` or `legacy_only`
   column. See `documentation/topics/unions.md`.
 
+## Derived rows, tenants and obligations
+
+- A row derived from another row of one legacy relation (a slot, a jsonb array
+  element, a synthesized event) is an `AshStrangler.Derived`, a read-only view:
+  `use AshStrangler.Derived`, a `derived do ... end` with a `twin`, a `registry`
+  and `logical` `kind`, the `from` columns that identify the legacy row, `column`s,
+  and `slot`, `synthesized` and `element` sources that each answer every column.
+  Writes go to the parent. List it in `config :ash_strangler, deriveds: [...]`.
+- Never cast a jsonb element yourself. `element type: :integer` accepts only a
+  JSON number with an integer value in the 32-bit range and drops the rest;
+  `type: :text` only strings. The refused count is an estate obligation.
+- A row with no legacy home is keyed by `logical :name, 0x...` in the registry
+  and `KeyKinds.logical/3` (UUID v5, estate tag and kind tag in the namespace). It
+  can't be decoded. Never reuse a tag.
+- A union or derived view with a `tenant` column derives it on every branch with
+  `tenant_of :col, kind: {Registry, :kind}, from: ...` over a kind declared
+  `tenant?: true`, and the column is `null?: false`. Estate check E5 refuses
+  anything else.
+- Measure what a schema can't prove with `mix ash_strangler.check --estate Estate
+  --report FILE`. Bring your own obligations from a plug-in's `obligations/1`
+  (an `AshStrangler.Estate.Obligation`: a query, its denominator and a severity).
+  An obligation that cannot run is not green. See the estates guide for the JSON.
+
 ## What the verifiers cannot check
 
 They see one version of the code and have no memory of the previous one, so they

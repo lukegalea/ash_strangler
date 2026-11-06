@@ -24,7 +24,7 @@ defmodule AshStrangler.Union.Sql do
 
   alias AshStrangler.Sql.{Printer, View}
   alias AshStrangler.Twin
-  alias AshStrangler.Union.{Constant, Info, Unmapped}
+  alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
   alias AshStrangler.Union.Map, as: MapEntry
 
   @error "Elixir.AshStrangler.Error.BranchWriteRefused"
@@ -146,10 +146,21 @@ defmodule AshStrangler.Union.Sql do
       %MapEntry{attribute: ^column, from: from} when is_atom(from) -> frame.({[], from})
       %MapEntry{attribute: ^column, from: from} -> Printer.to_sql(from, ref: frame)
       %Constant{attribute: ^column, value: value} -> Printer.literal(value)
+      %TenantKey{attribute: ^column} = key -> tenant_sql(key, frame)
       %Unmapped{attributes: attributes} -> if column in attributes, do: "NULL"
       _ -> nil
     end)
   end
+
+  @doc false
+  # The packed key of the tenant column, over the branch's twin columns.
+  def tenant_sql(%TenantKey{kind: {registry, kind}} = key, frame),
+    do:
+      AshStrangler.KeyKinds.to_sql(
+        registry,
+        kind,
+        Enum.map(TenantKey.columns(key), &frame.({[], &1}))
+      )
 
   # --- triggers -----------------------------------------------------------------
 

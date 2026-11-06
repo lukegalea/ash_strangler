@@ -13,6 +13,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
       mix ash_strangler.check
       mix ash_strangler.check --domain MyApp.Accounts
       mix ash_strangler.check --no-data
+      mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json
 
   ## Proven, or measured — never asserted
 
@@ -65,6 +66,17 @@ defmodule Mix.Tasks.AshStrangler.Check do
   it makes a column unique among the rows matching its predicate, which is not what
   an identity claims.
 
+  ## The estate obligation report
+
+  `--estate [Estate ...]` measures the obligations of an estate
+  (`AshStrangler.Estate.Obligations`) instead of the per-resource report, and
+  `--report FILE` writes the result as canonical JSON (format
+  `ash_strangler.obligations/1`, keyed by the sha256 of the snapshot catalog,
+  ordered, with no timestamp). With no estate named it uses the
+  application's `:ash_strangler_estates`. `--no-data` skips the queries: every
+  obligation is then `skipped`. Exits 1 when an obligation fails or cannot be
+  measured, or when the estate has a problem.
+
   ## Exit code
 
   Non-zero when an assertion fails, so the twin-staleness diff can gate CI —
@@ -90,7 +102,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   @requirements ["app.config"]
 
-  @switches [domain: :string, data: :boolean]
+  @switches [domain: :string, data: :boolean, estate: :boolean, report: :string]
 
   @ok "\e[32mok\e[0m  "
   @fail "\e[31mFAIL\e[0m"
@@ -104,8 +116,52 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _} = OptionParser.parse!(args, strict: @switches)
+    {opts, rest} = OptionParser.parse!(args, strict: @switches)
 
+    if opts[:estate], do: estate_report(rest, opts), else: resource_report(opts)
+  end
+
+  defp estate_report(names, opts) do
+    Mix.Task.run("compile")
+
+    reports =
+      for estate <- Mix.Tasks.AshStrangler.Estate.estates(names) do
+        report = AshStrangler.Estate.Obligations.report(estate, measure?: opts[:data] != false)
+        {estate, report}
+      end
+
+    if path = opts[:report] do
+      if length(reports) != 1,
+        do: Mix.raise("--report needs exactly one estate, got #{length(reports)}")
+
+      File.mkdir_p!(Path.dirname(path))
+
+      File.write!(
+        path,
+        reports |> hd() |> elem(1) |> AshStrangler.Snapshot.Catalog.encode()
+      )
+    end
+
+    for {estate, report} <- reports do
+      s = report["summary"]
+
+      Mix.shell().info(
+        "#{inspect(estate)}: #{s["total"]} obligations: #{s["pass"]} pass, #{s["warn"]} warn, " <>
+          "#{s["fail"]} fail, #{s["error"]} error, #{s["skipped"]} skipped; #{length(report["problems"])} estate problems"
+      )
+
+      for row <- report["obligations"], row["status"] in ["fail", "error", "warn"] do
+        Mix.shell().info(
+          "  #{row["status"]}  #{row["id"]}  #{row["violations"] || row["detail"]}"
+        )
+      end
+    end
+
+    if Enum.any?(reports, fn {_, report} -> AshStrangler.Estate.Obligations.failed?(report) end),
+      do: exit({:shutdown, 1})
+  end
+
+  defp resource_report(opts) do
     resources = strangled_resources(opts[:domain])
 
     if resources == [] do

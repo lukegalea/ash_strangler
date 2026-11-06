@@ -22,7 +22,7 @@ defmodule AshStrangler.Estate.Plugin do
       new model, a hazard list whose columns must carry one claim kind, or the
       reach of a user-facing surface through the resource graph.
 
-  Both callbacks are optional. They run on every evaluation, which includes
+  All three callbacks are optional. `claims/2` and `check/1` run on every evaluation, which includes
   every `mix compile` when the `:ash_strangler_estate` compiler is enabled, so
   they must not touch a database.
 
@@ -53,5 +53,12 @@ defmodule AshStrangler.Estate.Plugin do
   @doc "Problems with the estate as evaluated, as messages. `[]` when there are none."
   @callback check(report :: AshStrangler.Estate.Report.t()) :: [String.t()]
 
-  @optional_callbacks claims: 2, check: 1
+  @doc """
+  Obligations about the legacy rows (`AshStrangler.Estate.Obligation`), measured
+  by `mix ash_strangler.check --estate`. Unlike `claims/2` and `check/1` they
+  are queries, run only when the report is, never on compile.
+  """
+  @callback obligations(estate :: module()) :: [AshStrangler.Estate.Obligation.t()]
+
+  @optional_callbacks claims: 2, check: 1, obligations: 1
 end

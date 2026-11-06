@@ -88,6 +88,30 @@ catalog, the next capture would re-key every row of the kind. Declared, the
 capture fails compilation here and names the column, and re-keying becomes a
 decision.
 
+## Logical keys
+
+A row derived from another (a slot of a legacy row, an element of one of its
+jsonb arrays, a synthesized event, see the derived rows guide) has no legacy
+home of its own, so no packed kind fits. Declare it `logical`:
+
+```elixir
+key_kinds do
+  estate 0x4C42
+  kind :member, 0x001, parts: [{"library.members.id", 32}]
+  logical :line, 0x010
+end
+```
+
+`AshStrangler.KeyKinds.logical/3` is a UUID version 5 over the components you
+give (integers, strings or UUIDs), joined by an unambiguous separator, in a
+namespace made from the estate tag and the kind's tag. `logical_sql/3` is the
+same expression in SQL, and the two agree. The key is deterministic and can't be
+decoded: reach the row through its parent. A `NULL` component gives no key. The
+tag shares the 12-bit space of `kind` and is never reused.
+
+A packed `kind` may also be declared `tenant?: true`. That is what estate check
+E5 requires of a tenant column (see the estates guide).
+
 ## Keys
 
 ```elixir

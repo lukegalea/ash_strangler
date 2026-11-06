@@ -49,3 +49,16 @@ defmodule AshStrangler.Union.Unmapped do
   defstruct [:attributes, :because, :__spark_metadata__]
   @type t :: %__MODULE__{}
 end
+
+defmodule AshStrangler.Union.TenantKey do
+  @moduledoc """
+  A column read as a packed key of a registry kind: how a branch (or a derived
+  source) derives its tenant. Estate check E5 requires the kind to be a tenant
+  kind.
+  """
+  defstruct [:attribute, :kind, :from, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+
+  @doc "The twin columns the key packs."
+  def columns(%__MODULE__{from: from}), do: List.wrap(from)
+end

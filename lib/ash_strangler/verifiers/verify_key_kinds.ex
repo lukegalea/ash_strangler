@@ -36,12 +36,13 @@ defmodule AshStrangler.Verifiers.VerifyKeyKinds do
   @impl true
   def verify(dsl) do
     kinds = KeyKinds.kinds(dsl)
+    tagged = kinds ++ KeyKinds.logical_kinds(dsl)
 
     case catalog(dsl) do
       {:ok, catalog} ->
         problems =
           estate_problems(KeyKinds.estate(dsl)) ++
-            tag_problems(kinds, KeyKinds.reserved(dsl)) ++
+            tag_problems(tagged, KeyKinds.reserved(dsl)) ++
             Enum.flat_map(kinds, &part_problems(&1, catalog))
 
         report(dsl, problems)
