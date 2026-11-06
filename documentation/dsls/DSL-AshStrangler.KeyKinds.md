@@ -13,6 +13,7 @@ version 8 UUID. See `AshStrangler.UuidV8` for the layout.
 
 ### Nested DSLs
  * [kind](#key_kinds-kind)
+ * [logical](#key_kinds-logical)
 
 
 ### Examples
@@ -85,6 +86,7 @@ kind :copy, 0x002, parts: [{"library.copies.branch_id", 16}, {"library.copies.co
 | Name | Type | Default | Docs |
 |------|------|---------|------|
 | [`parts`](#key_kinds-kind-parts){: #key_kinds-kind-parts .spark-required} | `list({String.t, 16 \| 32 \| 64})` |  | The packed columns, `[{"schema.table.column", width}]`, most significant first. |
+| [`tenant?`](#key_kinds-kind-tenant?){: #key_kinds-kind-tenant? } | `boolean` | `false` | Whether this kind names a tenant. Estate check E5 requires every legacy branch of a tenant-scoped union to derive its tenant column through a kind with this set. |
 
 
 
@@ -93,6 +95,47 @@ kind :copy, 0x002, parts: [{"library.copies.branch_id", 16}, {"library.copies.co
 ### Introspection
 
 Target: `AshStrangler.KeyKind`
+
+### key_kinds.logical
+```elixir
+logical name, tag
+```
+
+
+A kind of row that has no single legacy home: a row derived from another
+(a slot of a legacy row, an element of one of its jsonb arrays, a
+synthesized event). Its id is a name-based UUID version 5 over the
+declared components, in a namespace that holds the estate tag and this
+kind's tag (`AshStrangler.KeyKinds.logical/3`). It is deterministic and
+cannot be decoded: the row is found through its parent.
+
+The tag shares the 12-bit space of `kind` and is never reused.
+
+
+
+
+### Examples
+```
+logical :line, 0x010
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`name`](#key_kinds-logical-name){: #key_kinds-logical-name .spark-required} | `atom` |  | The kind's name. |
+| [`tag`](#key_kinds-logical-tag){: #key_kinds-logical-tag .spark-required} | `pos_integer` |  | The 12-bit tag, `0x001..0xFFF`. |
+
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.LogicalKind`
 
 
 

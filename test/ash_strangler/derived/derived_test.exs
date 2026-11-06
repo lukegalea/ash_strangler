@@ -26,10 +26,18 @@ defmodule AshStrangler.DerivedTest do
     ])
   end
 
-  defp staff, do: q!("SELECT __source, visit, person, role, position FROM clinic_derived.staff ORDER BY __source, position, person")
+  defp staff,
+    do:
+      q!(
+        "SELECT __source, visit, person, role, position FROM clinic_derived.staff ORDER BY __source, position, person"
+      )
 
   defp properties(visit),
-    do: q!("SELECT property FROM clinic_derived.properties WHERE visit = $1 ORDER BY property", [visit]) |> List.flatten()
+    do:
+      q!("SELECT property FROM clinic_derived.properties WHERE visit = $1 ORDER BY property", [
+        visit
+      ])
+      |> List.flatten()
 
   describe "slots and synthesized rows" do
     test "a slot yields a row only where its filter holds" do
@@ -71,7 +79,12 @@ defmodule AshStrangler.DerivedTest do
 
   describe "the integer guard" do
     test "accepts integers, including integral floats, and nothing else" do
-      visit!(1, metadata: %{propertyIds: [3, 5.0, 12.5, 1.0e10, "12", true, nil, [], %{}, -2_147_483_649, 7]})
+      visit!(1,
+        metadata: %{
+          propertyIds: [3, 5.0, 12.5, 1.0e10, "12", true, nil, [], %{}, -2_147_483_649, 7]
+        }
+      )
+
       assert properties(1) == [3, 5, 7]
     end
 
@@ -135,7 +148,8 @@ defmodule AshStrangler.DerivedTest do
     end
 
     test "a component is not smeared into its neighbour" do
-      assert KeyKinds.logical(Keys, :staff, ["a", "bc"]) != KeyKinds.logical(Keys, :staff, ["ab", "c"])
+      assert KeyKinds.logical(Keys, :staff, ["a", "bc"]) !=
+               KeyKinds.logical(Keys, :staff, ["ab", "c"])
     end
 
     test "a NULL component gives no key" do
@@ -143,11 +157,14 @@ defmodule AshStrangler.DerivedTest do
     end
 
     test "the namespace depends on the estate and the tag" do
-      assert KeyKinds.logical_namespace(Keys, :staff) != KeyKinds.logical_namespace(Keys, :property)
+      assert KeyKinds.logical_namespace(Keys, :staff) !=
+               KeyKinds.logical_namespace(Keys, :property)
     end
 
     test "an unknown kind raises" do
-      assert_raise ArgumentError, ~r/no logical key kind/, fn -> KeyKinds.logical(Keys, :nope, [1]) end
+      assert_raise ArgumentError, ~r/no logical key kind/, fn ->
+        KeyKinds.logical(Keys, :nope, [1])
+      end
     end
   end
 

@@ -35,10 +35,17 @@ defmodule AshStrangler.Estate.Tenancy do
 
   defp module_problems(module) do
     cond do
-      not Code.ensure_loaded?(module) -> []
-      Migration.union?(module) -> scoped(module, Union.Info, Union.Info.branches(module), "branch")
-      Migration.derived?(module) -> scoped(module, Derived.Info, Derived.Info.sources(module), "source")
-      true -> []
+      not Code.ensure_loaded?(module) ->
+        []
+
+      Migration.union?(module) ->
+        scoped(module, Union.Info, Union.Info.branches(module), "branch")
+
+      Migration.derived?(module) ->
+        scoped(module, Derived.Info, Derived.Info.sources(module), "source")
+
+      true ->
+        []
     end
   end
 
@@ -49,15 +56,22 @@ defmodule AshStrangler.Estate.Tenancy do
 
       column ->
         nullable(module, info, column) ++
-          for unit <- units, message <- unit_problems(unit, column), do: problem(module, unit, noun, column, message)
+          for unit <- units,
+              message <- unit_problems(unit, column),
+              do: problem(module, unit, noun, column, message)
     end
   end
 
   defp nullable(module, info, column) do
     case Enum.find(info.columns(module), &(&1.name == column)) do
-      nil -> [problem(module, column, "column", column, "the tenant column is not a declared column")]
-      %{null?: false} -> []
-      _ -> [problem(module, column, "column", column, "the tenant column must be `null?: false`")]
+      nil ->
+        [problem(module, column, "column", column, "the tenant column is not a declared column")]
+
+      %{null?: false} ->
+        []
+
+      _ ->
+        [problem(module, column, "column", column, "the tenant column must be `null?: false`")]
     end
   end
 
@@ -65,10 +79,17 @@ defmodule AshStrangler.Estate.Tenancy do
     case answer(unit.mappings, column) do
       %TenantKey{kind: {registry, kind}} ->
         cond do
-          not KeyKinds.registry?(registry) -> ["#{inspect(registry)} is not a key-kind registry"]
-          KeyKinds.kind(registry, kind) == nil -> ["#{inspect(registry)} declares no kind #{inspect(kind)}"]
-          KeyKinds.tenant_kind?(registry, kind) -> []
-          true -> ["kind #{inspect(kind)} of #{inspect(registry)} is not declared `tenant?: true`"]
+          not KeyKinds.registry?(registry) ->
+            ["#{inspect(registry)} is not a key-kind registry"]
+
+          KeyKinds.kind(registry, kind) == nil ->
+            ["#{inspect(registry)} declares no kind #{inspect(kind)}"]
+
+          KeyKinds.tenant_kind?(registry, kind) ->
+            []
+
+          true ->
+            ["kind #{inspect(kind)} of #{inspect(registry)} is not declared `tenant?: true`"]
         end
 
       nil ->
@@ -100,7 +121,8 @@ defmodule AshStrangler.Estate.Tenancy do
     %{
       check: :tenant,
       subject: "#{inspect(module)}.#{column}",
-      message: "#{inspect(module)} #{who}: #{message} (tenant column #{inspect(column)}); estate check E5"
+      message:
+        "#{inspect(module)} #{who}: #{message} (tenant column #{inspect(column)}); estate check E5"
     }
   end
 end

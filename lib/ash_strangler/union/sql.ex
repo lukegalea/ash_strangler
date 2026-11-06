@@ -155,7 +155,12 @@ defmodule AshStrangler.Union.Sql do
   @doc false
   # The packed key of the tenant column, over the branch's twin columns.
   def tenant_sql(%TenantKey{kind: {registry, kind}} = key, frame),
-    do: AshStrangler.KeyKinds.to_sql(registry, kind, Enum.map(TenantKey.columns(key), &frame.({[], &1})))
+    do:
+      AshStrangler.KeyKinds.to_sql(
+        registry,
+        kind,
+        Enum.map(TenantKey.columns(key), &frame.({[], &1}))
+      )
 
   # --- triggers -----------------------------------------------------------------
 

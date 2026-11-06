@@ -93,7 +93,8 @@ defmodule AshStrangler.DerivedVerifierTest do
   end
 
   test "a registry that is not a registry" do
-    assert rejection(@columns <> @slot, "registry String") =~ "is not an `AshStrangler.KeyKinds` registry"
+    assert rejection(@columns <> @slot, "registry String") =~
+             "is not an `AshStrangler.KeyKinds` registry"
   end
 
   test "a from column the twin does not have" do
@@ -111,12 +112,22 @@ defmodule AshStrangler.DerivedVerifierTest do
   end
 
   test "a filter over a column the twin does not have" do
-    body = @columns <> "slot :lead do\n filter expr(nope > 1)\n map :visit, from: :id\n map :person, from: :lead_nurse\nend"
+    body =
+      @columns <>
+        "slot :lead do\n filter expr(nope > 1)\n map :visit, from: :id\n map :person, from: :lead_nurse\nend"
+
     assert rejection(body) =~ "`filter` reads :nope"
   end
 
   test "an element's value column must be declared and unmapped" do
-    mapped = @columns <> String.replace(@element, "map :visit, from: :id", "map :visit, from: :id\nmap :person, from: :lead_nurse")
+    mapped =
+      @columns <>
+        String.replace(
+          @element,
+          "map :visit, from: :id",
+          "map :visit, from: :id\nmap :person, from: :lead_nurse"
+        )
+
     assert rejection(mapped) =~ ":person is the element's own column"
 
     undeclared = @columns <> String.replace(@element, "value :person", "value :nobody")
@@ -134,13 +145,23 @@ defmodule AshStrangler.DerivedVerifierTest do
   end
 
   test "duplicate columns and sources, and reserved names" do
-    assert rejection(@columns <> "column :person, :string\n" <> @slot) =~ "column :person is declared 2 times"
+    assert rejection(@columns <> "column :person, :string\n" <> @slot) =~
+             "column :person is declared 2 times"
+
     assert rejection(@columns <> @slot <> @slot) =~ "source :lead is declared 2 times"
     assert rejection("column :__source, :string\n" <> @slot) =~ "`__source` is reserved"
   end
 
   test "an unanswered tenant_of kind is not this verifier's: E5 reads it" do
-    body = @columns <> "column :clinic, :uuid\n" <> String.replace(@slot, "map :visit", "tenant_of :clinic, kind: {#{@keys}, :clinic}, from: :id\nmap :visit")
+    body =
+      @columns <>
+        "column :clinic, :uuid\n" <>
+        String.replace(
+          @slot,
+          "map :visit",
+          "tenant_of :clinic, kind: {#{@keys}, :clinic}, from: :id\nmap :visit"
+        )
+
     assert :ok = VerifyDerived.verify(probe(body).spark_dsl_config())
   end
 end

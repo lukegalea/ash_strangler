@@ -10,8 +10,8 @@ defmodule AshStrangler.Test.ClinicDerived.Keys do
     estate 0x0C11
     kind :clinic, 0x001, parts: [{"clinic_derived.clinics.id", 32}], tenant?: true
     kind :site, 0x002, parts: [{"clinic_derived.sites.id", 32}]
-    logical :staff, 0x010
-    logical :property, 0x011
+    logical(:staff, 0x010)
+    logical(:property, 0x011)
   end
 end
 
@@ -59,7 +59,7 @@ defmodule AshStrangler.Test.ClinicDerived.Staff do
     schema "clinic_derived"
     view "staff"
     twin AshStrangler.Test.ClinicDerived.Legacy.Visits
-    registry AshStrangler.Test.ClinicDerived.Keys
+    registry(AshStrangler.Test.ClinicDerived.Keys)
     kind :staff
     from [:id]
 
@@ -86,10 +86,10 @@ defmodule AshStrangler.Test.ClinicDerived.Staff do
 
     element :guest do
       from :details
-      path ["guests"]
+      path(["guests"])
       type :text
-      value :person
-      ordinal :position
+      value(:person)
+      ordinal(:position)
       map :visit, from: :id
       constant :role, "guest"
     end
@@ -104,7 +104,7 @@ defmodule AshStrangler.Test.ClinicDerived.Properties do
     schema "clinic_derived"
     view "properties"
     twin AshStrangler.Test.ClinicDerived.Legacy.Visits
-    registry AshStrangler.Test.ClinicDerived.Keys
+    registry(AshStrangler.Test.ClinicDerived.Keys)
     kind :property
     from [:id]
     filter expr(id > 0)
@@ -116,10 +116,10 @@ defmodule AshStrangler.Test.ClinicDerived.Properties do
 
     element :listed do
       from :metadata
-      path ["propertyIds"]
+      path(["propertyIds"])
       type :integer
-      value :property
-      tenant_of :clinic, kind: {AshStrangler.Test.ClinicDerived.Keys, :clinic}, from: :id
+      value(:property)
+      tenant_of(:clinic, kind: {AshStrangler.Test.ClinicDerived.Keys, :clinic}, from: :id)
       map :visit, from: :id
     end
   end
@@ -145,7 +145,10 @@ defmodule AshStrangler.Test.ClinicDerived do
   def install! do
     for sql <- legacy_ddl(), do: AshStrangler.TestRepo.query!(sql)
 
-    for module <- [AshStrangler.Test.ClinicDerived.Staff, AshStrangler.Test.ClinicDerived.Properties],
+    for module <- [
+          AshStrangler.Test.ClinicDerived.Staff,
+          AshStrangler.Test.ClinicDerived.Properties
+        ],
         %{up: up} <- AshStrangler.Migration.statements(module) do
       AshStrangler.TestRepo.query!(up)
     end

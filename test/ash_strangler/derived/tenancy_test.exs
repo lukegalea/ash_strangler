@@ -28,7 +28,8 @@ defmodule AshStrangler.TenancyTest do
     List.last(modules)
   end
 
-  defp unique(prefix), do: "AshStrangler.TenancyTest.#{prefix}#{System.unique_integer([:positive])}"
+  defp unique(prefix),
+    do: "AshStrangler.TenancyTest.#{prefix}#{System.unique_integer([:positive])}"
 
   defp union(north, south, opts \\ []) do
     name = unique("U")
@@ -90,7 +91,8 @@ defmodule AshStrangler.TenancyTest do
     |> Enum.filter(&(&1.check == :tenant))
   end
 
-  defp tenant_of(kind, from \\ :id), do: "tenant_of :clinic, kind: {#{@keys}, #{inspect(kind)}}, from: #{inspect(from)}"
+  defp tenant_of(kind, from \\ :id),
+    do: "tenant_of :clinic, kind: {#{@keys}, #{inspect(kind)}}, from: #{inspect(from)}"
 
   test "a tenant key kind on every legacy branch is closed" do
     assert problems(union(tenant_of(:clinic), tenant_of(:clinic))) == []
@@ -134,7 +136,10 @@ defmodule AshStrangler.TenancyTest do
   end
 
   test "both branches failing gives two problems" do
-    assert [_, _] = problems(union("unmapped [:clinic], because: \"a\"", "unmapped [:clinic], because: \"b\""))
+    assert [_, _] =
+             problems(
+               union("unmapped [:clinic], because: \"a\"", "unmapped [:clinic], because: \"b\"")
+             )
   end
 
   test "a nullable tenant column is refused" do

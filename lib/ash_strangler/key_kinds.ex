@@ -184,7 +184,11 @@ defmodule AshStrangler.KeyKinds do
   @spec logical_namespace(registry() | Spark.Dsl.t(), atom()) :: String.t()
   def logical_namespace(registry, name) do
     kind = logical_kind!(registry, name)
-    KeyDerivation.uuid_v5(@logical_root, "estate:#{hex(estate(registry), 4)}:tag:#{hex(kind.tag, 3)}")
+
+    KeyDerivation.uuid_v5(
+      @logical_root,
+      "estate:#{hex(estate(registry), 4)}:tag:#{hex(kind.tag, 3)}"
+    )
   end
 
   @doc """

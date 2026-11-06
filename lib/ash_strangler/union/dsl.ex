@@ -195,5 +195,12 @@ defmodule AshStrangler.Union.Dsl do
 
   @doc false
   # The column, map, constant and unmapped entities, shared with `AshStrangler.Derived.Dsl`.
-  def shared_entities, do: %{column: @column, map: @map, constant: @constant, tenant_of: @tenant_of, unmapped: @unmapped}
+  def shared_entities,
+    do: %{
+      column: @column,
+      map: @map,
+      constant: @constant,
+      tenant_of: @tenant_of,
+      unmapped: @unmapped
+    }
 end

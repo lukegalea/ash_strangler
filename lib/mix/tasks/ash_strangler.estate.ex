@@ -64,14 +64,15 @@ defmodule Mix.Tasks.AshStrangler.Estate do
     end
   end
 
-  defp estates([]) do
+  @doc false
+  def estates([]) do
     case Application.get_env(Mix.Project.config()[:app], :ash_strangler_estates, []) do
       [] -> Mix.raise("No estate named and no :ash_strangler_estates configured")
       estates -> estates
     end
   end
 
-  defp estates(names) do
+  def estates(names) do
     for name <- names do
       module = Module.concat([name])
 

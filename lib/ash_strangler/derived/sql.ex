@@ -19,7 +19,9 @@ defmodule AshStrangler.Derived.Sql do
   @int_max 2_147_483_647
 
   @doc "Every statement for `derived`, in dependency order."
-  @spec statements(module() | Spark.Dsl.t()) :: [%{name: atom(), up: String.t(), down: String.t()}]
+  @spec statements(module() | Spark.Dsl.t()) :: [
+          %{name: atom(), up: String.t(), down: String.t()}
+        ]
   def statements(derived) do
     schema =
       case Info.schema(derived) do
@@ -34,7 +36,8 @@ defmodule AshStrangler.Derived.Sql do
       [
         %{
           name: :"strangler_#{Info.view(derived)}_view",
-          up: "CREATE OR REPLACE VIEW #{view} AS\n" <> Enum.join(selects, "\nUNION ALL\n") <> ";\n",
+          up:
+            "CREATE OR REPLACE VIEW #{view} AS\n" <> Enum.join(selects, "\nUNION ALL\n") <> ";\n",
           down: "DROP VIEW IF EXISTS #{view};"
         }
       ]
@@ -154,9 +157,9 @@ defmodule AshStrangler.Derived.Sql do
   defp lateral(source, frame) do
     array = array(source, frame)
 
-    "(SELECT #{value(source)} AS \"__v\", \"__j\".\"__o\" FROM jsonb_array_elements(" <>
+    ~s[(SELECT #{value(source)} AS "__v", "__j"."__o" FROM jsonb_array_elements(] <>
       "CASE WHEN jsonb_typeof(#{array}) = 'array' THEN #{array} ELSE '[]'::jsonb END) " <>
-      "WITH ORDINALITY AS \"__j\"(\"__x\", \"__o\")) AS \"__e\""
+      ~s[WITH ORDINALITY AS "__j"("__x", "__o")) AS "__e"]
   end
 
   defp array(%Source{from: from, path: []}, frame), do: "(#{frame.({[], from})})::jsonb"
@@ -165,7 +168,10 @@ defmodule AshStrangler.Derived.Sql do
     do: "((#{frame.({[], from})})::jsonb #> #{Printer.literal(text_array(path))}::text[])"
 
   defp text_array(path),
-    do: "{" <> Enum.map_join(path, ",", &~s("#{String.replace(&1, ~w(\\ "), fn c -> "\\" <> c end)}")) <> "}"
+    do:
+      "{" <>
+        Enum.map_join(path, ",", &~s("#{String.replace(&1, ~w(\\ "), fn c -> "\\" <> c end)}")) <>
+        "}"
 
   # CASE, never AND: PostgreSQL does not promise to stop at the first false
   # operand, and the cast raises for a value that is not a number.

@@ -16,6 +16,7 @@ One canonical relation, a view over legacy branches and an owned branch.
    * key
    * map
    * constant
+   * tenant_of
    * unmapped
  * [owned](#union-owned)
 
@@ -30,6 +31,7 @@ One canonical relation, a view over legacy branches and an owned branch.
 | [`view`](#union-view){: #union-view .spark-required} | `String.t` |  | The canonical relation's name. |
 | [`schema`](#union-schema){: #union-schema } | `String.t` | `"public"` | The schema of the view and the owned table. |
 | [`key`](#union-key){: #union-key } | `atom` | `:id` | The canonical key column (uuid). |
+| [`tenant`](#union-tenant){: #union-tenant } | `atom` |  | The column that scopes a row to a tenant. Every legacy branch must derive it with `tenant_of` through a `tenant?: true` kind, and the column must be `null?: false` (estate check E5). |
 
 
 
@@ -88,6 +90,7 @@ rows now live in the owned table.
  * [key](#union-legacy-key)
  * [map](#union-legacy-map)
  * [constant](#union-legacy-constant)
+ * [tenant_of](#union-legacy-tenant_of)
  * [unmapped](#union-legacy-unmapped)
 
 
@@ -228,6 +231,46 @@ constant :site, "north"
 ### Introspection
 
 Target: `AshStrangler.Union.Constant`
+
+### union.legacy.tenant_of
+```elixir
+tenant_of attribute
+```
+
+
+A column read as a packed key (`AshStrangler.KeyKinds`) of the legacy
+row's own columns. It is how a branch derives the union's `tenant`: estate
+check E5 requires `kind` to be declared `tenant?: true`. Read-only.
+
+
+
+
+### Examples
+```
+tenant_of :clinic, kind: {Clinic.Keys, :clinic}, from: :clinic_id
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attribute`](#union-legacy-tenant_of-attribute){: #union-legacy-tenant_of-attribute .spark-required} | `atom` |  |  |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`kind`](#union-legacy-tenant_of-kind){: #union-legacy-tenant_of-kind .spark-required} | `{module, atom}` |  | `{Registry, :kind}`: a packed kind of the registry. |
+| [`from`](#union-legacy-tenant_of-from){: #union-legacy-tenant_of-from .spark-required} | `atom \| list(atom)` |  | The twin column (or columns, in kind order) the key packs. |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.TenantKey`
 
 ### union.legacy.unmapped
 ```elixir

@@ -22,8 +22,8 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
 
   use Spark.Dsl.Verifier
 
-  alias AshStrangler.{Expr, KeyKinds, Twin}
   alias AshStrangler.Derived.Info
+  alias AshStrangler.{Expr, KeyKinds, Twin}
   alias AshStrangler.Union.{Constant, TenantKey, Unmapped}
   alias AshStrangler.Union.Map, as: MapEntry
   alias Spark.Dsl.Verifier
@@ -57,7 +57,10 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
 
     List.flatten([
       if(is_nil(Info.view(dsl)), do: ["declare the canonical `view`"], else: []),
-      if(sources == [], do: ["declare at least one `slot`, `synthesized` or `element`"], else: []),
+      if(sources == [],
+        do: ["declare at least one `slot`, `synthesized` or `element`"],
+        else: []
+      ),
       dups(columns, "column"),
       dups(Enum.map(sources, & &1.name), "source"),
       if(key in columns or key == :__source,
@@ -101,7 +104,10 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
   defp shape(%{kind: :element} = s, columns) do
     List.flatten([
       if(is_nil(s.from), do: ["declare `from`, the jsonb column"], else: []),
-      if(s.value in columns, do: [], else: ["`value` #{inspect(s.value)} is not a declared column"]),
+      if(s.value in columns,
+        do: [],
+        else: ["`value` #{inspect(s.value)} is not a declared column"]
+      ),
       if(is_nil(s.ordinal) or s.ordinal in columns,
         do: [],
         else: ["`ordinal` #{inspect(s.ordinal)} is not a declared column"]
@@ -114,13 +120,22 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
   end
 
   defp shape(s, _columns) do
-    for {field, set?} <- [from: s.from, path: s.path != [], type: s.type, value: s.value, ordinal: s.ordinal],
+    for {field, set?} <- [
+          from: s.from,
+          path: s.path != [],
+          type: s.type,
+          value: s.value,
+          ordinal: s.ordinal
+        ],
         set? not in [nil, false],
         do: "`#{field}` belongs to an `element`"
   end
 
   defp answers(source, columns) do
-    owned = if source.kind == :element, do: Enum.reject([source.value, source.ordinal], &is_nil/1), else: []
+    owned =
+      if source.kind == :element,
+        do: Enum.reject([source.value, source.ordinal], &is_nil/1),
+        else: []
 
     answered =
       Enum.flat_map(source.mappings, fn
@@ -150,7 +165,11 @@ defmodule AshStrangler.Verifiers.VerifyDerived do
         _ -> []
       end)
 
-    jsonb = if source.kind == :element and source.from, do: missing(twin, [source.from], "`from`"), else: []
+    jsonb =
+      if source.kind == :element and source.from,
+        do: missing(twin, [source.from], "`from`"),
+        else: []
+
     mapped ++ jsonb ++ reads(twin, source.filter, "`filter`")
   end
 
