@@ -104,7 +104,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
   defp strategy_problems({:uuid_v5, namespace: ns}, _key) when is_binary(ns), do: []
 
   defp strategy_problems({:uuid_v8, registry, kind}, _key)
-       when is_atom(registry) and is_atom(kind), do: []
+       when is_atom(registry) and is_atom(kind),
+       do: []
 
   defp strategy_problems(:identity, _key), do: []
   defp strategy_problems(other, _key), do: ["unsupported key strategy #{inspect(other)}"]
