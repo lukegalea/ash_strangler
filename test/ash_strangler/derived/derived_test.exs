@@ -118,6 +118,17 @@ defmodule AshStrangler.DerivedTest do
     end
   end
 
+  test "the census counts a value at the path that is not an array as one refused element" do
+    visit!(1, metadata: %{propertyIds: [12, 12.5]})
+    visit!(2, metadata: %{propertyIds: 12})
+    visit!(3, metadata: %{propertyIds: "12"})
+    visit!(4, metadata: %{propertyIds: %{a: 12}})
+    visit!(5, metadata: %{other: 1})
+    visit!(6, metadata: %{propertyIds: nil})
+    [source] = Info.elements(Properties)
+    assert [[4, 5]] = q!(Sql.element_census_sql(Properties, source))
+  end
+
   test "a tenant_of column is the packed key of its kind over the legacy columns" do
     visit!(5, metadata: %{propertyIds: [1]})
     [[clinic]] = q!("SELECT clinic FROM clinic_derived.properties")
