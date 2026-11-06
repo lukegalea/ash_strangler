@@ -116,6 +116,20 @@ defmodule AshStrangler.DerivedTest do
       [source] = Info.elements(Properties)
       assert [[3, 5]] = q!(Sql.element_census_sql(Properties, source))
     end
+
+    test "the census counts a value at the path that is not an array, and the view still drops it" do
+      visit!(1, metadata: %{propertyIds: [12, 12.5]})
+      visit!(2, metadata: %{propertyIds: 12})
+      visit!(3, metadata: %{propertyIds: "12"})
+      visit!(4, metadata: %{propertyIds: %{a: 12}})
+      visit!(5, metadata: %{propertyIds: nil})
+      visit!(6, metadata: %{other: 1})
+      [source] = Info.elements(Properties)
+
+      # 2 elements and 3 non-array values; an explicit null and a missing path are no elements
+      assert [[4, 5]] = q!(Sql.element_census_sql(Properties, source))
+      assert q!("SELECT visit FROM clinic_derived.properties ORDER BY visit") == [[1]]
+    end
   end
 
   test "a tenant_of column is the packed key of its kind over the legacy columns" do
@@ -131,9 +145,14 @@ defmodule AshStrangler.DerivedTest do
       [[guest]] = q!("SELECT id FROM clinic_derived.staff WHERE __source = 'guest'")
       [[property]] = q!("SELECT id FROM clinic_derived.properties")
 
-      assert Ecto.UUID.cast!(lead) == KeyKinds.logical(Keys, :staff, [1, "lead"])
-      assert Ecto.UUID.cast!(guest) == KeyKinds.logical(Keys, :staff, [1, "guest", "bo"])
-      assert Ecto.UUID.cast!(property) == KeyKinds.logical(Keys, :property, [1, "listed", 4])
+      assert Ecto.UUID.cast!(lead) ==
+               KeyKinds.logical(Keys, :staff, [1, "clinic_derived.visits", "lead"])
+
+      assert Ecto.UUID.cast!(guest) ==
+               KeyKinds.logical(Keys, :staff, [1, "clinic_derived.visits", "guest", "bo"])
+
+      assert Ecto.UUID.cast!(property) ==
+               KeyKinds.logical(Keys, :property, [1, "clinic_derived.visits", "listed", 4])
     end
 
     test "distinct sources, kinds and parents get distinct keys" do
@@ -147,9 +166,89 @@ defmodule AshStrangler.DerivedTest do
       assert length(Enum.uniq(keys)) == 4
     end
 
-    test "a component is not smeared into its neighbour" do
+    test "a component is not smeared into its neighbour, whatever it contains" do
       assert KeyKinds.logical(Keys, :staff, ["a", "bc"]) !=
                KeyKinds.logical(Keys, :staff, ["ab", "c"])
+
+      assert KeyKinds.logical(Keys, :staff, ["x\u001Fy", "z"]) !=
+               KeyKinds.logical(Keys, :staff, ["x", "y\u001Fz"])
+
+      assert KeyKinds.logical(Keys, :staff, ["1:a", "b"]) !=
+               KeyKinds.logical(Keys, :staff, ["1", "a:b"])
+    end
+
+    test "SQL agrees with the Elixir function on a separator and on multi-byte text" do
+      for parts <- [["x\u001Fy", "z"], ["é", "日本"]] do
+        sql =
+          KeyKinds.logical_sql(Keys, :staff, Enum.map(parts, &AshStrangler.Sql.Printer.literal/1))
+
+        [[id]] = q!("SELECT " <> sql)
+        assert Ecto.UUID.cast!(id) == KeyKinds.logical(Keys, :staff, parts)
+      end
+    end
+
+    test "two views of one kind do not share an id for the same legacy row" do
+      q!("CREATE TABLE clinic_derived.orders (id integer PRIMARY KEY, metadata jsonb)")
+      suffix = System.unique_integer([:positive])
+
+      modules =
+        Code.compile_string("""
+        defmodule AshStrangler.DerivedTest.Orders#{suffix}Twin do
+          use Ash.Resource,
+            domain: AshStrangler.Test.ClinicDerived.Legacy,
+            data_layer: AshPostgres.DataLayer,
+            extensions: [AshStrangler.Twin]
+
+          postgres do
+            table "orders"
+            schema "clinic_derived"
+            repo AshStrangler.TestRepo
+            migrate? false
+          end
+
+          attributes do
+            attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+            attribute :metadata, :map, public?: true
+          end
+
+          actions do
+            defaults [:read]
+          end
+        end
+
+        defmodule AshStrangler.DerivedTest.Orders#{suffix} do
+          use AshStrangler.Derived
+
+          derived do
+            schema "clinic_derived"
+            view "order_properties"
+            twin AshStrangler.DerivedTest.Orders#{suffix}Twin
+            registry AshStrangler.Test.ClinicDerived.Keys
+            kind :property
+            from [:id]
+
+            column :property, :integer, null?: false
+
+            element :listed do
+              from :metadata
+              path(["propertyIds"])
+              type :integer
+              value(:property)
+            end
+          end
+        end
+        """)
+
+      orders = Module.concat(["AshStrangler.DerivedTest.Orders#{suffix}"])
+      assert {^orders, _} = List.keyfind(modules, orders, 0)
+      for %{up: up} <- AshStrangler.Migration.statements(orders), do: q!(up)
+
+      visit!(5, metadata: %{propertyIds: [4]})
+      q!("INSERT INTO clinic_derived.orders VALUES (5, '{\"propertyIds\": [4]}'::jsonb)")
+
+      [[from_visit]] = q!("SELECT id FROM clinic_derived.properties")
+      [[from_order]] = q!("SELECT id FROM clinic_derived.order_properties")
+      assert from_visit != from_order
     end
 
     test "a NULL component gives no key" do

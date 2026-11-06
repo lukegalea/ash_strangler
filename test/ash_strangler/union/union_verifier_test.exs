@@ -144,6 +144,38 @@ defmodule AshStrangler.UnionVerifierTest do
              "mapping for column :notes is declared 2 times"
   end
 
+  test "a :dual_write branch writes each legacy column once" do
+    extra = "column :display, :string\n column :legal, :string"
+    north = inside(@north, "unmapped [:display, :legal], because: \"none\"")
+
+    twice =
+      valid(
+        columns: @columns <> extra,
+        north: north,
+        south: inside(@south, "map :display, from: :name\n map :legal, from: :name")
+      )
+
+    message = rejection(twice)
+    assert message =~ "branch :south"
+
+    assert message =~
+             "writes legacy column :name more than once (columns :patient, :display, :legal)"
+
+    # the same shape is fine while the branch only reads
+    reading = String.replace(@south, "phase :dual_write", "phase :read_from_legacy")
+
+    assert :ok =
+             VerifyUnion.verify(
+               probe(
+                 valid(
+                   columns: @columns <> extra,
+                   north: north,
+                   south: inside(reading, "map :display, from: :name\n map :legal, from: :name")
+                 )
+               ).spark_dsl_config()
+             )
+  end
+
   test "a mapping that reads a column the twin does not have" do
     assert rejection(valid(north: String.replace(@north, "from: :patient_name", "from: :nope"))) =~
              "branch :north: map reads :nope, which AshStrangler.Test.Clinic.Legacy.NorthVisits does not have"

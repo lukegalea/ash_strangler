@@ -118,9 +118,9 @@ defmodule AshStrangler.Estate.Obligations do
       %Obligation{
         id: "#{finding.obligation}:#{inspect(module)}.#{finding.attribute}",
         summary: finding.message,
-        denominator: "the rows the assertion returns",
+        denominator: "the rows the assertion counts or returns",
         sql: finding.assertion,
-        shape: :rows,
+        shape: Map.get(finding, :shape, :count),
         severity: finding.severity,
         source: inspect(module)
       }
@@ -208,8 +208,13 @@ defmodule AshStrangler.Estate.Obligations do
   defp interpret(:census, other),
     do: {:error, "a census returns one row of two integers, got #{inspect(other.rows)}"}
 
+  defp interpret(:count, %{rows: [[violations]]}) when is_integer(violations),
+    do: {:ok, violations, nil, nil}
+
+  defp interpret(:count, other),
+    do: {:error, "a count returns one row of one integer, got #{inspect(other.rows)}"}
+
   defp interpret(:rows, %{rows: []}), do: {:ok, 0, nil, nil}
-  defp interpret(:rows, %{rows: [[0]]}), do: {:ok, 0, nil, nil}
 
   defp interpret(:rows, %{rows: rows}),
     do:

@@ -1,0 +1,155 @@
+{
+  "domains": {},
+  "enums": {},
+  "extensions": {},
+  "format": "ash_strangler.catalog/1",
+  "relations": {
+    "tenant_edges.east_visits": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "clinic_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "other_id",
+          "not_null": false,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "patient",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "clinic_id"
+          ],
+          "name": "east_visits_clinic_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "tenant_edges.clinics"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "east_visits_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "tenant_edges.west_visits": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "clinic_id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "other_id",
+          "not_null": false,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "patient",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [
+        {
+          "columns": [
+            "clinic_id"
+          ],
+          "name": "west_visits_clinic_id_fkey",
+          "on_delete": "no_action",
+          "on_update": "no_action",
+          "references": {
+            "columns": [
+              "id"
+            ],
+            "relation": "tenant_edges.clinics"
+          },
+          "validated": true
+        }
+      ],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "west_visits_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    }
+  },
+  "schemas": [
+    "tenant_edges"
+  ]
+}

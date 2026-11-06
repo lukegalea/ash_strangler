@@ -76,10 +76,15 @@ declared ones. The view has no triggers. A write goes to the parent's resource.
 
 ## Keys
 
-The key is `AshStrangler.KeyKinds.logical/3` over the `from` columns, the
-source's name and, for an element, its value. It is stable when the legacy row's
-other columns change, and two sources never collide. A repeated element yields
+The key is `AshStrangler.KeyKinds.logical/3` over the `from` columns, the twin's
+relation, the source's name and, for an element, its value. It is stable when the
+legacy row's other columns change, and two sources never collide, even across
+two views that share a logical kind. A repeated element yields
 one row (the first). See the keys guide.
+
+The element census counts a value at the path that is not an array (a scalar or
+an object) as one refused element. A missing path and a JSON `null` are no
+element. The view drops all of them.
 
 ## The integer guard
 

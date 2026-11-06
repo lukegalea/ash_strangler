@@ -10,7 +10,9 @@ defmodule AshStrangler.Estate.Obligation do
   `shape` says what the query returns:
 
     * `:census`: one row of two integers, `violations` then `total`;
-    * `:rows`: the offending rows themselves (none, or a single `0`, is clean).
+    * `:count`: one row of one integer, the number of violations (`0` is clean);
+    * `:rows`: the offending rows themselves, one per violation (none is clean; a row
+      holding the value `0` is a violation like any other).
 
   `severity` is what a violation means: `:error` fails the report, `:warning`
   only reports. A host brings its own through
@@ -26,7 +28,7 @@ defmodule AshStrangler.Estate.Obligation do
           summary: String.t(),
           denominator: String.t(),
           sql: String.t(),
-          shape: :census | :rows,
+          shape: :census | :count | :rows,
           severity: :error | :warning,
           source: String.t() | nil
         }

@@ -109,6 +109,17 @@ defmodule AshStrangler.UnionTest do
       assert visit.id == id
     end
 
+    test "a supplied key that names a live legacy row is refused, not duplicated in the view" do
+      south!(1, "bo")
+      id = id_of("south", "bo")
+
+      assert_raise Postgrex.Error, ~r/already names a row/, fn ->
+        q!("INSERT INTO clinic_union.visits (id, patient) VALUES ($1, 'x')", [id])
+      end
+
+      assert [[1]] = q!("SELECT count(*) FROM clinic_union.visits WHERE id = $1", [id])
+    end
+
     test "an insert that names a legacy branch is refused" do
       assert_raise Postgrex.Error, ~r/ash_error/, fn ->
         q!("INSERT INTO clinic_union.visits (__branch, patient) VALUES ('north', 'x')")

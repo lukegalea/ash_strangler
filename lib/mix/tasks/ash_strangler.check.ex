@@ -649,17 +649,17 @@ defmodule Mix.Tasks.AshStrangler.Check do
     label = "#{finding.obligation}  #{finding.attribute}"
     severity = if finding.severity == :error, do: @fail, else: @warn
 
-    case query(repo, finding.assertion) do
-      {:ok, %{rows: []}} ->
+    case {Map.get(finding, :shape, :count), query(repo, finding.assertion)} do
+      {_shape, {:ok, %{rows: []}}} ->
         emit(@ok, label, "no rows")
 
-      {:ok, %{rows: [[0]]}} ->
+      {:count, {:ok, %{rows: [[0]]}}} ->
         emit(@ok, label, "0")
 
-      {:ok, result} ->
+      {_shape, {:ok, result}} ->
         emit(severity, label, describe(result))
 
-      {:error, message} ->
+      {_shape, {:error, message}} ->
         emit(@unrun, label, message)
     end
   end

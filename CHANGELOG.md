@@ -138,6 +138,28 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ### Fixes
 
+- **A union's `:dual_write` update writes back what it reads.** Each write is
+  cast to the legacy column's own type (a declared `:string` over an integer
+  column no longer fails every update); a column read from a twin column the key
+  packs is read-only, so it can no longer re-key a row and return an all-NULL
+  one; and `VerifyUnion` refuses a branch that writes one legacy column from two
+  union columns (PostgreSQL rejects that on every update). An insert that
+  supplies a key already naming a live row is refused instead of duplicating it.
+- **E5 checks tenant closure.** A `tenant_of`'s `from` columns must be the
+  kind's home columns or sit behind a validated foreign key to them in the
+  catalog; packing any other column as a tenant is refused.
+- **E8's carry rule counts another module's claim.** A column only another
+  module maps (a derived view reading a jsonb column) blocks a move to
+  `:read_from_new`.
+- **The obligation report tells counts from rows.** A new `:count` shape (one
+  integer) is the library's `count(*)` assertions, so `37` is 37 violations; an
+  offending value of `0` in a `:rows` assertion is a violation, not a pass.
+- **The element census counts a non-array value at the path** as a refused
+  element instead of dropping it silently.
+- **Logical keys cannot collide.** Components are length-prefixed instead of
+  joined by a separator, and a derived key includes the twin's relation, so two
+  views sharing a kind no longer mint one id for equal legacy values.
+
 - **The ledger trigger builds its row image inside the savepoint.** A legacy
   migration that renamed or dropped a column the twin still names made every
   write to that table fail with `42703`; the event is now skipped with a

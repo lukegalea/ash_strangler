@@ -17,7 +17,9 @@ defmodule AshStrangler.Estate.Phases do
   be lost. Every column of the entry's relation must therefore be mapped by that
   entry's own resource or union, or declared `carried` or `dead`. A column
   left `deferred` or `legacy_only` (whether by itself or through a declaration
-  of the whole relation) blocks the move, and the problem names it. Until then
+  of the whole relation) blocks the move, and so does a column that only another
+  module maps (a derived view reading a jsonb column, say): the moved entry's
+  storage would not hold it. The problem names it. Until then
   `deferred` and `legacy_only` mean "not needed yet", and a resource below
   `:read_from_new` is not held to the rule. A secret column is the twin's to
   carry and is not checked here.
@@ -93,12 +95,8 @@ defmodule AshStrangler.Estate.Phases do
         ]
 
       %{^relation => %{columns: columns}} ->
-        for {column, info} <- Enum.sort(columns), blocked?(info, entry) do
-          problem(
-            entry,
-            "#{relation}.#{column}",
-            "#{relation}.#{column} is declared #{info.declared.kind} (#{info.declared.because})"
-          )
+        for {column, info} <- Enum.sort(columns), reason = blocked(info, entry) do
+          problem(entry, "#{relation}.#{column}", "#{relation}.#{column} #{reason}")
         end
 
       _ ->
@@ -107,10 +105,21 @@ defmodule AshStrangler.Estate.Phases do
     |> Enum.map(&Map.update!(&1, :message, fn m -> carry_message(entry, m) end))
   end
 
-  defp blocked?(%{declared: %{kind: kind}}, _entry) when kind in [:deferred, :legacy_only],
-    do: true
+  defp blocked(%{declared: %{kind: kind} = declared}, _entry)
+       when kind in [:deferred, :legacy_only],
+       do: "is declared #{kind} (#{declared.because})"
 
-  defp blocked?(_info, _entry), do: false
+  # A column another module maps has no declaration (a claim and a declaration exclude each
+  # other), so the entry must map it itself or its storage would not hold it.
+  defp blocked(%{claims: claims}, entry) do
+    mapped = for %{kind: :mapped, by: by} <- claims, uniq: true, do: by
+
+    if mapped != [] and entry.module not in mapped do
+      "is mapped only by #{Enum.map_join(mapped, ", ", &inspect/1)}, which #{entry.unit} does not map"
+    end
+  end
+
+  defp blocked(_info, _entry), do: nil
 
   defp carry_message(entry, message),
     do:

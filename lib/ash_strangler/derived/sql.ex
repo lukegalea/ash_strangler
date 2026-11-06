@@ -145,7 +145,12 @@ defmodule AshStrangler.Derived.Sql do
 
   defp key_sql(derived, source, frame) do
     from = Enum.map(Info.from(derived), &frame.({[], &1}))
-    own = [Printer.literal(to_string(source.name))]
+
+    own = [
+      Printer.literal(Twin.relation(Info.twin(derived))),
+      Printer.literal(to_string(source.name))
+    ]
+
     element = if source.kind == :element, do: [~s("__e"."__v")], else: []
 
     KeyKinds.logical_sql(Info.registry(derived), Info.kind(derived), from ++ own ++ element)
@@ -153,12 +158,16 @@ defmodule AshStrangler.Derived.Sql do
 
   # --- elements ----------------------------------------------------------------
 
-  # The elements the guard refuses read NULL in `__v`; the select drops them.
+  # The elements the guard refuses read NULL in `__v`; the select drops them. A value at the
+  # path that is not an array (a scalar, an object) is one refused element, so the census
+  # counts it; a missing path or a JSON null is no element at all.
   defp lateral(source, frame) do
     array = array(source, frame)
 
     ~s[(SELECT #{value(source)} AS "__v", "__j"."__o" FROM jsonb_array_elements(] <>
-      "CASE WHEN jsonb_typeof(#{array}) = 'array' THEN #{array} ELSE '[]'::jsonb END) " <>
+      "CASE WHEN jsonb_typeof(#{array}) = 'array' THEN #{array} " <>
+      "WHEN #{array} IS NULL OR jsonb_typeof(#{array}) = 'null' THEN '[]'::jsonb " <>
+      "ELSE '[null]'::jsonb END) " <>
       ~s[WITH ORDINALITY AS "__j"("__x", "__o")) AS "__e"]
   end
 
