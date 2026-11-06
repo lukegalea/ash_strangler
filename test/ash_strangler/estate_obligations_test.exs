@@ -313,7 +313,9 @@ defmodule AshStrangler.EstateObligationsTest do
 
       TestRepo.query!(
         "CREATE TABLE clinic_union.dec#{n} (id integer PRIMARY KEY, status integer)",
-        [], mode: :savepoint)
+        [],
+        mode: :savepoint
+      )
 
       {modules, _io} =
         with_io(:stderr, fn ->
