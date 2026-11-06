@@ -15,6 +15,26 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ### Features
 
+- **Union sources:** `use AshStrangler.Union` declares one canonical relation
+  over one or more legacy branches (each a twin with its own phase and a
+  declared `refused_because`) and one owned branch. It generates the owned
+  table, a key index per branch, a `UNION ALL` view with a `__branch` column,
+  and `INSTEAD OF` insert, update and delete triggers: inserts land in the
+  owned branch with a correct `RETURNING`; a write to a legacy branch in
+  `:read_from_legacy` is refused as `AshStrangler.Error.BranchWriteRefused`
+  with the declared reason; in `:dual_write` updates and deletes are carried
+  to the legacy table. `AshStrangler.Union.Info` exposes the branch phases and
+  the lens kind of each column (`:column`, `:expression`, `:constant`,
+  `:null`, `:owned`) for host verifiers. `VerifyUnion` refuses unanswered or
+  unknown columns, missing or shared keys, a twin that is not one and a mapping
+  over a column the twin lacks. See the unions guide for the concurrency
+  behaviour.
+- **Estate check E8:** the phase lattice and the carry rule
+  (`AshStrangler.Estate.Phases`). A resource or legacy branch at
+  `:read_from_new` or later may not leave a column of its relation `deferred`
+  or `legacy_only`, and nothing may read a relation a branch has
+  decommissioned. Unions listed in an estate claim their twin columns.
+
 - **Pinned schema snapshots:** `mix ash_strangler.snapshot capture|derive|verify|drift|load`.
   A snapshot directory holds a normalised `pg_dump --schema-only`
   (`schema.sql`), an optional `extensions.sql` preamble, a `catalog.json`

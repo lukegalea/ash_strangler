@@ -18,6 +18,7 @@ end
 # before the sandbox starts intercepting. Tests then run inside a transaction
 # that rolls back, so they share this schema and never rebuild it.
 LegacySchema.install!()
+AshStrangler.Test.Clinic.install!()
 
 Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
 

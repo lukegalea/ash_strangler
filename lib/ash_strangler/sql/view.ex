@@ -56,7 +56,8 @@ defmodule AshStrangler.Sql.View do
     end
   end
 
-  defp schema_statement_for(schema) do
+  @doc false
+  def schema_statement_for(schema) do
     %{
       name: :"strangler_#{schema}_schema",
       up: ~s(CREATE SCHEMA IF NOT EXISTS "#{schema}";),
@@ -283,6 +284,10 @@ defmodule AshStrangler.Sql.View do
   def key_expression(resource_or_dsl, key, frame) do
     do_key_expression(key, Info.relation(resource_or_dsl), frame)
   end
+
+  @doc false
+  # The same expression for a key declared outside a resource (a union branch).
+  def key_sql(%Key{} = key, relation, frame), do: do_key_expression(key, relation, frame)
 
   defp do_key_expression(
          %Key{from: from, strategy: {:uuid_v5, namespace: namespace}},

@@ -1,0 +1,123 @@
+{
+  "domains": {},
+  "enums": {},
+  "extensions": {},
+  "format": "ash_strangler.catalog/1",
+  "relations": {
+    "clinic_union.north_visits": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "patient_name",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "seen_on",
+          "not_null": false,
+          "type": "date",
+          "udt": "pg_catalog.date"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "ward",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "north_visits_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    },
+    "clinic_union.south_visits": {
+      "checks": [],
+      "columns": [
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "id",
+          "not_null": true,
+          "type": "integer",
+          "udt": "pg_catalog.int4"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "name",
+          "not_null": true,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "date",
+          "not_null": false,
+          "type": "date",
+          "udt": "pg_catalog.date"
+        },
+        {
+          "array": false,
+          "default": null,
+          "generated": null,
+          "identity": null,
+          "name": "remarks",
+          "not_null": false,
+          "type": "text",
+          "udt": "pg_catalog.text"
+        }
+      ],
+      "definition": null,
+      "foreign_keys": [],
+      "kind": "table",
+      "primary_key": {
+        "columns": [
+          "id"
+        ],
+        "name": "south_visits_pkey"
+      },
+      "triggers": [],
+      "unique": []
+    }
+  },
+  "schemas": [
+    "clinic_union"
+  ]
+}
