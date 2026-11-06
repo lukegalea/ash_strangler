@@ -220,6 +220,9 @@ defmodule AshStrangler.Union.Sql do
     #{refusals}  IF NEW."__branch" IS NOT NULL AND NEW."__branch" <> #{Printer.literal(to_string(owned))} THEN
         RAISE EXCEPTION 'strangler: unknown branch %', NEW."__branch";
       END IF;
+      IF NEW.#{key} IS NOT NULL AND EXISTS (SELECT 1 FROM #{Info.view_name(union)} WHERE #{key} = NEW.#{key}) THEN
+        RAISE EXCEPTION 'strangler: key % already exists in #{Info.view(union)}', NEW.#{key} USING ERRCODE = 'unique_violation';
+      END IF;
       new_id := coalesce(NEW.#{key}, gen_random_uuid());
       INSERT INTO #{Info.owned_table(union)} (#{names}) VALUES (new_id#{if values == "", do: "", else: ", " <> values});
       SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{key} = new_id;

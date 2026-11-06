@@ -14,6 +14,8 @@ defmodule AshStrangler.DerivedTest do
   alias AshStrangler.KeyKinds
   alias AshStrangler.Test.ClinicDerived.{Keys, Properties}
 
+  @visits "clinic_derived.visits"
+
   defp q!(sql, params \\ []), do: TestRepo.query!(sql, params, mode: :savepoint).rows
 
   defp visit!(id, attrs \\ []) do
@@ -142,9 +144,13 @@ defmodule AshStrangler.DerivedTest do
       [[guest]] = q!("SELECT id FROM clinic_derived.staff WHERE __source = 'guest'")
       [[property]] = q!("SELECT id FROM clinic_derived.properties")
 
-      assert Ecto.UUID.cast!(lead) == KeyKinds.logical(Keys, :staff, [1, "lead"])
-      assert Ecto.UUID.cast!(guest) == KeyKinds.logical(Keys, :staff, [1, "guest", "bo"])
-      assert Ecto.UUID.cast!(property) == KeyKinds.logical(Keys, :property, [1, "listed", 4])
+      assert Ecto.UUID.cast!(lead) == KeyKinds.logical(Keys, :staff, [1, @visits, "lead"])
+
+      assert Ecto.UUID.cast!(guest) ==
+               KeyKinds.logical(Keys, :staff, [1, @visits, "guest", "bo"])
+
+      assert Ecto.UUID.cast!(property) ==
+               KeyKinds.logical(Keys, :property, [1, @visits, "listed", 4])
     end
 
     test "distinct sources, kinds and parents get distinct keys" do
@@ -156,6 +162,29 @@ defmodule AshStrangler.DerivedTest do
       ]
 
       assert length(Enum.uniq(keys)) == 4
+    end
+
+    test "a separator or backslash inside a component cannot move a boundary" do
+      assert KeyKinds.logical(Keys, :staff, ["x\u001fy", "z"]) !=
+               KeyKinds.logical(Keys, :staff, ["x", "y\u001fz"])
+
+      assert KeyKinds.logical(Keys, :staff, ["x\\", "z"]) !=
+               KeyKinds.logical(Keys, :staff, ["x", "\\z"])
+    end
+
+    test "SQL escapes the same way" do
+      guest = "a\u001fb\\c"
+      visit!(1, details: %{guests: [guest]}, metadata: %{propertyIds: []})
+      [[id]] = q!("SELECT id FROM clinic_derived.staff WHERE __source = 'guest'")
+
+      assert Ecto.UUID.cast!(id) ==
+               KeyKinds.logical(Keys, :staff, [1, @visits, "guest", guest])
+    end
+
+    test "two views of one kind do not share ids for the same source name and parent" do
+      names = [@visits, "clinic_derived.orders"]
+      [a, b] = for n <- names, do: KeyKinds.logical(Keys, :staff, [5, n, "lead"])
+      assert a != b
     end
 
     test "a component is not smeared into its neighbour" do
