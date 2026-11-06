@@ -13,6 +13,8 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 ## Unreleased
 
+Requires Elixir 1.20 or later.
+
 ### Features
 
 - **Derived rows:** `use AshStrangler.Derived` presents zero or more canonical
