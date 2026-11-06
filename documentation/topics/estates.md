@@ -95,13 +95,17 @@ A union or a derived view that declares a `tenant` column is tenant-scoped, and
 every row it can show must name its tenant, derived from the legacy row alone.
 Otherwise a join in some mapping could put a row of one tenant behind another.
 E5 holds each legacy branch of a union, and each source of a derived view, to
-three rules:
+four rules:
 
 - It answers the tenant column with `tenant_of`, the packed key of a registry
   kind declared `tenant?: true`
   (`tenant_of :clinic, kind: {MyApp.Keys, :clinic}, from: :clinic_id`). A
   `map`, an expression, a `constant` or an `unmapped` answer is refused.
 - The kind exists in its registry and is a tenant kind.
+- The `from` columns are the kind's own home columns on its own relation, or a
+  validated foreign key of the twin's relation in the estate's catalog maps them
+  onto the home. Otherwise any integer column could be packed as a tenant, and
+  the view would show a row under a tenant it does not belong to.
 - The column is declared `null?: false`, so the owned branch can't hold a row
   with no tenant.
 
@@ -234,7 +238,9 @@ refuses, whether a stored verdict agrees with a derived one. A plug-in's
 the denominator it is measured over. The estate adds its own: the assertions
 that `AshStrangler.Obligations` couldn't decide at compile time for each
 strangled resource, and a census of the elements each `element` source of a
-derived view refuses (`AshStrangler.Estate.Obligations.registry/1`).
+derived view refuses (`AshStrangler.Estate.Obligations.registry/1`). An
+obligation's `shape` is `:census` (violations and total), `:count` (one integer)
+or `:rows` (one row per violation; a row holding `0` is still a violation).
 
 ```
 mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json

@@ -12,6 +12,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     * a branch's twin is a twin, and everything a branch reads is a column of it;
     * a branch has exactly one `key`, a supported strategy over twin columns,
       and answers every column exactly once (`map`, `constant` or `unmapped`);
+    * a `:dual_write` branch writes each legacy column from one union column only;
     * two branches never share a key namespace (their ids would collide).
 
   Every refusal names the branch and the column.
@@ -78,7 +79,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
     if Code.ensure_compiled(branch.twin) == {:module, branch.twin} and Twin.twin?(branch.twin) do
       Enum.map(
-        key_problems(branch, key) ++ mapping_problems(branch, columns),
+        key_problems(branch, key) ++
+          mapping_problems(branch, columns) ++ write_problems(branch),
         &(at <> &1)
       ) ++
         if(String.trim(branch.refused_because) == "",
@@ -144,6 +146,38 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
       reads
     ])
   end
+
+  # A `:dual_write` branch assigns each legacy column once per update; two union columns
+  # that write the same one would make PostgreSQL refuse every update through the branch.
+  defp write_problems(%{phase: :dual_write, mappings: mappings}) do
+    mappings
+    |> Enum.flat_map(fn
+      %MapEntry{attribute: a, from: from} when is_atom(from) ->
+        [{from, a}]
+
+      %MapEntry{attribute: a, from: from} ->
+        case Expr.simple_reference(from) do
+          {:ok, attribute} -> [{attribute, a}]
+          :error -> []
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.flat_map(fn
+      {source, [_, _ | _] = names} ->
+        [
+          "writes legacy column #{inspect(source)} more than once (columns #{Enum.map_join(names, ", ", &inspect/1)}); " <>
+            "derive all but one of them with an expression"
+        ]
+
+      _ ->
+        []
+    end)
+  end
+
+  defp write_problems(_branch), do: []
 
   defp missing(twin, columns, what) do
     attrs = Twin.columns(twin)

@@ -112,6 +112,32 @@ defmodule AshStrangler.UnionEstateTest do
     end
   end
 
+  describe "the carry rule and another module's claim" do
+    test "a column only another module maps blocks the move" do
+      name = "AshStrangler.UnionEstateTest.U#{System.unique_integer([:positive])}"
+
+      moved =
+        name
+        |> AshStrangler.Test.Clinic.source(:read_from_new, :dual_write)
+        |> String.replace(
+          "map :visited_on, from: :seen_on",
+          ~S|unmapped [:visited_on], because: "left behind"|
+        )
+        |> compile()
+
+      reader = union(:read_from_legacy, :read_from_legacy, "visits_copy")
+      carried = ~S|carried "clinic_union.north_visits.ward", because: "kept"|
+
+      report = estate([moved, reader], [carried])
+
+      assert [%{subject: "clinic_union.north_visits.seen_on", message: message}] =
+               phase_problems(report)
+
+      assert message =~ inspect(reader)
+      assert message =~ "does not map"
+    end
+  end
+
   describe "the lattice rule" do
     test "no one may read a relation a branch has decommissioned" do
       decommissioned = union(:decommissioned, :dual_write, "visits")

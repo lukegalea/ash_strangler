@@ -163,10 +163,6 @@ defmodule AshStrangler.KeyKinds do
   # Fixed, so the namespace of a kind depends only on the estate and the tag.
   @logical_root "5a1d3f0e-9c3b-5c7e-8d52-0b1f6a4e7c11"
 
-  # ASCII unit separator: it joins components and is not a character of any
-  # sensible key value.
-  @separator <<31>>
-
   @doc "The logical kind named `name`; raises `ArgumentError` when the registry has none."
   @spec logical_kind!(registry() | Spark.Dsl.t(), atom()) :: AshStrangler.LogicalKind.t()
   def logical_kind!(registry, name) do
@@ -204,9 +200,16 @@ defmodule AshStrangler.KeyKinds do
     else
       KeyDerivation.uuid_v5(
         logical_namespace(registry, name),
-        Enum.map_join(components, @separator, &to_string/1)
+        Enum.map_join(components, "", &component/1)
       )
     end
+  end
+
+  # Each component is prefixed with its byte length, so the join is injective whatever
+  # characters the components hold.
+  defp component(value) do
+    text = to_string(value)
+    "#{byte_size(text)}:#{text}"
   end
 
   @doc """
@@ -217,10 +220,10 @@ defmodule AshStrangler.KeyKinds do
   @spec logical_sql(registry() | Spark.Dsl.t(), atom(), [String.t()]) :: String.t()
   def logical_sql(registry, name, component_sql) do
     namespace = AshStrangler.Sql.Printer.literal(logical_namespace(registry, name))
-    texts = Enum.map(component_sql, &"(#{&1})::text")
+    texts = Enum.map(component_sql, &"octet_length((#{&1})::text) || ':' || (#{&1})::text")
     nulls = Enum.map_join(component_sql, " OR ", &"(#{&1}) IS NULL")
 
-    "CASE WHEN #{nulls} THEN NULL ELSE uuid_generate_v5(#{namespace}::uuid, #{Enum.join(texts, " || chr(31) || ")}) END"
+    "CASE WHEN #{nulls} THEN NULL ELSE uuid_generate_v5(#{namespace}::uuid, #{Enum.join(texts, " || ")}) END"
   end
 
   @doc "True when `name` is a packed kind of the registry declared `tenant?: true`."

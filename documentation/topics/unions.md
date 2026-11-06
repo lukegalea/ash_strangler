@@ -84,7 +84,13 @@ Insert always lands in the owned branch, and the trigger returns the row it
 stored, so `RETURNING` carries the key and every default. In `:dual_write`, an
 update writes the columns the branch renames (`map :x, from: :column`) and
 refuses a changed column that has no legacy column behind it (an expression, a
-constant or an unmapped column). Updating a key is refused.
+constant or an unmapped column). Updating a key is refused, and so is changing a
+column that is read from a twin column the key packs (writing it would re-key
+the row). Each write is cast to the legacy column's own type, so a declared type
+that differs from the legacy one still assigns, and a branch may not write one
+legacy column from two union columns (`VerifyUnion` refuses it; derive all but
+one with an expression). An insert that supplies a key already naming a live
+row of the view is refused instead of duplicating the id.
 
 A refusal is an `AshStrangler.Error.BranchWriteRefused` carrying the branch,
 phase, operation and the declared reason. The triggers raise it in the
@@ -130,7 +136,9 @@ then checks, for every strangled resource and every legacy branch at
 
 - **the carry rule**: every column of its relation is mapped by it, or declared
   `carried` or `dead`. A column left `deferred` or `legacy_only`, or a relation
-  declared so as a whole, blocks the move, and the problem names it.
+  declared so as a whole, blocks the move, and the problem names it. So does a
+  column that only another module maps, such as a derived view reading a jsonb
+  column: the moved branch's storage would not hold it.
 - **the lattice rule**: a relation a branch has decommissioned is read by no
   other resource or union.
 

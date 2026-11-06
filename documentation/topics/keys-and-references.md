@@ -103,7 +103,8 @@ end
 ```
 
 `AshStrangler.KeyKinds.logical/3` is a UUID version 5 over the components you
-give (integers, strings or UUIDs), joined by an unambiguous separator, in a
+give (integers, strings or UUIDs), each prefixed with its byte length so that no
+component can run into its neighbour, in a
 namespace made from the estate tag and the kind's tag. `logical_sql/3` is the
 same expression in SQL, and the two agree. The key is deterministic and can't be
 decoded: reach the row through its parent. A `NULL` component gives no key. The

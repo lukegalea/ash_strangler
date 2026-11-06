@@ -94,7 +94,7 @@ defmodule AshStrangler.Estate.Report do
         writer_problems(report) ++
         reference_problems(report, catalog) ++
         Phases.problems(report, Phases.entries(Estate.resources(estate))) ++
-        AshStrangler.Estate.Tenancy.problems(Estate.resources(estate))
+        AshStrangler.Estate.Tenancy.problems(Estate.resources(estate), catalog)
 
     report = %{report | problems: problems}
     %{report | problems: problems ++ plugin_problems(report)}

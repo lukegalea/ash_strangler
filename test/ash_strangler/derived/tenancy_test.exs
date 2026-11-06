@@ -16,10 +16,10 @@ defmodule AshStrangler.TenancyTest do
 
   alias AshStrangler.Estate
 
-  @catalog "test/fixtures/snapshot/clinic_union/catalog.json"
-  @keys "AshStrangler.Test.ClinicDerived.Keys"
-  @north "AshStrangler.Test.Clinic.Legacy.NorthVisits"
-  @south "AshStrangler.Test.Clinic.Legacy.SouthVisits"
+  @catalog "test/fixtures/snapshot/tenant_edges/catalog.json"
+  @keys "AshStrangler.Test.TenantEdges.Keys"
+  @north "AshStrangler.Test.TenantEdges.East"
+  @south "AshStrangler.Test.TenantEdges.West"
 
   defp compile(source) do
     {modules, _io} =
@@ -40,7 +40,7 @@ defmodule AshStrangler.TenancyTest do
       use AshStrangler.Union
 
       union do
-        schema "clinic_union"
+        schema "tenant_edges"
         view "visits"
         #{if opts[:tenant] == false, do: "", else: "tenant :clinic"}
 
@@ -52,7 +52,7 @@ defmodule AshStrangler.TenancyTest do
           phase :read_from_legacy
           refused_because "north writes"
           key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}
-          map :patient, from: :patient_name
+          map :patient, from: :patient
           #{north}
         end
 
@@ -61,7 +61,7 @@ defmodule AshStrangler.TenancyTest do
           phase :read_from_legacy
           refused_because "south writes"
           key :id, strategy: {:uuid_v5, namespace: "0a1b2c3d-4e5f-5a6b-8c7d-9e0f1a2b3c4d"}
-          map :patient, from: :name
+          map :patient, from: :patient
           #{south}
         end
 
@@ -81,8 +81,8 @@ defmodule AshStrangler.TenancyTest do
       estate do
         snapshot #{inspect(@catalog)}
         resources [#{inspect(module)}]
-        deferred "clinic_union.north_visits", wave: :later, target: "X", because: "later"
-        deferred "clinic_union.south_visits", wave: :later, target: "X", because: "later"
+        deferred "tenant_edges.east_visits", wave: :later, target: "X", because: "later"
+        deferred "tenant_edges.west_visits", wave: :later, target: "X", because: "later"
       end
     end
     """)
@@ -91,11 +91,23 @@ defmodule AshStrangler.TenancyTest do
     |> Enum.filter(&(&1.check == :tenant))
   end
 
-  defp tenant_of(kind, from \\ :id),
+  defp tenant_of(kind, from \\ :clinic_id),
     do: "tenant_of :clinic, kind: {#{@keys}, #{inspect(kind)}}, from: #{inspect(from)}"
 
   test "a tenant key kind on every legacy branch is closed" do
     assert problems(union(tenant_of(:clinic), tenant_of(:clinic))) == []
+  end
+
+  test "a column that is neither the home part nor behind a validated foreign key is refused" do
+    # the row's own id, and a column with no foreign key to the kind's home
+    for from <- [:id, :other_id] do
+      assert [%{message: message}] =
+               problems(union(tenant_of(:clinic, from), tenant_of(:clinic)))
+
+      assert message =~ "branch :north"
+      assert message =~ "no validated foreign key in the catalog"
+      assert message =~ "tenant_edges.clinics.id"
+    end
   end
 
   test "a union without a tenant column is not tenant-scoped" do
@@ -152,7 +164,57 @@ defmodule AshStrangler.TenancyTest do
   end
 
   test "a derived view's sources are held to the same rule" do
-    assert problems(AshStrangler.Test.ClinicDerived.Properties) == []
+    good =
+      compile("""
+      defmodule #{unique("D")} do
+        use AshStrangler.Derived
+
+        derived do
+          schema "tenant_edges"
+          view "good"
+          twin #{@north}
+          registry #{@keys}
+          kind :property
+          from [:id]
+          tenant :clinic
+
+          column :clinic, :uuid, null?: false
+
+          slot :lead do
+            #{tenant_of(:clinic)}
+          end
+        end
+      end
+      """)
+
+    assert problems(good) == []
+
+    unbacked =
+      compile("""
+      defmodule #{unique("D")} do
+        use AshStrangler.Derived
+
+        derived do
+          schema "tenant_edges"
+          view "unbacked"
+          twin #{@north}
+          registry #{@keys}
+          kind :property
+          from [:id]
+          tenant :clinic
+
+          column :clinic, :uuid, null?: false
+
+          slot :lead do
+            #{tenant_of(:clinic, :id)}
+          end
+        end
+      end
+      """)
+
+    assert [%{message: message}] = problems(unbacked)
+    assert message =~ "source :lead"
+    assert message =~ "no validated foreign key"
 
     module =
       compile("""
@@ -160,9 +222,9 @@ defmodule AshStrangler.TenancyTest do
         use AshStrangler.Derived
 
         derived do
-          schema "clinic_derived"
+          schema "tenant_edges"
           view "bad"
-          twin AshStrangler.Test.ClinicDerived.Legacy.Visits
+          twin #{@north}
           registry #{@keys}
           kind :property
           from [:id]

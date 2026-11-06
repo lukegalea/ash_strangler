@@ -76,9 +76,11 @@ defmodule AshStrangler.Obligations do
   refuse correct mappings.
 
   `:assertion` carries SQL when the obligation could not be decided and has to be
-  measured instead.
+  measured instead. `:shape` says what it returns: `:count` (the default) is one row
+  with one integer, the number of violations; `:rows` is one row per offending value.
   """
   @type finding() :: %{
+          optional(:shape) => :count | :rows,
           obligation: atom(),
           attribute: atom(),
           severity: :error | :warning,
@@ -181,7 +183,8 @@ defmodule AshStrangler.Obligations do
       data -- which is the stronger answer, since it reports what fifteen years
       actually put in the column rather than what the schema permits.
       """,
-      assertion: unknown_values_assertion(entry, context)
+      assertion: unknown_values_assertion(entry, context),
+      shape: :rows
     }
   end
 

@@ -47,6 +47,40 @@ defmodule AshStrangler.EstateObligationsTest.Plugin do
   end
 end
 
+defmodule AshStrangler.EstateObligationsTest.CountPlugin do
+  @moduledoc false
+  @behaviour AshStrangler.Estate.Plugin
+
+  alias AshStrangler.Estate.Obligation
+
+  @impl true
+  def obligations(_estate) do
+    [
+      %Obligation{
+        id: "O-COUNT-37",
+        summary: "a count of 37",
+        denominator: "none",
+        sql: "SELECT 37::bigint",
+        shape: :count
+      },
+      %Obligation{
+        id: "O-COUNT-0",
+        summary: "a count of none",
+        denominator: "none",
+        sql: "SELECT 0::bigint",
+        shape: :count
+      },
+      %Obligation{
+        id: "O-ROWS-ZERO",
+        summary: "the only offending value is 0",
+        denominator: "none",
+        sql: "SELECT DISTINCT s FROM (VALUES (0)) AS t(s)",
+        shape: :rows
+      }
+    ]
+  end
+end
+
 defmodule AshStrangler.EstateObligationsTest.Domain do
   @moduledoc false
   use Ash.Domain, validate_config_inclusion?: false
@@ -146,6 +180,20 @@ defmodule AshStrangler.EstateObligationsTest do
         [id, metadata],
         mode: :savepoint
       )
+
+  describe "a count is not the rows" do
+    test "a count of 37 is 37 violations, and an offending value of 0 is still a violation" do
+      rows =
+        [__MODULE__.CountPlugin]
+        |> clean_estate()
+        |> Obligations.report(repo: TestRepo)
+        |> by_id()
+
+      assert %{"status" => "fail", "violations" => 37} = rows["O-COUNT-37"]
+      assert %{"status" => "pass", "violations" => 0} = rows["O-COUNT-0"]
+      assert %{"status" => "fail", "violations" => 1, "detail" => [[0]]} = rows["O-ROWS-ZERO"]
+    end
+  end
 
   describe "the report over plug-in obligations" do
     setup do
@@ -286,6 +334,11 @@ defmodule AshStrangler.EstateObligationsTest do
       ids = for o <- Obligations.registry(estate([resource])), do: o.id
 
       assert Enum.any?(ids, &String.contains?(&1, "#{inspect(resource)}.email"))
+
+      assert Enum.all?(
+               Obligations.registry(estate([resource])),
+               &(&1.shape == :count)
+             )
 
       insert_legacy_user!(email: "none@example.com")
       report = Obligations.report(estate([resource]), repo: TestRepo)

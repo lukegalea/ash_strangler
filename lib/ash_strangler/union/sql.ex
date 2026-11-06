@@ -221,6 +221,10 @@ defmodule AshStrangler.Union.Sql do
         RAISE EXCEPTION 'strangler: unknown branch %', NEW."__branch";
       END IF;
       new_id := coalesce(NEW.#{key}, gen_random_uuid());
+      IF EXISTS (SELECT 1 FROM #{Info.view_name(union)} WHERE #{key} = new_id) THEN
+        RAISE EXCEPTION 'strangler: key % already names a row of #{Info.view(union)}', new_id
+          USING ERRCODE = 'unique_violation';
+      END IF;
       INSERT INTO #{Info.owned_table(union)} (#{names}) VALUES (new_id#{if values == "", do: "", else: ", " <> values});
       SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{key} = new_id;
       RETURN NEW;
@@ -256,6 +260,7 @@ defmodule AshStrangler.Union.Sql do
         RAISE EXCEPTION 'strangler: unknown branch %', OLD."__branch";
       END IF;
       SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{key} = OLD.#{key};
+      IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Info.view(union)}', OLD.#{key}; END IF;
       RETURN NEW;
     END;
     """
@@ -290,10 +295,17 @@ defmodule AshStrangler.Union.Sql do
     frame = Printer.bare_frame(b.twin)
     kinds = Info.lens_kinds(union, b.name)
 
+    [%{from: key_from}] = b.keys
+    key_columns = List.wrap(key_from)
+
+    # A column that feeds the key is read-only: writing it would re-key the row.
     {writable, read_only} =
       union
       |> Info.columns()
-      |> Enum.split_with(fn c -> kinds[c.name] == :column and simple?(b, c.name) end)
+      |> Enum.split_with(fn c ->
+        kinds[c.name] == :column and simple?(b, c.name) and
+          source_attr(b, c.name) not in key_columns
+      end)
 
     guards =
       Enum.map_join(read_only, "", fn c ->
@@ -310,7 +322,7 @@ defmodule AshStrangler.Union.Sql do
           Enum.map_join(
             writable,
             ", ",
-            &"#{frame.({[], source_attr(b, &1.name)})} = NEW.#{q(&1.name)}"
+            &"#{frame.({[], source_attr(b, &1.name)})} = #{write_value(b, &1)}"
           )
 
         "    UPDATE #{Twin.relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
@@ -318,6 +330,13 @@ defmodule AshStrangler.Union.Sql do
       end
 
     guards <> write
+  end
+
+  # The read casts every column to the declared type; the write casts it back to the
+  # legacy column's own type, so a declared type that differs still assigns.
+  defp write_value(b, column) do
+    attribute = Ash.Resource.Info.attribute(b.twin, source_attr(b, column.name))
+    "CAST(NEW.#{q(column.name)} AS #{Printer.pg_type!(attribute.type)})"
   end
 
   defp delete_branch(_union, %{phase: :read_from_legacy} = b),
