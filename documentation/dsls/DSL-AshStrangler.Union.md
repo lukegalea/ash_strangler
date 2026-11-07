@@ -101,6 +101,7 @@ legacy :north do
   phase :read_from_legacy
   refused_because "the north system writes these rows until its cutover"
   key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}
+  filter expr(not is_nil(patient_name))
   map :patient, from: :patient_name
   unmapped [:notes], because: "the north system keeps no notes"
 end
@@ -121,6 +122,7 @@ end
 | [`twin`](#union-legacy-twin){: #union-legacy-twin .spark-required} | `module` |  | The twin of the branch's legacy relation. |
 | [`phase`](#union-legacy-phase){: #union-legacy-phase .spark-required} | `:read_from_legacy \| :dual_write \| :read_from_new \| :decommissioned` |  |  |
 | [`refused_because`](#union-legacy-refused_because){: #union-legacy-refused_because .spark-required} | `String.t` |  | Why a write to this branch is refused in `:read_from_legacy`. Quoted in the error. |
+| [`filter`](#union-legacy-filter){: #union-legacy-filter } | `any` |  | An expression over the twin's columns; the branch shows only the rows where it is true. The rest of the relation belongs to no branch. |
 
 
 ### union.legacy.key

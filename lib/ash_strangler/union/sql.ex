@@ -141,8 +141,11 @@ defmodule AshStrangler.Union.Sql do
       end)
 
     "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}#{tenant_parts(union, branch, frame)}\n" <>
-      "FROM #{Twin.relation(branch.twin)}"
+      "FROM #{Twin.relation(branch.twin)}#{where(branch, frame)}"
   end
+
+  defp where(%{filter: nil}, _frame), do: ""
+  defp where(%{filter: filter}, frame), do: "\nWHERE " <> Printer.to_sql(filter, ref: frame)
 
   # The tenant key's integer parts as the legacy columns themselves, uncast: a predicate on them pushes
   # into the branch and meets the legacy table's own index (see `AshStrangler.Inversion`).

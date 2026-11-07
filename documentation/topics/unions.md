@@ -57,6 +57,27 @@ List the module under `config :ash_strangler, unions: [Clinic.Visits]` and
 Ash resource at the view with `migrate? false`. The resource does not carry a
 `strangler` block: the view is its table.
 
+## Showing part of a relation
+
+A branch normally shows every row of its twin. A relation that holds several kinds of row
+(a parties table with a `type` column, a table where a null tenant means "not ours") can be
+split across branches, or limited to the rows this resource is about, with a `filter`:
+
+```elixir
+legacy :outside do
+  twin Clinic.Legacy.Contacts
+  phase :read_from_legacy
+  refused_because "the legacy system writes these rows"
+  filter expr(kind == "outside" and not is_nil(clinic_id))
+  key :id, strategy: :identity
+  ...
+end
+```
+
+The filter is an expression over the twin's own columns, printed as the `WHERE` of the
+branch's select. A row it excludes is in no branch of the view. The filter's columns count as
+read by the union in an estate, and a filter over a column the twin lacks fails compilation.
+
 ## What is generated
 
 In order: the owned table (`"<view>_owned"` unless `owned` names one), a key

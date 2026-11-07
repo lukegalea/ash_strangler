@@ -17,6 +17,11 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **Union branch `filter`:** a `legacy` branch takes `filter expr(...)`, an expression over its
+  twin's columns printed as the `WHERE` of the branch's select, so a relation that mixes kinds of
+  row can feed several branches or only the rows a resource is about. The filter's columns are
+  claimed as read in an estate, and `VerifyUnion` refuses a filter over a column the twin lacks.
+
 - **Predicate inversion (L7):** a union with a `tenant` column exposes the tenant
   key's integer parts as hidden last view columns `__tenant_p<i>` (uncast on a
   legacy branch, `NULL` on the owned one). `AshStrangler.Inversion.filter/3` and

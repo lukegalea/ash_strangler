@@ -136,7 +136,14 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
           []
       end)
 
+    filter =
+      case branch.filter do
+        nil -> []
+        expression -> missing(branch.twin, for({[], c} <- Expr.refs(expression), do: c), "filter")
+      end
+
     List.flatten([
+      filter,
       for(a <- answered -- columns, do: "#{inspect(a)} is not a declared column"),
       for(
         c <- columns -- answered,

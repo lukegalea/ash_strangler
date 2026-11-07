@@ -131,6 +131,7 @@ defmodule AshStrangler.Union.Dsl do
         phase :read_from_legacy
         refused_because "the north system writes these rows until its cutover"
         key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}
+        filter expr(not is_nil(patient_name))
         map :patient, from: :patient_name
         unmapped [:notes], because: "the north system keeps no notes"
       end
@@ -138,9 +139,17 @@ defmodule AshStrangler.Union.Dsl do
     ],
     target: Legacy,
     args: [:name],
+    imports: [Ash.Expr, Combinators],
     entities: [keys: [@key], mappings: [@map, @constant, @tenant_of, @unmapped]],
     schema: [
       name: [type: :atom, required: true],
+      filter: [
+        type: {:custom, Combinators, :expression, []},
+        doc: """
+        An expression over the twin's columns; the branch shows only the rows where it is
+        true. The rest of the relation belongs to no branch.
+        """
+      ],
       twin: [type: :module, required: true, doc: "The twin of the branch's legacy relation."],
       phase: [type: {:one_of, @phases}, required: true],
       refused_because: [

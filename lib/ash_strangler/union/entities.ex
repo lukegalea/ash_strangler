@@ -24,6 +24,7 @@ defmodule AshStrangler.Union.Legacy do
     :twin,
     :phase,
     :refused_because,
+    :filter,
     :__spark_metadata__,
     keys: [],
     mappings: []
