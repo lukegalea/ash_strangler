@@ -71,6 +71,11 @@ must not collide: each branch derives its own with `uuid_v5` (its own
 namespace) or `uuid_v8` (its own kind), and the compiler refuses two branches
 that share one. The owned table's keys default to `gen_random_uuid()`.
 
+A union with a `tenant` column has one more hidden column per part of the
+tenant key, `__tenant_p0`, `__tenant_p1`, ..., last in the view: the legacy
+integers themselves, uncast (`NULL` on the owned branch). See "Tenant reads that
+use the legacy index" below.
+
 ## Writes
 
 | Write | `:read_from_legacy` | `:dual_write` |
@@ -124,6 +129,28 @@ of every column on a branch: `:column`, `:expression`, `:constant`, `:null`,
 (`:column`, `:expression`, `:key`). A host check that a dimension is
 always derived from the twin on every legacy branch reads exactly this, and
 `phase/2`, `resource_phase/1` and `live_branches/1` give the phases.
+
+## Tenant reads that use the legacy index
+
+`tenant = $1` on a union evaluates the packing expression for every legacy row.
+Where you cannot add an expression index to the legacy tables, that is a
+sequential scan. The packing is a bijection, so `AshStrangler.Inversion` decodes
+`$1` once, in Elixir, and compares the hidden `__tenant_p<i>` columns instead.
+The planner pushes that into each branch of the `UNION ALL`, where it meets the
+index the legacy table already has on those columns.
+
+    AshStrangler.Inversion.where_sql(MyApp.Visits, tenant_id)
+    #=> (("__branch" = 'north' AND "__tenant_p0" = 7) OR ("__branch" = 'native' AND "tenant" = '...'))
+
+    Ash.Query.filter(query, ^AshStrangler.Inversion.filter(MyApp.Visits, MyApp.Visit, tenant_id))
+
+`filter/3` needs the resource to declare `__branch` and `__tenant_p<i>` as
+attributes. Each arm names its branch with a constant, so the other branches'
+arms disappear from each subquery. The owned branch keeps the original
+predicate. A branch whose key kind does not decode `$1` gets no arm. Give a tenant
+part the same integer type on every branch: if they differ the view widens the
+column and the narrower branch is cast, which hides its index. Derived views are
+not inverted: a `DISTINCT ON` sits between the predicate and the table.
 
 ## The estate check E8
 

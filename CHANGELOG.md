@@ -17,6 +17,14 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **Predicate inversion (L7):** a union with a `tenant` column exposes the tenant
+  key's integer parts as hidden last view columns `__tenant_p<i>` (uncast on a
+  legacy branch, `NULL` on the owned one). `AshStrangler.Inversion.filter/3` and
+  `where_sql/2` rewrite `tenant = $1` into per-branch comparisons on them, so the
+  legacy table's existing index serves the read instead of a scan evaluating the
+  packing expression. The owned branch keeps the original predicate, and a branch
+  whose kind does not decode the key contributes nothing. Plan-shape tests on
+  PostgreSQL 18.
 - **Derived rows:** `use AshStrangler.Derived` presents zero or more canonical
   rows per row of one legacy relation as a read-only view: `slot`s (a fixed
   place in the legacy row), `synthesized` rows (computed values) and

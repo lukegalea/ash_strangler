@@ -123,7 +123,10 @@ defmodule AshStrangler.Union.Sql do
   defp owned_select(union) do
     columns = Enum.map_join(Info.columns(union), ", ", &q(&1.name))
 
-    "SELECT #{q(Info.key(union))}, #{Printer.literal(to_string(Info.owned(union).name))}::text AS \"__branch\", #{columns}\n" <>
+    # Untyped NULLs: the union takes each part's type from the legacy branches, so no branch is cast.
+    hidden = Enum.map(Info.tenant_part_columns(union), &", NULL AS #{q(&1)}")
+
+    "SELECT #{q(Info.key(union))}, #{Printer.literal(to_string(Info.owned(union).name))}::text AS \"__branch\", #{columns}#{hidden}\n" <>
       "FROM #{Info.owned_table(union)}"
   end
 
@@ -137,8 +140,19 @@ defmodule AshStrangler.Union.Sql do
         "CAST(#{read_sql(branch, c.name, frame)} AS #{pg(c)}) AS #{q(c.name)}"
       end)
 
-    "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}\n" <>
+    "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}#{tenant_parts(union, branch, frame)}\n" <>
       "FROM #{Twin.relation(branch.twin)}"
+  end
+
+  # The tenant key's integer parts as the legacy columns themselves, uncast: a predicate on them pushes
+  # into the branch and meets the legacy table's own index (see `AshStrangler.Inversion`).
+  defp tenant_parts(union, branch, frame) do
+    key = Info.tenant_key(branch, Info.tenant(union))
+
+    Enum.map(Enum.with_index(Info.tenant_part_columns(union)), fn {name, index} ->
+      column = key && Enum.at(TenantKey.columns(key), index)
+      ",\n  #{if column, do: frame.({[], column}), else: "NULL"} AS #{q(name)}"
+    end)
   end
 
   defp read_sql(branch, column, frame) do
