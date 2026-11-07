@@ -22,30 +22,53 @@ defmodule AshStrangler.InversionFixture.Legacy do
   end
 end
 
-for {module, table, column} <- [{"NorthItems", "north_items", :org_id}, {"SouthItems", "south_items", :region_id}] do
-  defmodule Module.concat(AshStrangler.InversionFixture.Legacy, module) do
-    @moduledoc false
-    use Ash.Resource,
-      domain: AshStrangler.InversionFixture.Legacy,
-      data_layer: AshPostgres.DataLayer,
-      extensions: [AshStrangler.Twin]
+defmodule AshStrangler.InversionFixture.Legacy.NorthItems do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshStrangler.InversionFixture.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
 
-    postgres do
-      table unquote(table)
-      schema "inv_fx"
-      repo AshStrangler.TestRepo
-      migrate? false
-    end
+  postgres do
+    table "north_items"
+    schema "inv_fx"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
 
-    attributes do
-      attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
-      attribute :label, :string, public?: true
-      attribute unquote(column), :integer, public?: true
-    end
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :label, :string, public?: true
+    attribute :org_id, :integer, public?: true
+  end
 
-    actions do
-      defaults [:read]
-    end
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.InversionFixture.Legacy.SouthItems do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshStrangler.InversionFixture.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "south_items"
+    schema "inv_fx"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :label, :string, public?: true
+    attribute :region_id, :integer, public?: true
+  end
+
+  actions do
+    defaults [:read]
   end
 end
 
@@ -119,6 +142,7 @@ defmodule AshStrangler.InversionTest do
 
   alias AshStrangler.Inversion
   alias AshStrangler.InversionFixture.{Item, Items, Keys}
+  alias AshStrangler.KeyKinds
 
   require Ash.Query
 
@@ -160,7 +184,7 @@ defmodule AshStrangler.InversionTest do
     :ok
   end
 
-  defp org(n), do: AshStrangler.KeyKinds.encode(Keys, :org, [n])
+  defp org(n), do: KeyKinds.encode(Keys, :org, [n])
 
   defp plan(where) do
     [[[%{"Plan" => plan}]]] =
@@ -174,8 +198,9 @@ defmodule AshStrangler.InversionTest do
 
   defp nodes(node), do: [node]
 
-  defp scans(nodes, relation, types),
-    do: for(%{"Relation Name" => ^relation, "Node Type" => type} <- nodes, type in types, do: type)
+  defp scans(nodes, relation, types) do
+    for %{"Relation Name" => ^relation, "Node Type" => type} <- nodes, type in types, do: type
+  end
 
   @seq ["Seq Scan"]
   @indexed ["Index Scan", "Bitmap Heap Scan", "Index Only Scan"]
@@ -198,19 +223,21 @@ defmodule AshStrangler.InversionTest do
     id = org(7)
 
     plain = q!(~s[SELECT id FROM inv_fx.items WHERE "tenant" = '#{id}' ORDER BY id])
-    inverted = q!("SELECT id FROM inv_fx.items WHERE #{Inversion.where_sql(Items, id)} ORDER BY id")
+    where = Inversion.where_sql(Items, id)
+    inverted = q!("SELECT id FROM inv_fx.items WHERE #{where} ORDER BY id")
 
     assert plain == inverted
     assert length(plain) == div(@rows, 100) + 1
   end
 
   test "the owned branch keeps the original predicate" do
-    inverted = q!("SELECT label FROM inv_fx.items WHERE #{Inversion.where_sql(Items, org(7))} AND label LIKE 'native%'")
+    where = Inversion.where_sql(Items, org(7))
+    inverted = q!("SELECT label FROM inv_fx.items WHERE #{where} AND label LIKE 'native%'")
     assert inverted == [["native a"]]
   end
 
   test "a key of another kind or estate, or no key at all, matches only owned rows" do
-    region = AshStrangler.KeyKinds.encode(Keys, :region, [7])
+    region = KeyKinds.encode(Keys, :region, [7])
 
     assert [{:south, [7]}, {:native, :original}] = Inversion.arms(Items, region)
     assert [{:native, :original}] = Inversion.arms(Items, Ecto.UUID.generate())
@@ -227,11 +254,19 @@ defmodule AshStrangler.InversionTest do
       |> Ash.read!()
 
     plain = q!(~s[SELECT id FROM inv_fx.items WHERE "tenant" = '#{id}'])
-    assert rows |> Enum.map(& &1.id) |> Enum.sort() == plain |> Enum.map(&Ecto.UUID.load!(hd(&1))) |> Enum.sort()
+    expected = plain |> Enum.map(&Ecto.UUID.load!(hd(&1))) |> Enum.sort()
+    assert rows |> Enum.map(& &1.id) |> Enum.sort() == expected
   end
 
   test "the hidden columns are the last ones, one per key part" do
     assert Items |> AshStrangler.Union.Info.tenant_part_columns() == ["__tenant_p0"]
-    assert [["__tenant_p0"]] = q!("SELECT column_name FROM information_schema.columns WHERE table_schema = 'inv_fx' AND table_name = 'items' ORDER BY ordinal_position DESC LIMIT 1")
+
+    last = """
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'inv_fx' AND table_name = 'items'
+    ORDER BY ordinal_position DESC LIMIT 1
+    """
+
+    assert [["__tenant_p0"]] = q!(last)
   end
 end

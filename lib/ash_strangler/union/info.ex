@@ -41,18 +41,20 @@ defmodule AshStrangler.Union.Info do
   """
   @spec tenant_part_columns(module() | Spark.Dsl.t()) :: [String.t()]
   def tenant_part_columns(union) do
-    with tenant when not is_nil(tenant) <- tenant(union) do
-      count =
-        union
-        |> branches()
-        |> Enum.map(&tenant_key(&1, tenant))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.map(&length(TenantKey.columns(&1)))
-        |> Enum.max(fn -> 0 end)
+    case tenant(union) do
+      nil ->
+        []
 
-      Enum.map(0..(count - 1)//1, &"__tenant_p#{&1}")
-    else
-      _ -> []
+      tenant ->
+        count =
+          union
+          |> branches()
+          |> Enum.map(&tenant_key(&1, tenant))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.map(&length(TenantKey.columns(&1)))
+          |> Enum.max(fn -> 0 end)
+
+        Enum.map(0..(count - 1)//1, &"__tenant_p#{&1}")
     end
   end
 

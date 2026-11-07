@@ -33,10 +33,10 @@ defmodule AshStrangler.Inversion do
   union view widens the column and the branch with the narrower type is cast, which hides its index.
   """
 
+  alias Ash.Query.{BooleanExpression, Operator, Ref}
   alias AshStrangler.KeyKinds
   alias AshStrangler.Sql.Printer
   alias AshStrangler.Union.{Info, TenantKey}
-  alias Ash.Query.{BooleanExpression, Operator, Ref}
 
   @typedoc "One arm: the branch it belongs to, and the integers to compare, or `:original` for the owned branch."
   @type arm :: {branch :: atom(), [integer()] | :original}
@@ -116,11 +116,11 @@ defmodule AshStrangler.Inversion do
   defp all(operators), do: Enum.reduce(operators, &BooleanExpression.optimized_new(:and, &2, &1))
 
   defp eq(resource, name, value) do
-    ref = %Ref{
-      relationship_path: [],
-      resource: resource,
-      attribute: Ash.Resource.Info.attribute(resource, name) || raise(ArgumentError, "#{inspect(resource)} has no attribute #{inspect(name)}")
-    }
+    attribute =
+      Ash.Resource.Info.attribute(resource, name) ||
+        raise ArgumentError, "#{inspect(resource)} has no attribute #{inspect(name)}"
+
+    ref = %Ref{relationship_path: [], resource: resource, attribute: attribute}
 
     {:ok, operator} = Operator.new(Operator.Eq, ref, value)
     operator
