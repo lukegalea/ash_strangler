@@ -34,6 +34,33 @@ defmodule AshStrangler.Union.Info do
   @spec tenant(module() | Spark.Dsl.t()) :: atom() | nil
   def tenant(union), do: Spark.Dsl.Extension.get_opt(union, [:union], :tenant, nil)
 
+  @doc """
+  The hidden view columns that carry the tenant key's integer parts, one per part, or `[]` when the
+  union declares no tenant. They are the last columns of the view; `AshStrangler.Inversion` filters
+  on them.
+  """
+  @spec tenant_part_columns(module() | Spark.Dsl.t()) :: [String.t()]
+  def tenant_part_columns(union) do
+    with tenant when not is_nil(tenant) <- tenant(union) do
+      count =
+        union
+        |> branches()
+        |> Enum.map(&tenant_key(&1, tenant))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(&length(TenantKey.columns(&1)))
+        |> Enum.max(fn -> 0 end)
+
+      Enum.map(0..(count - 1)//1, &"__tenant_p#{&1}")
+    else
+      _ -> []
+    end
+  end
+
+  @doc "The `tenant_of` entry of `branch` for the tenant column `attribute`, or `nil`."
+  @spec tenant_key(Legacy.t(), atom() | nil) :: TenantKey.t() | nil
+  def tenant_key(%Legacy{mappings: mappings}, attribute),
+    do: Enum.find(mappings, &match?(%TenantKey{attribute: ^attribute}, &1))
+
   @doc "The canonical key column."
   @spec key(module() | Spark.Dsl.t()) :: atom()
   def key(union), do: Spark.Dsl.Extension.get_opt(union, [:union], :key, :id)

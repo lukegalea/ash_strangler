@@ -504,6 +504,10 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   `tenant?: true`, `from` is the kind's own columns or has a validated foreign key
   onto them, and the column is `null?: false`. Estate check E5 refuses anything
   else.
+- Filter a union by tenant with `AshStrangler.Inversion.filter/3` (or `where_sql/2`),
+  not `tenant == ^id`: it decodes the key once and compares the legacy integers
+  (the view's `__tenant_p<i>` columns), so the legacy table's own index serves it.
+  The resource needs `__branch` and `__tenant_p<i>` attributes.
 - Measure what a schema can't prove with `mix ash_strangler.check --estate Estate
   --report FILE`. Bring your own obligations from a plug-in's `obligations/1`
   (an `AshStrangler.Estate.Obligation`: a query, its denominator and a severity).
