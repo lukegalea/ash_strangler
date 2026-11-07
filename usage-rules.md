@@ -478,6 +478,8 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   `AshStrangler.Error.BranchWriteRefused`, with the declared reason) and carried
   to the legacy table in `:dual_write`. Give every branch its own key namespace.
 - Each branch answers every column; `unmapped` reads NULL.
+- A branch shows every row of its twin unless it has a `filter expr(...)` over the twin's columns;
+  rows the filter excludes belong to no branch.
 - Host checks read `AshStrangler.Union.Info` (`lens_kinds/2`, `phase/2`), not the
   generated SQL.
 - Put a union in an estate's `resources` and check E8 holds its phases to the

@@ -157,6 +157,16 @@ defmodule AshStrangler.UnionVerifierTest do
              "map reads :nope"
   end
 
+  test "a filter that reads a column the twin does not have" do
+    assert rejection(valid(north: inside(@north, "filter expr(ghost == 1)"))) =~
+             "branch :north: filter reads :ghost, which AshStrangler.Test.Clinic.Legacy.NorthVisits does not have"
+
+    assert :ok =
+             VerifyUnion.verify(
+               probe(valid(north: inside(@north, "filter expr(seen_on > ^~D[2026-01-01])"))).spark_dsl_config()
+             )
+  end
+
   test "keys: none, two, an unsupported strategy, a key column the twin lacks" do
     key = ~S|key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}|
 

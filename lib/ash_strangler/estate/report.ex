@@ -381,12 +381,18 @@ defmodule AshStrangler.Estate.Report do
     {claims, [], missing_columns(claims, catalog, derived)}
   end
 
-  defp branch_reads(%{twin: twin, keys: keys, mappings: mappings}) do
+  defp branch_reads(%{twin: twin, keys: keys, mappings: mappings} = branch) do
     key_attrs = Enum.flat_map(keys, &AshStrangler.Key.columns/1)
 
     mapped = Enum.flat_map(mappings, &mapping_reads/1)
 
-    for attribute <- Enum.uniq(key_attrs ++ mapped), do: {attribute, twin}
+    filtered =
+      case Map.get(branch, :filter) do
+        nil -> []
+        filter -> for {[], attribute} <- AshStrangler.Expr.refs(filter), do: attribute
+      end
+
+    for attribute <- Enum.uniq(key_attrs ++ mapped ++ filtered), do: {attribute, twin}
   end
 
   defp mapping_reads(%AshStrangler.Union.TenantKey{} = key),
