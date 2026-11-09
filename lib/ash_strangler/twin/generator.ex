@@ -7,7 +7,9 @@ defmodule AshStrangler.Twin.Generator do
   Writes a twin's source from a catalog relation.
 
   `mix ash_strangler.gen.twin` places the file and wires the domain; this
-  decides what the file says. It reads only an `AshStrangler.Snapshot.Catalog`
+  decides what the file says. What it decides about the *relation* (the columns
+  and their types, the identities) is `AshStrangler.Twin.Introspection`, which
+  `mix ash_strangler.check` calls too. It reads only an `AshStrangler.Snapshot.Catalog`
   map, whether that came from `catalog.json` (`--from-snapshot`) or from
   introspecting a live database, so both modes write the same twin for the same
   schema, and `AshStrangler.Verifiers.VerifySnapshot` passes on what it writes.
@@ -27,7 +29,7 @@ defmodule AshStrangler.Twin.Generator do
   Secret columns are left out, with a comment saying so.
   """
 
-  alias AshStrangler.Snapshot.Types
+  alias AshStrangler.Twin.Introspection
 
   @typedoc """
   What to generate:
@@ -63,7 +65,11 @@ defmodule AshStrangler.Twin.Generator do
   def render(spec) do
     relation = Map.fetch!(spec.catalog["relations"], spec.relation)
     {schema, table} = split(spec.relation)
-    columns = columns(relation, spec)
+
+    columns =
+      relation
+      |> Introspection.columns(spec.catalog, spec.secrets)
+      |> Enum.map(&atomize_name/1)
 
     """
     defmodule #{inspect(spec.module)} do
@@ -93,76 +99,28 @@ defmodule AshStrangler.Twin.Generator do
     """
   end
 
-  # --- columns -----------------------------------------------------------
-
-  defp columns(relation, spec) do
-    primary_key = (relation["primary_key"] || %{})["columns"] || []
-
-    Enum.map(relation["columns"], fn column ->
-      name = column["name"]
-
-      base = %{
-        column: name,
-        name: attribute_name(name),
-        allow_nil?: not column["not_null"],
-        primary_key?: name in primary_key,
-        type: nil,
-        one_of: nil,
-        note: nil
-      }
-
-      cond do
-        name in spec.secrets ->
-          %{
-            base
-            | note: "`#{name}` is declared secret (`twin do secrets ... end`) and is not carried."
-          }
-
-        is_nil(base.name) ->
-          %{base | note: unnameable_note(name)}
-
-        true ->
-          case Types.for_column(column, relation, spec.catalog) do
-            {:ok, typed} -> Map.merge(base, typed)
-            {:omit, note} -> %{base | note: note}
-          end
-      end
-    end)
-  end
-
-  defp unnameable_note(column) do
-    """
-    `#{column}` has no name Elixir will accept as an attribute, so it is not
-    declared here. Ash's `source:` carries a column whose name merely differs from
-    its attribute's -- it cannot supply a name where none can be formed.
-    """
-  end
-
-  # A column name Elixir would not want as an atom keeps its real name in Ash's
-  # `source:`, which is what `AshStrangler.Twin.column!/2` reads.
-  defp attribute_name(column) do
-    underscored = Macro.underscore(column)
-
-    if underscored =~ ~r/^[a-z][a-z0-9_]*$/, do: String.to_atom(underscored), else: nil
-  end
-
   # --- identities and relationships --------------------------------------
 
-  # The primary key is skipped: it is `primary_key? true` already, and
-  # `AshStrangler.Twin.unique_column_sets/1` folds it in.
   defp identities(relation, columns) do
-    declared = declared(columns)
-    primary_key = (relation["primary_key"] || %{})["columns"]
+    for %{name: name, keys: keys} <- Introspection.identities(relation, columns),
+        do: %{name: String.to_atom(name), keys: keys}
+  end
 
-    for %{"name" => name, "columns" => keys, "predicate" => nil} <- relation["unique"],
-        keys != primary_key,
-        Enum.all?(keys, &Map.has_key?(declared, &1)) do
-      %{name: String.to_atom(name), keys: Enum.map(keys, &declared[&1])}
+  # The one place a name from the catalog becomes an atom: here, at codegen, over
+  # a bounded read. `AshStrangler.Twin.Introspection` hands names over as strings
+  # so that `mix ash_strangler.check` never makes one.
+  defp atomize_name(%{name: nil} = column), do: column
+  defp atomize_name(%{name: name} = column), do: %{column | name: String.to_atom(name)}
+
+  defp attribute_atom(column) do
+    case Introspection.attribute_name(column) do
+      nil -> nil
+      name -> String.to_atom(name)
     end
   end
 
   defp relationships(relation, columns, spec) do
-    declared = declared(columns)
+    declared = Introspection.declared(columns)
 
     for %{
           "columns" => [source],
@@ -171,7 +129,7 @@ defmodule AshStrangler.Twin.Generator do
           relation["foreign_keys"],
         Map.has_key?(declared, source),
         module = spec.destination.(target),
-        destination_name = attribute_name(destination) do
+        destination_name = attribute_atom(destination) do
       %{
         name: relationship_name(declared[source], target),
         destination: module,
@@ -179,13 +137,6 @@ defmodule AshStrangler.Twin.Generator do
         destination_attribute: destination_name
       }
     end
-  end
-
-  defp declared(columns) do
-    for %{type: type, name: name, column: column} <- columns,
-        type != nil,
-        into: %{},
-        do: {column, name}
   end
 
   # Named from the source attribute, not the column: `clientPartyId` and
@@ -196,7 +147,7 @@ defmodule AshStrangler.Twin.Generator do
     source = Atom.to_string(source_attribute)
 
     case String.replace_suffix(source, "_id", "") do
-      ^source -> attribute_name(table)
+      ^source -> attribute_atom(table)
       stripped -> String.to_atom(stripped)
     end
   end

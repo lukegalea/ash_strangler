@@ -1134,7 +1134,7 @@ validate the *current state*, never the *transition*. Whether `:read_from_new` i
 safe depends on whether the backfill finished and the reconciler is clean — facts
 about data, not about code.
 
-They also cannot see the database. Six things are therefore measured rather than
+They also cannot see the database. Nine things are therefore measured rather than
 proven, and `mix ash_strangler.check` is where they happen:
 
 | Measured | Why it cannot be proven |
@@ -1144,6 +1144,8 @@ proven, and `mix ash_strangler.check` is where they happen:
 | a cast | which values will not convert depends on what is stored |
 | every obligation carrying an assertion | the value space had no declared bound, or a `fragment` blocked evaluation |
 | twin freshness, against `information_schema.columns` | a twin is a snapshot |
+| twin columns, against what `gen.twin` would write today | a label added to an enum or `CHECK` after the twin was written is a value `GetTotal` was proven without; a column whose type changed reads as the wrong type |
+| column types, the type each mapping yields against the type its attribute stores (a warning) | whether a cast is needed depends on the column, and the twin can be stale about it. A pass does not show that every row casts |
 | twin identities, against `pg_index` | only `pg_index` knows what is enforced |
 | join fan-out | a `has_one` the database does not enforce as unique returns several rows |
 

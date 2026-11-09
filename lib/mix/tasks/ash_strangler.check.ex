@@ -47,6 +47,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
   | a cast | the mapping projected over the twin, and the rows that will not cast |
   | every `AshStrangler.Obligations` assertion | run verbatim, result reported |
   | twin freshness | the twin's columns against `information_schema.columns` |
+  | twin columns | each column the twin declares against what `gen.twin` would write for it today: a widened `one_of` fails, a changed coarse type fails |
+  | column types | the type each mapping yields against the type its attribute stores, with no row read |
   | twin identities | the twin's unique sets against `pg_index` |
   | a relationship-derived join | row counts through the join, for fan-out |
   | a `ledger?` source | unprocessed `legacy_change_events` rows per relation |
@@ -69,6 +71,44 @@ defmodule Mix.Tasks.AshStrangler.Check do
   is not a unique `tenant_id`. Only an index's key columns count, never its
   `INCLUDE` columns.
 
+  ## What the twin is held to
+
+  Freshness answers whether the twin has the right *columns*. **Twin columns**
+  answers whether the columns it has still mean what it says. For every column the
+  twin declares, `AshStrangler.Twin.Introspection` re-derives what
+  `mix ash_strangler.gen.twin` would write against the live catalog (read through
+  `pg_catalog`, by schema and name, so a relation that has gone is an absent
+  relation and never a raised cast), and the two are compared:
+
+  | The catalog now says | Result |
+  |---|---|
+  | an enum label or `CHECK` value the twin's `one_of` lacks | **FAIL**, naming the mappings that read the column |
+  | a different coarse Ash type | **FAIL** |
+  | the twin's `one_of` lists a value the column no longer admits | warn |
+  | a `one_of` on the twin, and no value set in the catalog | warn |
+  | `allow_nil?` differs | warn: the null checks count the NULLs the rows really hold |
+
+  The widened set is the finding that matters. With a `one_of` present and every
+  value decoded, `AshStrangler.Obligations` proves `GetTotal` at compile time and
+  emits no assertion, so a label added to the enum afterwards is a value that
+  nothing re-checks. Value sets are compared as sets. Types are compared coarsely
+  (`int4` and `int8` are one integer, `timestamp` and `timestamptz` are not),
+  and `citext` is not `text`.
+
+  A hand-written twin is accepted, so only what the twin declares is compared,
+  under the column name its `source:` gives. A column it leaves out is the
+  freshness check's to report, and a value set it does not state is not asked for.
+  A relation that is absent stays a **FAIL** of the freshness check and adds
+  nothing here.
+
+  **Column types** is a warning-level step per resource. For each projection the
+  cast check runs, it asks Postgres for the type of the expression without
+  executing it, and compares with what the attribute stores. A Postgres enum and a
+  type with no Ash type are reported as such, never read as a match. Typmods
+  (`numeric(10, 2)`, `varchar(20)`) are not compared. **A pass is not a statement
+  about the rows**: a matching type does not show that every row casts, and that
+  is a question about data the cast check puts to the data.
+
   ## The estate obligation report
 
   `--estate [Estate ...]` measures the obligations of an estate
@@ -82,7 +122,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   ## Exit code
 
-  Non-zero when an assertion fails, so the twin-staleness diff can gate CI —
+  Non-zero when an assertion fails (a widened value set and a changed coarse type
+  are assertions; the rest of the twin comparison, and the column types, are
+  warnings), so the twin-staleness diff can gate CI —
   without that the typed layer inherits exactly the staleness problem it was built
   to remove. Warnings do not fail: guard overlap that holds for no row the data
   contains is a warning by construction, and refusing on it would refuse correct
@@ -130,6 +172,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   alias AshStrangler.{Info, Lens, Mechanism, Obligations, Sql.Ledger, Twin}
   alias AshStrangler.Sql.{Printer, View}
+  alias AshStrangler.Twin.Introspection
 
   @requirements ["app.config"]
 
@@ -504,6 +547,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
       &null_checks(repo, &1),
       &identity_checks(repo, &1),
       &cast_check(repo, &1),
+      &type_checks(repo, &1),
       &obligation_checks(repo, &1),
       &fan_out_check(repo, &1)
     ]
@@ -750,6 +794,137 @@ defmodule Mix.Tasks.AshStrangler.Check do
     key ++ mapped
   end
 
+  # --- column types ------------------------------------------------------
+
+  # The type each mapping *yields*, against the type its attribute stores. The
+  # cast check above proves every row projects; it cannot say that what comes out
+  # is what the attribute expects, because Postgres is happy to project an `int4`
+  # where Ash will read a string. A twin whose column changed type is the usual
+  # way to get there: the mapping carries no cast, because the twin said the two
+  # were already the same.
+  #
+  # The type is read, not computed from rows. `ON false` joins nothing, so the
+  # projection is parsed and typed and never executed -- a row that cannot be cast
+  # makes no difference to this question, and the cast check is where it fails.
+  # `pg_typeof` of the (NULL) joined column is the type of the expression.
+  @projected_type """
+  SELECT t.typname, t.typtype::text, t.typcategory::text, e.typname, b.typname
+    FROM (SELECT 1) one
+    LEFT JOIN (SELECT %EXPRESSION% AS attr FROM %FROM%) p ON false
+    JOIN pg_type t ON t.oid = pg_typeof(p.attr)::oid
+    LEFT JOIN pg_type e ON t.typcategory = 'A' AND e.oid = t.typelem
+    LEFT JOIN pg_type b ON t.typtype = 'd' AND b.oid = t.typbasetype
+  """
+
+  # A warning, never a failure: a matching type is not a statement about any row,
+  # a typmod (`numeric(10, 2)`, `varchar(20)`) is not compared, and a mapping that
+  # reads a Postgres enum or a type with no Ash type cannot be compared at all --
+  # which is reported rather than passed.
+  defp type_checks(repo, resource) do
+    from = View.from_clause(resource)
+
+    resource
+    |> projections()
+    |> Enum.reduce_while({0, @none}, fn {attribute, expression}, {matched, total} ->
+      sql =
+        @projected_type
+        |> String.replace("%EXPRESSION%", expression)
+        |> String.replace("%FROM%", from)
+
+      case run_query(repo, sql, []) do
+        {:ok, %{rows: [row]}} ->
+          case compare_projected(resource, attribute, row) do
+            :ok -> {:cont, {matched + 1, total}}
+            {:warn, detail} -> {:cont, {matched, tally([total, type_warning(attribute, detail)])}}
+          end
+
+        {:ok, _other} ->
+          {:halt,
+           {matched, tally([total, emit(@unrun, "column types", "the query returned no type")])}}
+
+        {:error, error} ->
+          {:halt,
+           {matched, tally([total, emit(@unrun, "column types", Exception.message(error))])}}
+      end
+    end)
+    |> then(fn {matched, total} ->
+      if matched > 0 do
+        tally([
+          total,
+          emit(
+            @ok,
+            "column types",
+            "#{matched} projection(s) yield the type their attribute stores. Typmods are not " <>
+              "compared, and a matching type does not show that every row casts: the cast " <>
+              "check does that."
+          )
+        ])
+      else
+        total
+      end
+    end)
+  end
+
+  defp type_warning(attribute, detail), do: emit(@warn, "column types  #{attribute}", detail)
+
+  defp compare_projected(resource, attribute, [typname, typtype, category, element, base]) do
+    case {Ash.Resource.Info.attribute(resource, attribute),
+          yielded(typname, typtype, category, element, base)} do
+      {nil, _yielded} ->
+        :ok
+
+      {_attribute, {:enum, name}} ->
+        {:warn,
+         "the mapping yields the Postgres enum `#{name}`, which is not compared with the " <>
+           "attribute's type: its labels are a value set, and the twin column check above " <>
+           "holds the twin's `one_of` to them."}
+
+      {attribute, {:unknown, name}} ->
+        {:warn,
+         "the mapping yields `#{name}`, which has no Ash type, so it was not compared with " <>
+           "what the attribute stores (#{inspect(Introspection.coarse(attribute.type, attribute.constraints))}). " <>
+           "Check the cast by hand."}
+
+      {attribute, {:ok, name, ash_type}} ->
+        stored = Introspection.coarse(attribute.type, attribute.constraints)
+        yielded = Introspection.coarse(ash_type)
+
+        if stored == yielded do
+          :ok
+        else
+          {:warn,
+           "the mapping yields `#{name}` (#{inspect(yielded)}); the attribute stores " <>
+             "#{inspect(stored)}. Rows will not read back as the attribute expects. " <>
+             "Typmods are not compared."}
+        end
+    end
+  end
+
+  # An enum is not a type this table can name, a domain is the type it is over, an
+  # array is its element's, and a pseudo-type (`unknown`, `record`) is not a type
+  # a column can be compared on.
+  defp yielded(name, "e", _category, _element, _base), do: {:enum, name}
+
+  defp yielded(_name, "d", category, element, base) when is_binary(base),
+    do: yielded(base, "b", category, element, nil)
+
+  defp yielded(name, "d", _category, _element, _base), do: {:unknown, name}
+  defp yielded(name, "p", _category, _element, _base), do: {:unknown, name}
+
+  defp yielded(name, _typtype, "A", element, _base) do
+    case element && Introspection.pg_type(element) do
+      nil -> {:unknown, name}
+      type -> {:ok, name, {:array, type}}
+    end
+  end
+
+  defp yielded(name, _typtype, _category, _element, _base) do
+    case Introspection.pg_type(name) do
+      nil -> {:unknown, name}
+      type -> {:ok, name, type}
+    end
+  end
+
   # --- the obligations that could not be decided -------------------------
 
   defp obligation_checks(repo, resource) do
@@ -848,18 +1023,34 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # --- the twins themselves ----------------------------------------------
 
   defp measure_twins(repo, resources) do
-    resources
-    |> Enum.map(&Info.twin/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-    |> Enum.sort_by(&inspect/1)
-    |> Enum.map(&measure_twin(repo, &1))
+    twins =
+      resources
+      |> Enum.map(&Info.twin/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.sort_by(&inspect/1)
+
+    # One catalog read for every twin on the repo, not one per twin: the catalog
+    # is read by schema.
+    catalog = read_catalog(repo, twins)
+
+    Enum.map(twins, &measure_twin(repo, &1, resources, catalog))
   end
 
-  defp measure_twin(repo, twin) do
+  defp read_catalog(repo, twins) do
+    schemas = twins |> Enum.map(&(&1 |> relation_parts() |> elem(0))) |> Enum.uniq()
+
+    Introspection.read(&run_query(repo, &1, &2), schemas)
+  end
+
+  defp measure_twin(repo, twin, resources, catalog) do
     Mix.shell().info("\n  #{inspect(twin)} against #{Twin.relation(twin)}")
 
-    tally([twin_freshness(repo, twin), twin_identities(repo, twin)])
+    tally([
+      twin_freshness(repo, twin),
+      twin_identities(repo, twin),
+      twin_columns(twin, resources, catalog)
+    ])
   end
 
   @information_schema_columns """
@@ -922,6 +1113,211 @@ defmodule Mix.Tasks.AshStrangler.Check do
       true ->
         emit(@ok, "twin freshness", "#{MapSet.size(declared)} column(s), all present")
     end
+  end
+
+  # --- the twin's columns against what the generator writes today ---------
+
+  # Freshness above asks whether the twin has the right *columns*. This asks
+  # whether the columns it has still mean what it says: it re-derives, from the
+  # live catalog, what `mix ash_strangler.gen.twin` would write for each column
+  # the twin declares, and compares.
+  #
+  # A twin is accepted however it was written, so only what it declares is held
+  # to the catalog: a column it leaves out is the freshness check's to report, a
+  # value set it does not state is not asked for, and an attribute is found by the
+  # column its `source:` names.
+  #
+  # The widened value set is the one that fails, and it is the finding worth the
+  # step. With a `one_of` present and every value decoded, `GetTotal` is proven
+  # total at compile time and no assertion is emitted, so a label added to the
+  # enum later is a value nothing re-checks.
+  defp twin_columns(twin, resources, {:ok, catalog}) do
+    {schema, table} = relation_parts(twin)
+
+    # An absent relation has been reported as a failure by the freshness check, and
+    # says nothing here: there is nothing to compare, and a second failure for one
+    # missing table would only hide that it is one.
+    case Introspection.relation(catalog, "#{schema}.#{table}") do
+      {:ok, relation} -> compare_twin(twin, relation, catalog, resources)
+      :error -> @none
+    end
+  end
+
+  defp twin_columns(_twin, _resources, {:error, error}) do
+    emit(
+      @unrun,
+      "twin columns",
+      "the catalog could not be read: #{Exception.message(error)}. The twin's types and " <>
+        "value sets were not compared."
+    )
+  end
+
+  defp compare_twin(twin, relation, catalog, resources) do
+    secrets = Twin.secrets(twin)
+    wrote = relation |> Introspection.columns(catalog, secrets) |> Map.new(&{&1.column, &1})
+
+    findings =
+      twin
+      |> Ash.Resource.Info.attributes()
+      |> Enum.flat_map(fn attribute ->
+        column = Twin.column!(twin, attribute.name)
+
+        if column in secrets or not Map.has_key?(wrote, column) do
+          []
+        else
+          compare_attribute(twin, attribute, wrote[column], resources)
+        end
+      end)
+
+    case findings do
+      [] ->
+        emit(
+          @ok,
+          "twin columns",
+          "#{length(Twin.columns(twin))} column(s) match what gen.twin writes today"
+        )
+
+      findings ->
+        findings
+        |> Enum.map(fn {marker, attribute, detail} ->
+          emit(marker, "twin column  #{attribute}", detail)
+        end)
+        |> tally()
+    end
+  end
+
+  defp compare_attribute(twin, attribute, wrote, resources) do
+    type_findings(twin, attribute, wrote) ++
+      value_set_findings(twin, attribute, wrote, resources) ++
+      nullability_findings(attribute, wrote)
+  end
+
+  # A type the generator cannot give an Ash type is not declared by it, so there
+  # is nothing to compare: the twin declares one anyway, which is a hand edit worth
+  # a line and not a failure.
+  defp type_findings(_twin, attribute, %{type: nil, name: name, note: note})
+       when not is_nil(name) do
+    [
+      {@warn, attribute.name,
+       note
+       |> String.split("\n", parts: 2)
+       |> hd()
+       |> String.trim()
+       |> Kernel.<>(" The twin declares #{inspect(attribute.name)} anyway.")}
+    ]
+  end
+
+  defp type_findings(_twin, _attribute, %{type: nil}), do: []
+
+  defp type_findings(twin, attribute, wrote) do
+    declared = Introspection.coarse(attribute.type, attribute.constraints)
+    written = Introspection.coarse(wrote.type)
+
+    if declared == written do
+      []
+    else
+      [
+        {@fail, attribute.name,
+         "the twin declares #{inspect(declared)}; the column is " <>
+           "now #{inspect(written)}. A mapping that reads it casts and compares as the wrong " <>
+           "type. Regenerate: mix ash_strangler.gen.twin #{inspect(twin)}"}
+      ]
+    end
+  end
+
+  defp value_set_findings(_twin, _attribute, %{type: nil}, _resources), do: []
+
+  defp value_set_findings(twin, attribute, wrote, resources) do
+    case Keyword.get(attribute.constraints, :one_of) do
+      declared when is_list(declared) ->
+        compare_value_sets(twin, attribute, MapSet.new(declared, &to_string/1), wrote, resources)
+
+      _none ->
+        []
+    end
+  end
+
+  defp compare_value_sets(twin, attribute, declared, %{one_of: nil}, _resources) do
+    [
+      {@warn, attribute.name,
+       "the twin declares one_of #{values(declared)}, but the catalog no longer yields a " <>
+         "value set for the column: its CHECK is gone, or its enum is now text. The compiler " <>
+         "still enumerates a domain the column does not enforce. Regenerate: " <>
+         "mix ash_strangler.gen.twin #{inspect(twin)}"}
+    ]
+  end
+
+  defp compare_value_sets(twin, attribute, declared, %{one_of: one_of}, resources) do
+    actual = MapSet.new(one_of)
+    widened = MapSet.difference(actual, declared)
+    narrowed = MapSet.difference(declared, actual)
+
+    widened_finding =
+      if MapSet.size(widened) > 0 do
+        [
+          {@fail, attribute.name,
+           "the column now admits #{values(widened)}, which the twin's one_of does not list. " <>
+             "#{readers(twin, attribute.name, resources)} A decode that never meant to handle " <>
+             "it is not caught: with a one_of present and every listed value decoded, " <>
+             "`GetTotal` is proven at compile time and emits no assertion, so nothing re-checks " <>
+             "this value. Regenerate, then read each decode again: " <>
+             "mix ash_strangler.gen.twin #{inspect(twin)}"}
+        ]
+      else
+        []
+      end
+
+    narrowed_finding =
+      if MapSet.size(narrowed) > 0 do
+        [
+          {@warn, attribute.name,
+           "the twin's one_of lists #{values(narrowed)}, which the column no longer admits. " <>
+             "A decode for it is dead code, and a mapping that writes it will be refused " <>
+             "by the database."}
+        ]
+      else
+        []
+      end
+
+    widened_finding ++ narrowed_finding
+  end
+
+  defp nullability_findings(attribute, wrote) do
+    if attribute.allow_nil? == wrote.allow_nil? do
+      []
+    else
+      [
+        {@warn, attribute.name,
+         "the twin says allow_nil? #{attribute.allow_nil?}; the column " <>
+           if(wrote.allow_nil?, do: "allows NULL", else: "is NOT NULL") <>
+           ". That is a warning only: the null checks count the NULLs the rows really hold."}
+      ]
+    end
+  end
+
+  defp values(set), do: set |> Enum.sort() |> Enum.map_join(", ", &inspect/1)
+
+  # The mappings that read the column, found the way the lineage graph finds them:
+  # each lens lists the `{relationship path, attribute}` pairs it reads, and a path
+  # that leaves the primary twin is followed to the twin it lands on.
+  defp readers(twin, attribute, resources) do
+    names =
+      for resource <- resources,
+          lens <- Lens.for_resource(resource),
+          reads?(Info.twin(resource), lens, twin, attribute),
+          uniq: true,
+          do: "#{inspect(resource)}.#{lens.attribute}"
+
+    case Enum.sort(names) do
+      [] -> "No mapping reads it."
+      names -> "Read by #{Enum.join(names, ", ")}."
+    end
+  end
+
+  defp reads?(root, lens, twin, attribute) do
+    Enum.any?(lens.sources || [], fn {path, name} ->
+      name == attribute and Twin.resource_at(root, path) == {:ok, twin}
+    end)
   end
 
   # `indpred IS NULL` because a partial unique index does not make the column

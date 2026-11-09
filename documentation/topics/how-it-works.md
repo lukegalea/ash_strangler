@@ -183,7 +183,8 @@ migration ships rather than measurable after.
 The honest cost: a twin is a **snapshot**. A column the legacy application's next
 migration adds is invisible to every mapping until the twin is regenerated. The
 mitigation is a check rather than a promise — `mix ash_strangler.check` diffs
-every twin against `information_schema.columns` and reports the difference. Run
+every twin against `information_schema.columns`, compares each column it declares
+with what `gen.twin` would write for it today (a widened `one_of` fails), and reports the difference. Run
 it in CI, or the typed layer inherits exactly the staleness problem it was built
 to remove.
 
