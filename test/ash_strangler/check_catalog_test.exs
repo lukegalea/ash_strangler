@@ -680,6 +680,10 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert {:exit, {:shutdown, 1}} = result
       assert output =~ ~r/FAIL.*twin freshness/
+      # The types of a relation that is gone cannot be asked for either, and that
+      # step is not reported as having passed.
+      assert output =~ ~r/\?\?\?\?.*column types/
+      refute output =~ ~r/ok.*column types/
     end
   end
 
@@ -813,6 +817,22 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert {:exit, {:shutdown, 1}} = result
       assert output =~ ~r/warn.*twin column  amount/
+      # The twin column, the projection over it, and the two enum projections.
+      assert output =~ "4 check(s) could not be measured"
+    end
+
+    test "a catalog that cannot be read is a check that did not run" do
+      orders!()
+
+      TestRepo.query!("CREATE ROLE catalog_denied", [])
+      TestRepo.query!("REVOKE SELECT ON pg_catalog.pg_enum FROM PUBLIC", [])
+      TestRepo.query!("SET LOCAL ROLE catalog_denied", [])
+
+      {_result, output} = check()
+
+      assert output =~ ~r/\?\?\?\?.*twin columns/
+      assert output =~ "the catalog could not be read"
+      refute output =~ ~r/ok.*twin columns/
     end
   end
 
@@ -880,7 +900,8 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert {:exit, {:shutdown, 1}} = result
       assert output =~ ~r/warn.*column types  state/
-      assert output =~ "could not be measured"
+      # `Order.state` and `OrderHand.stage` each project the enum.
+      assert output =~ "2 check(s) could not be measured"
     end
 
     test "--strict counts a type with no Ash type, which was not compared" do
@@ -890,7 +911,8 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert {:exit, {:shutdown, 1}} = result
       assert output =~ ~r/warn.*column types  addr/
-      assert output =~ "could not be measured"
+      # One for the twin column and one for the projection over it.
+      assert output =~ "2 check(s) could not be measured"
     end
 
     test "reads the type without reading the rows" do
