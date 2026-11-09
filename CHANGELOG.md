@@ -187,6 +187,24 @@ Requires Elixir 1.20 or later.
 
 ### Fixes
 
+- **Writes name a legacy column the way reads do:** a twin attribute that carries `source:` (the
+  generator writes it for a camel-case column or a name an atom cannot be) was read through
+  `AshStrangler.Twin.column!/2` but written under its attribute name, so the generated `INSTEAD OF`
+  triggers inserted into, assigned to and located rows by a column that does not exist
+  (`column "approved_at" of relation "loans" does not exist`), on the key column as well as the others.
+  Every statement now spells the column through the new `AshStrangler.Sql.Printer.column/2`
+  (`Twin.column!/2`, quoted by `Printer.identifier/1`, now public). A lowercase column stays bare, so
+  the SQL generated for an ordinary column is byte for byte what it was. The same mistake is fixed
+  where it was repeated: the notify trigger and the change ledger (both read `affected.<attribute>`
+  inside a savepoint, so a camel-case key skipped the notification or the event with only a
+  `WARNING`), the ledger's `primary_key` payload, which is now keyed by the column's real name and
+  read that way by the observation projector, the baseline and the generated ingestion module, the
+  reconciler's legacy key, the watch trigger and the twin fixture writer (a quote in a column name),
+  the `touch()` and hold renderings, and the SQL assertions `mix ash_strangler.check` measures.
+  `AshStrangler.Backfill` quotes a column instead of refusing one that is not a plain identifier.
+  **The ledger's `primary_key` key changes for a key column whose name differs from its attribute's:**
+  events written before the upgrade carry the attribute name. Ordinary columns are unaffected.
+
 - **A column with no forward expression is typed:** `unmapped [...], as: :null` rendered a bare
   `NULL` in the view, which PostgreSQL types as `text`, so `created_by_id = other.id` on a `uuid`
   attribute failed with `operator does not exist: text = uuid`. It now renders `NULL::uuid` (the

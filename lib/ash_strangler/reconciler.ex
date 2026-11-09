@@ -370,14 +370,15 @@ defmodule AshStrangler.Reconciler do
     Keyword.merge(derived, opts)
   end
 
-  # `Twin.column!/2` rather than the printer's frame, which falls back to the
+  # `Printer.column/2`, which resolves through `Twin.column!/2` and quotes, rather
+  # than the printer's frame, which falls back to the
   # attribute name when the twin has no such column. That fallback is right for a
   # projected column -- the view is generated once and reviewed -- and wrong here,
   # where a stale twin would silently line the two sides up on a column that does
   # not exist and report every row as drift. This raises, naming the column and
   # the regeneration command.
   defp legacy_key(resource, twin, key) do
-    column = Twin.column!(twin, key.from)
+    column = Printer.column(twin, key.from)
 
     case Info.joins(resource) do
       [] -> column

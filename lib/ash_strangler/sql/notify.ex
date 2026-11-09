@@ -41,6 +41,7 @@ defmodule AshStrangler.Sql.Notify do
   """
 
   alias AshStrangler.{Info, Key, Source}
+  alias AshStrangler.Sql.Printer
 
   @doc """
   Builds the notify function and trigger for `resource_or_dsl`.
@@ -70,6 +71,11 @@ defmodule AshStrangler.Sql.Notify do
     table = AshPostgres.DataLayer.Info.table(resource_or_dsl)
     schema = AshPostgres.DataLayer.Info.schema(resource_or_dsl) || "public"
     channel = AshStrangler.Info.notify_channel(resource_or_dsl)
+    # The key column as the legacy table spells it. `key.from` names a twin
+    # attribute, and an attribute that carries `source:` is a different word from
+    # its column: bare `affected.loanId` reads `loanid`, raises inside the
+    # savepoint below, and the notification is skipped with only a WARNING.
+    key_column = Printer.column(Info.twin(resource_or_dsl), key.from)
 
     function = ~s("#{schema}"."strangler_#{table}_notify")
     trigger = ~s("strangler_#{table}_notify")
@@ -94,7 +100,7 @@ defmodule AshStrangler.Sql.Notify do
       BEGIN
         PERFORM pg_notify('#{channel}', json_build_object(
           'resource', '#{resource_name}',
-          'legacy_id', affected.#{key.from},
+          'legacy_id', affected.#{key_column},
           'op', lower(TG_OP)
         )::text);
       EXCEPTION WHEN OTHERS THEN

@@ -77,7 +77,7 @@ defmodule AshStrangler.Twin.Fixture do
       """
     end
 
-    column_list = Enum.map_join(attributes, ", ", &~s("#{Twin.column!(twin, &1)}"))
+    column_list = Enum.map_join(attributes, ", ", &AshStrangler.Sql.Printer.column(twin, &1))
     width = length(attributes)
 
     {values, params} =

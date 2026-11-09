@@ -298,7 +298,7 @@ defmodule AshStrangler.Sql.Printer do
   defp print(%Call{name: :strangler_hold, args: [column, fallback]}, ctx) do
     case ctx.touch do
       :now -> print(fallback, ctx)
-      {:preserve, _frame} -> to_string(column)
+      {:preserve, _frame} -> identifier(to_string(column))
     end
   end
 
@@ -393,7 +393,7 @@ defmodule AshStrangler.Sql.Printer do
         # the row's stored value, which is exactly what "preserve" means -- and it is
         # the one place in a write expression where a reference is NOT a resource
         # attribute. See `AshStrangler.Lens.collapse_value/4`.
-        "(CASE WHEN #{old} IS DISTINCT FROM #{new} THEN now() ELSE #{column} END)"
+        "(CASE WHEN #{old} IS DISTINCT FROM #{new} THEN now() ELSE #{identifier(column)} END)"
     end
   end
 
@@ -789,16 +789,39 @@ defmodule AshStrangler.Sql.Printer do
 
   defp column_name(twin, path, attribute) do
     case AshStrangler.Twin.resource_at(twin, path) do
-      {:ok, resource} -> resource |> AshStrangler.Twin.column!(attribute) |> identifier()
+      {:ok, resource} -> column(resource, attribute)
       {:error, _} -> to_string(attribute)
     end
   end
 
-  # A legacy column is whatever the legacy schema named it. PostgreSQL folds an
-  # unquoted identifier to lowercase, so `effectiveDate` printed bare reads a
-  # column `effectivedate` that does not exist. Lowercase identifiers stay bare,
-  # which keeps the common case readable.
-  defp identifier(column) do
+  @doc """
+  The SQL spelling of a twin attribute's legacy column: the name
+  `AshStrangler.Twin.column!/2` resolves, quoted by `identifier/1`.
+
+  Every statement that names a legacy column -- a read frame, a trigger's `INSERT`
+  column list and `SET` clause, the key a row is located by -- spells it here, so a
+  twin attribute that carries `source:` is the same column on the read side and on
+  the write side.
+  """
+  @spec column(Ash.Resource.t(), atom()) :: String.t()
+  def column(twin, attribute), do: twin |> AshStrangler.Twin.column!(attribute) |> identifier()
+
+  @doc """
+  A column or relation name as SQL spells it.
+
+  A legacy column is whatever the legacy schema named it. PostgreSQL folds an
+  unquoted identifier to lowercase, so `effectiveDate` printed bare reads a
+  column `effectivedate` that does not exist. Lowercase identifiers stay bare,
+  which keeps the common case readable.
+
+      iex> AshStrangler.Sql.Printer.identifier("title")
+      "title"
+
+      iex> AshStrangler.Sql.Printer.identifier("effectiveDate")
+      ~s("effectiveDate")
+  """
+  @spec identifier(String.t()) :: String.t()
+  def identifier(column) do
     if column =~ ~r/^[a-z_][a-z0-9_$]*$/,
       do: column,
       else: ~s("#{String.replace(column, ~s("), ~s(""))}")

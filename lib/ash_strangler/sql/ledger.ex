@@ -94,7 +94,8 @@ defmodule AshStrangler.Sql.Ledger do
 
   The trigger fills what only the database knows: `source_schema`,
   `source_table`, `operation`, `primary_key` (the mapped key column, as
-  jsonb), `old_row`/`new_row` (the row image, below),
+  jsonb, under the column's real name -- the one `AshStrangler.Twin.column!/2`
+  gives, which is not always the twin attribute's), `old_row`/`new_row` (the row image, below),
   `changed_columns` (per-key jsonb comparison — an UPDATE that writes a column
   back with its current value counts as changed, which is the honest reading:
   PostgreSQL cannot distinguish it from a write, and neither can this), and
@@ -153,6 +154,7 @@ defmodule AshStrangler.Sql.Ledger do
   """
 
   alias AshStrangler.{Info, Key, Source, Twin}
+  alias AshStrangler.Sql.Printer
 
   @events_table ~s("legacy_change_events")
 
@@ -228,7 +230,7 @@ defmodule AshStrangler.Sql.Ledger do
     {schema, table} = {target_schema, target_table}
     relation = target_relation
     channel = Info.notify_channel(resource_or_dsl)
-    key_column = Atom.to_string(key.from)
+    key_column = key_column(resource_or_dsl, key)
 
     function = ~s("strangler_ledger_#{schema}_#{table}")
     trigger = ~s("strangler_ledger_#{schema}_#{table}")
@@ -266,6 +268,19 @@ defmodule AshStrangler.Sql.Ledger do
         """
       }
     ]
+  end
+
+  # The legacy column the key lives in, as the table spells it. It is the name
+  # the payload carries (`primary_key`'s JSON key) and the column the trigger
+  # reads, so `key.from` -- a twin *attribute* -- goes through `Twin.column!/2`
+  # like every other read of a legacy column. In `:read_from_new` the trigger sits
+  # on the owned table, which no twin describes, and the name is taken as written.
+  defp key_column(resource_or_dsl, key) do
+    if Info.strangler_phase!(resource_or_dsl) == :read_from_new do
+      Atom.to_string(key.from)
+    else
+      Twin.column!(Info.twin(resource_or_dsl), key.from)
+    end
   end
 
   defp table_up do
@@ -366,7 +381,7 @@ defmodule AshStrangler.Sql.Ledger do
            actor_confidence)
         VALUES
           (TG_TABLE_SCHEMA, TG_TABLE_NAME, lower(TG_OP),
-           jsonb_build_object('#{key_column}', affected.#{key_column}),
+           jsonb_build_object(#{Printer.literal(key_column)}, affected.#{Printer.identifier(key_column)}),
            old_row, new_row, changed,
            txid_current(), transaction_timestamp(),
            nullif(current_setting('ash_strangler.origin', true), ''),

@@ -77,7 +77,7 @@ defmodule AshStrangler.Observation do
       baseline_group: nil,
       category: :observation,
       resource: resource,
-      record_id: record_id(key, Info.relation(resource), row.primary_key),
+      record_id: record_id(resource, key, row.primary_key),
       operation: String.to_existing_atom(row.operation),
       before: before,
       after: after_image,
@@ -137,7 +137,9 @@ defmodule AshStrangler.Observation do
       attributes: attributes,
       unprojected_attributes: Enum.sort(Enum.map(excluded, & &1.attribute)),
       record_id:
-        record_id(key, Info.relation(resource), %{key.from => row_json[to_string(key.from)]})
+        record_id(resource, key, %{
+          key_column(resource, key) => row_json[key_column(resource, key)]
+        })
     }
   end
 
@@ -228,10 +230,18 @@ defmodule AshStrangler.Observation do
     end
   end
 
-  defp record_id(key, relation, primary_key) do
-    legacy_id = Map.get(primary_key, key.from) || Map.get(primary_key, to_string(key.from))
-    KeyDerivation.derive(key, relation, legacy_id)
+  # The ledger's `primary_key` and its row images are keyed by the legacy
+  # column's real name, which is not always the twin attribute's.
+  defp record_id(resource, key, primary_key) do
+    KeyDerivation.derive(
+      key,
+      Info.relation(resource),
+      Map.get(primary_key, key_column(resource, key))
+    )
   end
+
+  @doc false
+  def key_column(resource, key), do: Twin.column!(Info.twin(resource), key.from)
 
   defp origin(nil), do: :unknown
   defp origin("host"), do: :host

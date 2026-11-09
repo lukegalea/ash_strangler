@@ -62,18 +62,18 @@ defmodule AshStrangler.Observation.Baseline do
     {schema, table} = split(relation)
 
     key = Info.key(resource)
-    key_column = key.from
+    twin = Info.twin(resource)
 
     key_type =
-      AshStrangler.Sql.Printer.pg_type!(
-        Ash.Resource.Info.attribute(Info.twin(resource), key_column).type
-      )
+      AshStrangler.Sql.Printer.pg_type!(Ash.Resource.Info.attribute(twin, key.from).type)
 
     scan = %{
       repo: repo,
       schema: schema,
       table: table,
-      key_column: key_column,
+      # The image is keyed by the real column name; the SQL spells it as SQL does.
+      key_column: AshStrangler.Twin.column!(twin, key.from),
+      key_sql: AshStrangler.Sql.Printer.column(twin, key.from),
       key_type: key_type,
       resource: resource,
       group: group,
@@ -116,6 +116,7 @@ defmodule AshStrangler.Observation.Baseline do
       schema: schema,
       table: table,
       key_column: key_column,
+      key_sql: key_sql,
       key_type: key_type,
       resource: resource,
       group: group,
@@ -127,8 +128,8 @@ defmodule AshStrangler.Observation.Baseline do
         """
         SELECT to_jsonb(t) AS row FROM (
           SELECT * FROM #{schema}.#{table}
-          WHERE ($1::text IS NULL OR #{key_column} > $1::#{key_type})
-          ORDER BY #{key_column}
+          WHERE ($1::text IS NULL OR #{key_sql} > $1::#{key_type})
+          ORDER BY #{key_sql}
           LIMIT #{@batch}
         ) t
         """,
@@ -148,7 +149,7 @@ defmodule AshStrangler.Observation.Baseline do
             store(repo, observation(repo, resource, json, group, version))
           end)
 
-        max_seen = jsons |> Enum.map(& &1[to_string(key_column)]) |> Enum.max()
+        max_seen = jsons |> Enum.map(& &1[key_column]) |> Enum.max()
         stream(state, max_seen, acc + inserted)
     end
   end
@@ -175,7 +176,7 @@ defmodule AshStrangler.Observation.Baseline do
       mapping_version: version,
       source: %{
         relation: Info.relation(resource),
-        primary_key: %{"id" => row_json[to_string(Info.key(resource).from)]},
+        primary_key: %{"id" => row_json[Observation.key_column(resource, Info.key(resource))]},
         transaction_id: nil,
         timestamp: nil,
         unprojected_attributes: evaluated.unprojected_attributes

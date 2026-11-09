@@ -618,31 +618,31 @@ defmodule AshStrangler.Backfill do
 
   defp batch_sql(config, op) do
     assignments =
-      Enum.map_join(config.set ++ [{config.flag, "false"}], ", ", fn {column, expression} ->
-        ~s("#{column}" = #{expression})
+      Enum.map_join(config.set ++ [{~s("#{config.flag}"), "false"}], ", ", fn {column, expression} ->
+        "#{column} = #{expression}"
       end)
 
     """
     WITH strangler_batch AS (
-      SELECT "#{config.key}" AS strangler_key
+      SELECT #{config.key} AS strangler_key
       FROM #{config.relation}
-      WHERE "#{config.flag}" AND "#{config.key}" #{op} $1
-      ORDER BY "#{config.key}"
+      WHERE "#{config.flag}" AND #{config.key} #{op} $1
+      ORDER BY #{config.key}
       LIMIT #{config.batch_size}
       FOR NO KEY UPDATE
     )
     UPDATE #{config.relation} AS strangler_target
     SET #{assignments}
     FROM strangler_batch
-    WHERE strangler_target."#{config.key}" = strangler_batch.strangler_key
-    RETURNING strangler_target."#{config.key}"
+    WHERE strangler_target.#{config.key} = strangler_batch.strangler_key
+    RETURNING strangler_target.#{config.key}
     """
   end
 
   defp min_pending_key(repo, config) do
     %Postgrex.Result{rows: [[key]]} =
       repo.query!(
-        ~s|SELECT min("#{config.key}") FROM #{config.relation} WHERE "#{config.flag}"|,
+        ~s|SELECT min(#{config.key}) FROM #{config.relation} WHERE "#{config.flag}"|,
         []
       )
 
@@ -770,7 +770,7 @@ defmodule AshStrangler.Backfill do
 
   defp normalize!(opts) do
     relation = relation!(Keyword.fetch!(opts, :relation))
-    key = identifier!(Keyword.fetch!(opts, :key), :key)
+    key = column!(Keyword.fetch!(opts, :key), :key)
     flag = identifier!(Keyword.get(opts, :flag_column, @flag_column), :flag_column)
     batch_size = Keyword.get(opts, :batch_size, @batch_size)
 
@@ -789,11 +789,11 @@ defmodule AshStrangler.Backfill do
     }
   end
 
-  # Column names are validated as identifiers; the values are not touched at
-  # all. That asymmetry is the contract: `set` values are SQL expressions by
-  # design (`"counter + 1"`, `"upper(login)"`), and there is no bind-parameter
-  # form for a column name, so validation is the only defence available on the
-  # left-hand side.
+  # Column names are quoted as identifiers (`column!/2`); the values are not
+  # touched at all. That asymmetry is the contract: `set` values are SQL
+  # expressions by design (`"counter + 1"`, `"upper(login)"`), and there is no
+  # bind-parameter form for a column name, so quoting is the only defence
+  # available on the left-hand side.
   defp set!(set) do
     set
     |> Enum.map(fn {column, expression} ->
@@ -802,8 +802,25 @@ defmodule AshStrangler.Backfill do
               "the value of `set: [#{column}: ...]` must be a SQL expression string, got: #{inspect(expression)}"
       end
 
-      {identifier!(column, :set), expression}
+      {column!(column, :set), expression}
     end)
+  end
+
+  # A legacy column is whatever the legacy schema named it, and `plan/2` hands over
+  # the name `Twin.column!/2` resolves -- `effectiveDate`, `Order Date`. It is
+  # quoted here, with any quote in it doubled, which makes every name a safe
+  # identifier; refusing the ones a regular expression dislikes would refuse a
+  # real column. Only the relation and the flag, which this module or the caller
+  # names, stay plain identifiers.
+  defp column!(name, option) do
+    name = to_string(name)
+
+    if name == "" or String.contains?(name, <<0>>) do
+      raise ArgumentError,
+            "`#{option}` must be a non-empty column name without a NUL byte, got: #{inspect(name)}"
+    end
+
+    ~s("#{String.replace(name, ~s("), ~s(""))}")
   end
 
   # `to_string` first, so both `:id` and `"id"` are accepted.

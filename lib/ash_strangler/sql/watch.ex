@@ -35,6 +35,7 @@ defmodule AshStrangler.Sql.Watch do
   `mix ash_strangler.snapshot drift` tells its own triggers from drift.
   """
 
+  alias AshStrangler.Sql.Printer
   alias AshStrangler.Twin
 
   @doc "The watch function and trigger for `twin`, or `[]` when it is not watched."
@@ -59,7 +60,10 @@ defmodule AshStrangler.Sql.Watch do
       |> Ash.Resource.Info.primary_key()
       |> Enum.map_join(", ", fn attribute ->
         column = Twin.column!(twin, attribute)
-        ~s('#{column}', affected."#{column}")
+        # Always quoted, as this function has always been written, so the
+        # generated text of a watched twin with ordinary columns does not move.
+        quoted = String.replace(column, ~s("), ~s(""))
+        "#{Printer.literal(column)}, affected.\"#{quoted}\""
       end)
 
     [

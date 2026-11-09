@@ -53,6 +53,16 @@ defmodule AshStrangler.Sql.Triggers do
   different reference frame: `AshStrangler.Sql.Printer.new_frame/0` spells a
   reference to an attribute as `NEW.<attribute>`. The `$NEW.` sigil authors used to
   type is gone, because an expression over attributes already says what it means.
+
+  ## Legacy columns are spelled once
+
+  A lens names a twin *attribute*, and an attribute that carries `source:` is a
+  different word from the column behind it. Every legacy column a trigger writes
+  -- the `INSERT` column list, the `SET` clause, the key a row is located by and
+  the key the extension row is stored under -- goes through
+  `AshStrangler.Sql.Printer.column/2`, which resolves it with
+  `AshStrangler.Twin.column!/2` and quotes it as the read frames do. The `NEW.`
+  and `OLD.` side is the view's own column, named for the resource attribute.
   """
 
   alias AshStrangler.{Info, Lens, Sql}
@@ -105,13 +115,16 @@ defmodule AshStrangler.Sql.Triggers do
     schema = AshPostgres.DataLayer.Info.schema(resource_or_dsl) || "public"
     view = ~s("#{schema}"."#{table}")
     lenses = resource_or_dsl |> Lens.for_resource() |> Enum.reject(&(&1.combinator == :key))
+    twin = Info.twin(resource_or_dsl)
+    legacy_key = Printer.column(twin, key.from)
 
     context = %{
+      twin: twin,
       table: table,
       schema: schema,
       view: view,
       relation: Info.relation(resource_or_dsl),
-      legacy_key: key.from,
+      legacy_key: legacy_key,
       key: key,
       on_update: Info.on_update(resource_or_dsl),
       backfill_interlock?: Info.backfill_interlock?(resource_or_dsl),
@@ -133,7 +146,7 @@ defmodule AshStrangler.Sql.Triggers do
           Sql.View.key_expression(
             resource_or_dsl,
             key,
-            fn {_path, _attribute} -> "stored.#{key.from}" end
+            fn {_path, _attribute} -> "stored.#{legacy_key}" end
           ),
       extension_attrs: Info.extension_attrs(resource_or_dsl),
       # Implicit extension-state columns: `{column, rendered CASE}` from every
@@ -200,6 +213,9 @@ defmodule AshStrangler.Sql.Triggers do
 
   # `{legacy_column, sql_expression_over_NEW}` for every column that writes,
   # ordered by legacy column name so the generated SQL is stable across runs.
+  # The column is the SQL spelling of the twin attribute's real column
+  # (`Printer.column/2`): a lens names the twin *attribute*, and an attribute with
+  # `source:` is a different word from the column it reads.
   #
   # `constant` and `unmapped` never write: they have no legacy column to write to.
   # A read-only mapping does not write either, but it is NOT silently skipped --
@@ -210,8 +226,9 @@ defmodule AshStrangler.Sql.Triggers do
     targets =
       ctx.lenses
       |> Enum.flat_map(fn lens ->
-        Enum.map(Lens.writes(lens), fn {column, expression} ->
-          {column, Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
+        Enum.map(Lens.writes(lens), fn {attribute, expression} ->
+          {Printer.column(ctx.twin, attribute),
+           Printer.to_sql(expression, ref: Printer.new_frame(), touch: touch)}
         end)
       end)
       |> Enum.uniq_by(fn {column, _sql} -> column end)
@@ -231,8 +248,8 @@ defmodule AshStrangler.Sql.Triggers do
   #
   # UPDATE and DELETE need nothing: both key off `__legacy_id`, which the
   # insert stored.
-  defp identity_key_target(targets, %{key: %{strategy: :identity} = key}, :insert) do
-    [{key.from, "NEW.#{key.attribute}"} | targets]
+  defp identity_key_target(targets, %{key: %{strategy: :identity} = key} = ctx, :insert) do
+    [{ctx.legacy_key, "NEW.#{key.attribute}"} | targets]
     |> Enum.uniq_by(fn {column, _sql} -> column end)
   end
 
