@@ -479,6 +479,14 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   `AshStrangler.Error.BranchWriteRefused`, with the declared reason) and carried
   to the legacy table in `:dual_write`. Give every branch its own key namespace.
 - Each branch answers every column; `unmapped` reads NULL.
+- Write-through on a `:dual_write` branch: `not_written_back [:col], because: ...` drops a column
+  from the update (it keeps the legacy value, and is not a writer of a shared legacy column);
+  `extension [:col]` stores it in `<view>_extension` instead of the legacy table;
+  `refuse_delete because: ...` makes a delete raise `BranchWriteRefused`. On the union,
+  `security_definer true` renders the trigger functions `SECURITY DEFINER SET search_path =
+  pg_catalog` (twins need a schema). `AshStrangler.Migration.render_move/2` moves an installed union
+  (extension tables, replaced view and functions, no owned table, no trigger) and refuses a changed
+  view column list.
 - A branch shows every row of its twin unless it has a `filter expr(...)` over the twin's columns;
   rows the filter excludes belong to no branch.
 - Host checks read `AshStrangler.Union.Info` (`lens_kinds/2`, `phase/2`), not the

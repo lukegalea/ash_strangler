@@ -18,7 +18,11 @@ One canonical relation, a view over legacy branches and an owned branch.
    * constant
    * tenant_of
    * unmapped
+   * extension
+   * not_written_back
+   * refuse_delete
  * [owned](#union-owned)
+   * not_written_back
 
 
 
@@ -31,6 +35,8 @@ One canonical relation, a view over legacy branches and an owned branch.
 | [`view`](#union-view){: #union-view .spark-required} | `String.t` |  | The canonical relation's name. |
 | [`schema`](#union-schema){: #union-schema } | `String.t` | `"public"` | The schema of the view and the owned table. |
 | [`key`](#union-key){: #union-key } | `atom` | `:id` | The canonical key column (uuid). |
+| [`security_definer`](#union-security_definer){: #union-security_definer } | `boolean` | `false` | Render the trigger functions `SECURITY DEFINER SET search_path = pg_catalog`, so a role needs write on the view only, not on the legacy tables. Every relation a trigger names is schema-qualified; the twins must declare a schema. |
+| [`functions_schema`](#union-functions_schema){: #union-functions_schema } | `String.t` | `"public"` | With `security_definer`, the schema that holds `uuid_generate_v5` (the trigger functions have no other schema on their `search_path`). |
 | [`tenant`](#union-tenant){: #union-tenant } | `atom` |  | The column that scopes a row to a tenant. Every legacy branch must derive it with `tenant_of` through a `tenant?: true` kind, and the column must be `null?: false` (estate check E5). |
 
 
@@ -92,6 +98,9 @@ rows now live in the owned table.
  * [constant](#union-legacy-constant)
  * [tenant_of](#union-legacy-tenant_of)
  * [unmapped](#union-legacy-unmapped)
+ * [extension](#union-legacy-extension)
+ * [not_written_back](#union-legacy-not_written_back)
+ * [refuse_delete](#union-legacy-refuse_delete)
 
 
 ### Examples
@@ -310,6 +319,112 @@ unmapped [:notes], because: "the north system keeps no notes"
 
 Target: `AshStrangler.Union.Unmapped`
 
+### union.legacy.extension
+```elixir
+extension attributes
+```
+
+
+Columns stored in `"<schema>"."<view>_extension"`, keyed by the union key, instead of the
+legacy table. The branch's select `LEFT JOIN`s it (no row reads NULL), and a `:dual_write`
+update upserts into it and writes nothing to the legacy table for them.
+
+
+
+
+### Examples
+```
+extension [:template_id]
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attributes`](#union-legacy-extension-attributes){: #union-legacy-extension-attributes .spark-required} | `list(atom)` |  |  |
+
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.Extension`
+
+### union.legacy.not_written_back
+```elixir
+not_written_back attributes
+```
+
+
+Columns a `:dual_write` update does not carry to the legacy table: no guard and no `SET`, so
+a changed value is accepted and dropped, and the row keeps reading the legacy value. They are
+not counted as writers of a shared legacy column. No effect in `:read_from_legacy`. Refused
+on the owned branch.
+
+
+
+
+### Examples
+```
+not_written_back [:modified_on], because: "legacy stamps it itself"
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attributes`](#union-legacy-not_written_back-attributes){: #union-legacy-not_written_back-attributes .spark-required} | `list(atom)` |  |  |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`because`](#union-legacy-not_written_back-because){: #union-legacy-not_written_back-because .spark-required} | `String.t` |  |  |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.NotWrittenBack`
+
+### union.legacy.refuse_delete
+
+
+At `:dual_write`, a delete of one of the branch's rows is refused with `because` (the same
+`BranchWriteRefused` as any refusal) instead of deleting the legacy row.
+
+
+
+
+### Examples
+```
+refuse_delete because: "legacy archives; it never deletes"
+```
+
+
+
+
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`because`](#union-legacy-refuse_delete-because){: #union-legacy-refuse_delete-because .spark-required} | `String.t` |  |  |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.RefuseDelete`
+
 
 
 
@@ -325,6 +440,8 @@ owned name \\ :owned
 
 The owned branch. Inserts always land here.
 
+### Nested DSLs
+ * [not_written_back](#union-owned-not_written_back)
 
 
 ### Examples
@@ -345,6 +462,46 @@ owned :native
 |------|------|---------|------|
 | [`table`](#union-owned-table){: #union-owned-table } | `String.t` |  | Defaults to `"<view>_owned"`, in the union's schema. |
 
+
+### union.owned.not_written_back
+```elixir
+not_written_back attributes
+```
+
+
+Columns a `:dual_write` update does not carry to the legacy table: no guard and no `SET`, so
+a changed value is accepted and dropped, and the row keeps reading the legacy value. They are
+not counted as writers of a shared legacy column. No effect in `:read_from_legacy`. Refused
+on the owned branch.
+
+
+
+
+### Examples
+```
+not_written_back [:modified_on], because: "legacy stamps it itself"
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attributes`](#union-owned-not_written_back-attributes){: #union-owned-not_written_back-attributes .spark-required} | `list(atom)` |  |  |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`because`](#union-owned-not_written_back-because){: #union-owned-not_written_back-because .spark-required} | `String.t` |  |  |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.NotWrittenBack`
 
 
 

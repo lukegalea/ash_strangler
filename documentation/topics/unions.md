@@ -116,6 +116,36 @@ one legacy column are refused at compile time on a `:dual_write` branch: map all
 but one with `from: expr(column)`. Updating a key is refused, and so is an
 insert whose supplied key is already in the view.
 
+### Write-through rules of a `:dual_write` branch
+
+Four declarations on a `legacy` branch (and one on the union) say what a write does when the
+legacy table cannot take it as is:
+
+- `not_written_back [:a, :b], because: "..."`: the update drops these columns (no guard, no `SET`),
+  so a changed value is accepted and the row keeps reading the legacy value. It is how a column the
+  legacy side stamps itself (a modified-on, a version) survives an Ash update. A dropped column does
+  not count as a writer in the shared-source check, so two columns mapped from one legacy column are
+  accepted when all but one are `not_written_back`. Refused on the owned branch, on a column that is
+  not declared, and on an extension column. No effect in `:read_from_legacy`.
+- `extension [:a]`: the columns live in `"<schema>"."<view>_extension"`, keyed by the union key and
+  typed as the declared column. The branch's select `LEFT JOIN`s it (no row reads `NULL`, there is
+  no default); an update upserts the changed columns into it and writes nothing to the legacy table
+  for them; the owned branch stores them in its own table as before.
+- `refuse_delete because: "..."`: at `:dual_write` a delete of the branch's rows raises the same
+  `BranchWriteRefused` instead of deleting the legacy row, for a legacy side that archives.
+- `security_definer true` on the union: the trigger functions are `SECURITY DEFINER SET search_path =
+  pg_catalog`, so a role needs privileges on the view only. Every relation the triggers name is
+  schema-qualified, so each twin must declare a schema, and `uuid_generate_v5` is qualified with
+  `functions_schema` (default `"public"`).
+
+Insert routing, jsonb write-back and writes of derived rows are not part of unions.
+
+`AshStrangler.Migration.render_move/2` renders the migration for a union that is already installed:
+extension tables (`IF NOT EXISTS`), `CREATE OR REPLACE VIEW` and `CREATE OR REPLACE FUNCTION`, and
+no owned table and no trigger. It refuses a changed view column list (a rename, removal or
+reorder); that needs the written `DROP VIEW` of `documentation/topics/phases.md`, "Changing a
+view's shape, in any phase". Appended columns pass.
+
 A refusal is an `AshStrangler.Error.BranchWriteRefused` carrying the branch,
 phase, operation and the declared reason. The triggers raise it in the
 `ash_error:` form AshPostgres turns back into the exception, so an Ash action

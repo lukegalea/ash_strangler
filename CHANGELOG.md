@@ -34,6 +34,16 @@ Requires Elixir 1.20 or later.
   the same files through it. `AshStrangler.Snapshot.Catalog.read/2` reads the catalog through any
   function that runs SQL, and `AshStrangler.Snapshot.Types.ash_type/1` exposes the type table.
 
+- **Union write-through:** a `legacy` union branch takes `not_written_back [...], because:` (the
+  columns a `:dual_write` update drops, which no longer count as writers of a shared legacy
+  column), `extension [...]` (columns stored in `<view>_extension`, joined into the view and
+  upserted by the update trigger, never written to the legacy table) and `refuse_delete because:`
+  (a `:dual_write` delete raises `BranchWriteRefused`). A union takes `security_definer true`
+  (trigger functions `SECURITY DEFINER SET search_path = pg_catalog`) and `functions_schema`.
+  `AshStrangler.Migration.render_move/2` renders the move of an installed union: extension tables,
+  `CREATE OR REPLACE VIEW` and `CREATE OR REPLACE FUNCTION`, no owned table and no trigger, and it
+  refuses a changed view column list. `Union.Info.lens_kinds/2` gains the kind `:extension`.
+
 - **`mix ash_strangler.check --strict`:** exits non-zero on every outcome that could not be
   measured, not only on a failed assertion: every `????` line (including a repo that could not be
   resolved or started), the two warnings that say nothing was measured (a required attribute no

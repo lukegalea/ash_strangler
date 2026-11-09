@@ -21,7 +21,17 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
   use Spark.Dsl.Verifier
 
   alias AshStrangler.{Expr, Twin}
-  alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
+
+  alias AshStrangler.Union.{
+    Constant,
+    Extension,
+    Info,
+    NotWrittenBack,
+    RefuseDelete,
+    TenantKey,
+    Unmapped
+  }
+
   alias AshStrangler.Union.Map, as: MapEntry
   alias Spark.Dsl.Verifier
 
@@ -40,7 +50,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     key = Info.key(dsl)
 
     structure(dsl, branches, columns, key) ++
-      Enum.flat_map(branches, &branch_problems(&1, columns, key)) ++ key_collisions(branches)
+      Enum.flat_map(branches, &branch_problems(&1, columns, key, Info.security_definer?(dsl))) ++
+      key_collisions(branches)
   end
 
   defp structure(dsl, branches, columns, key) do
@@ -58,6 +69,12 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
         do: ["the key column #{inspect(key)} is also declared as a column"],
         else: []
       ),
+      for(
+        %NotWrittenBack{attributes: attributes} <- owned_rules(dsl),
+        do:
+          "the owned branch takes no `not_written_back` (#{Enum.map_join(attributes, ", ", &inspect/1)}): " <>
+            "its columns are all stored"
+      ),
       if(:__branch in columns, do: ["`__branch` is reserved for the branch name"], else: []),
       if(
         Enum.any?(branches, &(&1.name == :owned)) and owned == 1 and
@@ -68,19 +85,28 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     ])
   end
 
+  defp owned_rules(dsl) do
+    case Info.owned(dsl) do
+      nil -> []
+      owned -> owned.write_rules
+    end
+  end
+
   defp dups(names, what) do
     for {name, n} <- Enum.frequencies(names),
         n > 1,
         do: "#{what} #{inspect(name)} is declared #{n} times"
   end
 
-  defp branch_problems(branch, columns, key) do
+  defp branch_problems(branch, columns, key, definer?) do
     at = "branch #{inspect(branch.name)}: "
 
     if Code.ensure_compiled(branch.twin) == {:module, branch.twin} and Twin.twin?(branch.twin) do
       Enum.map(
         key_problems(branch, key) ++
-          mapping_problems(branch, columns) ++ shared_source_problems(branch),
+          mapping_problems(branch, columns) ++
+          write_rule_problems(branch, columns) ++
+          shared_source_problems(branch) ++ definer_problems(branch, definer?),
         &(at <> &1)
       ) ++
         if(String.trim(branch.refused_because) == "",
@@ -119,6 +145,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
         %Constant{attribute: a} -> [a]
         %TenantKey{attribute: a} -> [a]
         %Unmapped{attributes: as} -> as
+        %Extension{attributes: as} -> as
       end)
 
     reads =
@@ -154,10 +181,55 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     ])
   end
 
+  defp write_rule_problems(branch, columns) do
+    extension = Info.extension_columns(branch)
+    refusals = for %RefuseDelete{} = r <- branch.write_rules, do: r
+
+    List.flatten([
+      for(
+        %NotWrittenBack{attributes: attributes, because: because} <- branch.write_rules,
+        a <- attributes,
+        do:
+          cond do
+            a not in columns ->
+              "`not_written_back` names #{inspect(a)}, which is not a declared column"
+
+            a in extension ->
+              "`not_written_back` names #{inspect(a)}, which is stored in the extension table"
+
+            String.trim(because) == "" ->
+              "`not_written_back` for #{inspect(a)} has an empty `because`"
+
+            true ->
+              []
+          end
+      ),
+      for(
+        r <- refusals,
+        String.trim(r.because) == "",
+        do: "`refuse_delete` has an empty `because`"
+      ),
+      if(length(refusals) > 1, do: ["declare at most one `refuse_delete`"], else: [])
+    ])
+  end
+
+  # With `security_definer` the trigger functions have an empty search_path: every relation is qualified.
+  defp definer_problems(branch, true) do
+    if String.contains?(Twin.relation(branch.twin), "."),
+      do: [],
+      else: ["`security_definer` needs #{inspect(branch.twin)} to declare a schema"]
+  end
+
+  defp definer_problems(_branch, false), do: []
+
   # A dual-write update SETs each legacy column once; two columns mapped from one cannot both be written.
-  defp shared_source_problems(%{phase: :dual_write, mappings: mappings}) do
+  defp shared_source_problems(%{phase: :dual_write, mappings: mappings} = branch) do
+    not_written = Info.not_written_back(branch)
+
     mappings
-    |> Enum.filter(&(is_struct(&1, MapEntry) and is_atom(&1.from)))
+    |> Enum.filter(
+      &(is_struct(&1, MapEntry) and is_atom(&1.from) and &1.attribute not in not_written)
+    )
     |> Enum.group_by(& &1.from, & &1.attribute)
     |> Enum.flat_map(fn
       {from, [_, _ | _] = attributes} ->

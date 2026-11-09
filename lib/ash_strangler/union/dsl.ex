@@ -9,7 +9,19 @@ defmodule AshStrangler.Union.Dsl do
   """
 
   alias AshStrangler.Dsl.Combinators
-  alias AshStrangler.Union.{Column, Constant, Legacy, Map, Owned, TenantKey, Unmapped}
+
+  alias AshStrangler.Union.{
+    Column,
+    Constant,
+    Extension,
+    Legacy,
+    Map,
+    NotWrittenBack,
+    Owned,
+    RefuseDelete,
+    TenantKey,
+    Unmapped
+  }
 
   @phases [:read_from_legacy, :dual_write, :read_from_new, :decommissioned]
 
@@ -114,6 +126,47 @@ defmodule AshStrangler.Union.Dsl do
     ]
   }
 
+  @not_written_back %Spark.Dsl.Entity{
+    name: :not_written_back,
+    describe: """
+    Columns a `:dual_write` update does not carry to the legacy table: no guard and no `SET`, so
+    a changed value is accepted and dropped, and the row keeps reading the legacy value. They are
+    not counted as writers of a shared legacy column. No effect in `:read_from_legacy`. Refused
+    on the owned branch.
+    """,
+    examples: [~S|not_written_back [:modified_on], because: "legacy stamps it itself"|],
+    target: NotWrittenBack,
+    args: [:attributes],
+    schema: [
+      attributes: [type: {:list, :atom}, required: true],
+      because: [type: :string, required: true]
+    ]
+  }
+
+  @extension %Spark.Dsl.Entity{
+    name: :extension,
+    describe: """
+    Columns stored in `"<schema>"."<view>_extension"`, keyed by the union key, instead of the
+    legacy table. The branch's select `LEFT JOIN`s it (no row reads NULL), and a `:dual_write`
+    update upserts into it and writes nothing to the legacy table for them.
+    """,
+    examples: [~S|extension [:template_id]|],
+    target: Extension,
+    args: [:attributes],
+    schema: [attributes: [type: {:list, :atom}, required: true]]
+  }
+
+  @refuse_delete %Spark.Dsl.Entity{
+    name: :refuse_delete,
+    describe: """
+    At `:dual_write`, a delete of one of the branch's rows is refused with `because` (the same
+    `BranchWriteRefused` as any refusal) instead of deleting the legacy row.
+    """,
+    examples: [~S|refuse_delete because: "legacy archives; it never deletes"|],
+    target: RefuseDelete,
+    schema: [because: [type: :string, required: true]]
+  }
+
   @legacy %Spark.Dsl.Entity{
     name: :legacy,
     describe: """
@@ -140,7 +193,11 @@ defmodule AshStrangler.Union.Dsl do
     target: Legacy,
     args: [:name],
     imports: [Ash.Expr, Combinators],
-    entities: [keys: [@key], mappings: [@map, @constant, @tenant_of, @unmapped]],
+    entities: [
+      keys: [@key],
+      mappings: [@map, @constant, @tenant_of, @unmapped, @extension],
+      write_rules: [@not_written_back, @refuse_delete]
+    ],
     schema: [
       name: [type: :atom, required: true],
       filter: [
@@ -166,6 +223,7 @@ defmodule AshStrangler.Union.Dsl do
     examples: [~S|owned :native|],
     target: Owned,
     args: [{:optional, :name, :owned}],
+    entities: [write_rules: [@not_written_back]],
     schema: [
       name: [type: :atom, default: :owned],
       table: [type: :string, doc: "Defaults to `\"<view>_owned\"`, in the union's schema."]
@@ -184,6 +242,23 @@ defmodule AshStrangler.Union.Dsl do
       ],
       view: [type: :string, required: true, doc: "The canonical relation's name."],
       key: [type: :atom, default: :id, doc: "The canonical key column (uuid)."],
+      security_definer: [
+        type: :boolean,
+        default: false,
+        doc: """
+        Render the trigger functions `SECURITY DEFINER SET search_path = pg_catalog`, so a role
+        needs write on the view only, not on the legacy tables. Every relation a trigger names is
+        schema-qualified; the twins must declare a schema.
+        """
+      ],
+      functions_schema: [
+        type: :string,
+        default: "public",
+        doc: """
+        With `security_definer`, the schema that holds `uuid_generate_v5` (the trigger
+        functions have no other schema on their `search_path`).
+        """
+      ],
       tenant: [
         type: :atom,
         doc: """

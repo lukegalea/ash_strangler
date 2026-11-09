@@ -22,9 +22,10 @@ defmodule AshStrangler.Union.Sql do
   `AshStrangler.Error.BranchWriteRefused`.
   """
 
-  alias AshStrangler.Sql.{Printer, View}
+  alias AshStrangler.Sql.{Extension, Printer, View}
   alias AshStrangler.Twin
   alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
+  alias AshStrangler.Union.Extension, as: ExtensionEntry
   alias AshStrangler.Union.Map, as: MapEntry
 
   @error "Elixir.AshStrangler.Error.BranchWriteRefused"
@@ -42,9 +43,63 @@ defmodule AshStrangler.Union.Sql do
 
     schema ++
       [owned_table(union)] ++
+      extension_table(union) ++
       Enum.flat_map(Info.live_branches(union), &key_index(union, &1)) ++
       [view_statement(union)] ++
       Enum.flat_map([:insert, :update, :delete], &[function(union, &1), trigger(union, &1)])
+  end
+
+  @doc """
+  The statements that move an already-installed union to its current declaration: the extension
+  table (`IF NOT EXISTS`), a guard on the installed view's column list, `CREATE OR REPLACE VIEW`
+  and `CREATE OR REPLACE FUNCTION`. No owned table and no trigger: both exist already, and a
+  trigger keeps pointing at the replaced function.
+  """
+  @spec move_statements(module() | Spark.Dsl.t()) :: [
+          %{name: atom(), up: String.t(), down: String.t()}
+        ]
+  def move_statements(union) do
+    extension_table(union) ++
+      [view_guard(union), view_statement(union)] ++
+      Enum.map([:insert, :update, :delete], &function(union, &1))
+  end
+
+  # Postgres allows `CREATE OR REPLACE VIEW` to append columns only. A rename, removal or reorder
+  # is refused here with a pointer to the procedure, rather than by the bare Postgres error.
+  defp view_guard(union) do
+    view = Info.view_name(union)
+
+    names =
+      [Info.key(union), "__branch"] ++
+        Enum.map(Info.columns(union), & &1.name) ++ Info.tenant_part_columns(union)
+
+    expected = Enum.map_join(names, ", ", &Printer.literal(to_string(&1)))
+
+    message =
+      "the column list of #{view} changed: renaming, removing or reordering a view column needs a written " <>
+        "DROP VIEW and CREATE VIEW, see documentation/topics/phases.md, \"Changing a view's shape, in any phase\""
+
+    %{
+      name: :"strangler_#{Info.view(union)}_view_guard",
+      up: """
+      DO $strangler$
+      DECLARE
+        installed text[];
+        expected text[] := ARRAY[#{expected}];
+      BEGIN
+        IF to_regclass(#{Printer.literal(view)}) IS NULL THEN
+          RAISE EXCEPTION '%', #{Printer.literal("#{view} is not installed: a move replaces an installed union, render the full migration instead")};
+        END IF;
+        SELECT array_agg(attname::text ORDER BY attnum) INTO installed
+          FROM pg_attribute
+          WHERE attrelid = to_regclass(#{Printer.literal(view)}) AND attnum > 0 AND NOT attisdropped;
+        IF installed IS DISTINCT FROM expected[1:cardinality(installed)] THEN
+          RAISE EXCEPTION '%', #{Printer.literal(message)};
+        END IF;
+      END $strangler$;
+      """,
+      down: "SELECT 1;"
+    }
   end
 
   # --- tables, indexes, view ----------------------------------------------------
@@ -78,6 +133,39 @@ defmodule AshStrangler.Union.Sql do
       END $strangler$;
       """
     }
+  end
+
+  @doc false
+  # The extension table of a union whose live branches keep columns in it, or `[]`.
+  def extension_table(union) do
+    if Info.extension?(union) do
+      columns =
+        union
+        |> Info.live_branches()
+        |> Enum.flat_map(&Info.extension_columns/1)
+        |> Enum.uniq()
+        |> Enum.map(fn name ->
+          column = Enum.find(Info.columns(union), &(&1.name == name))
+          Extension.column_definition(name, column.type)
+        end)
+
+      table = Info.extension_table(union)
+
+      [
+        %{
+          name: :"strangler_#{Info.view(union)}_extension_table",
+          up: """
+          CREATE TABLE IF NOT EXISTS #{table} (
+            #{q(Info.key(union))} uuid PRIMARY KEY,
+            #{Enum.join(columns, ",\n  ")}
+          );
+          """,
+          down: "DROP TABLE IF EXISTS #{table};"
+        }
+      ]
+    else
+      []
+    end
   end
 
   defp key_index(union, branch) do
@@ -131,7 +219,14 @@ defmodule AshStrangler.Union.Sql do
   end
 
   defp legacy_select(union, branch) do
-    frame = Printer.bare_frame(branch.twin)
+    extended? = Info.extension_columns(branch) != []
+
+    # A joined extension table has a key column of its own: qualify the twin's columns.
+    frame =
+      if extended?,
+        do: Printer.qualified_frame(branch.twin, "strangler_src"),
+        else: Printer.bare_frame(branch.twin)
+
     [key] = branch.keys
     key_sql = View.key_sql(key, Twin.relation(branch.twin), frame)
 
@@ -140,8 +235,14 @@ defmodule AshStrangler.Union.Sql do
         "CAST(#{read_sql(branch, c.name, frame)} AS #{pg(c)}) AS #{q(c.name)}"
       end)
 
+    join =
+      if extended?,
+        do:
+          " AS strangler_src\nLEFT JOIN #{Info.extension_table(union)} AS strangler_ext ON strangler_ext.#{q(Info.key(union))} = #{key_sql}",
+        else: ""
+
     "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}#{tenant_parts(union, branch, frame)}\n" <>
-      "FROM #{Twin.relation(branch.twin)}#{where(branch, frame)}"
+      "FROM #{Twin.relation(branch.twin)}#{join}#{where(branch, frame)}"
   end
 
   defp where(%{filter: nil}, _frame), do: ""
@@ -160,12 +261,26 @@ defmodule AshStrangler.Union.Sql do
 
   defp read_sql(branch, column, frame) do
     Enum.find_value(branch.mappings, "NULL", fn
-      %MapEntry{attribute: ^column, from: from} when is_atom(from) -> frame.({[], from})
-      %MapEntry{attribute: ^column, from: from} -> Printer.to_sql(from, ref: frame)
-      %Constant{attribute: ^column, value: value} -> Printer.literal(value)
-      %TenantKey{attribute: ^column} = key -> tenant_sql(key, frame)
-      %Unmapped{attributes: attributes} -> if column in attributes, do: "NULL"
-      _ -> nil
+      %MapEntry{attribute: ^column, from: from} when is_atom(from) ->
+        frame.({[], from})
+
+      %MapEntry{attribute: ^column, from: from} ->
+        Printer.to_sql(from, ref: frame)
+
+      %Constant{attribute: ^column, value: value} ->
+        Printer.literal(value)
+
+      %TenantKey{attribute: ^column} = key ->
+        tenant_sql(key, frame)
+
+      %ExtensionEntry{attributes: attributes} ->
+        if column in attributes, do: "strangler_ext.#{q(column)}"
+
+      %Unmapped{attributes: attributes} ->
+        if column in attributes, do: "NULL"
+
+      _ ->
+        nil
     end)
   end
 
@@ -205,12 +320,29 @@ defmodule AshStrangler.Union.Sql do
       name: :"#{trigger_name(union, op)}_function",
       up: """
       CREATE OR REPLACE FUNCTION #{function_name(union, op)}() RETURNS trigger
-      LANGUAGE plpgsql AS $strangler$
-      #{body(union, op)}
+      LANGUAGE plpgsql#{definer(union)} AS $strangler$
+      #{qualify_functions(union, body(union, op))}
       $strangler$;
       """,
       down: "DROP FUNCTION IF EXISTS #{function_name(union, op)}() CASCADE;"
     }
+  end
+
+  # `SET search_path = pg_catalog` leaves no schema to resolve `uuid_generate_v5` in.
+  defp definer(union),
+    do:
+      if(Info.security_definer?(union),
+        do: " SECURITY DEFINER SET search_path = pg_catalog",
+        else: ""
+      )
+
+  defp qualify_functions(union, body) do
+    if Info.security_definer?(union) do
+      schema = Spark.Dsl.Extension.get_opt(union, [:union], :functions_schema, "public")
+      String.replace(body, "uuid_generate_v5(", ~s|"#{schema}".uuid_generate_v5(|)
+    else
+      body
+    end
   end
 
   defp body(union, :insert) do
@@ -313,9 +445,13 @@ defmodule AshStrangler.Union.Sql do
 
     key_sources = Enum.flat_map(b.keys, &List.wrap(&1.from))
 
+    skipped = Info.not_written_back(b)
+    extension = Info.extension_columns(b)
+
     {writable, read_only} =
       union
       |> Info.columns()
+      |> Enum.reject(&(&1.name in skipped or &1.name in extension))
       |> Enum.split_with(fn c ->
         kinds[c.name] == :column and simple?(b, c.name) and
           source_attr(b, c.name) not in key_sources
@@ -347,13 +483,35 @@ defmodule AshStrangler.Union.Sql do
           "    IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Twin.relation(b.twin)}', OLD.#{q(Info.key(union))}; END IF;\n"
       end
 
-    guards <> write
+    guards <> write <> extension_upsert(union, b, extension)
+  end
+
+  # Changed extension columns are upserted; the legacy table is not written for them.
+  defp extension_upsert(_union, _b, []), do: ""
+
+  defp extension_upsert(union, _b, extension) do
+    key = q(Info.key(union))
+    names = Enum.map_join(extension, ", ", &q/1)
+    values = Enum.map_join(extension, ", ", &"NEW.#{q(&1)}")
+    sets = Enum.map_join(extension, ", ", &"#{q(&1)} = EXCLUDED.#{q(&1)}")
+    changed = Enum.map_join(extension, " OR ", &"NEW.#{q(&1)} IS DISTINCT FROM OLD.#{q(&1)}")
+
+    "    IF #{changed} THEN\n" <>
+      "      INSERT INTO #{Info.extension_table(union)} (#{key}, #{names}) VALUES (OLD.#{key}, #{values})\n" <>
+      "        ON CONFLICT (#{key}) DO UPDATE SET #{sets};\n    END IF;\n"
   end
 
   defp delete_branch(_union, %{phase: :read_from_legacy} = b),
     do: "    #{refusal(b, :delete, b.refused_because)}\n"
 
   defp delete_branch(union, %{phase: :dual_write} = b) do
+    case Info.refuse_delete(b) do
+      nil -> delete_legacy_row(union, b)
+      because -> "    #{refusal(b, :delete, because)}\n"
+    end
+  end
+
+  defp delete_legacy_row(union, b) do
     "    DELETE FROM #{Twin.relation(b.twin)} WHERE #{legacy_match(union, b)};\n" <>
       "    IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Twin.relation(b.twin)}', OLD.#{q(Info.key(union))}; END IF;\n"
   end

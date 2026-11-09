@@ -43,6 +43,17 @@ defmodule AshStrangler.Sql.Extension do
   end
 
   @doc """
+  The extension table of a union's view, `"<schema>"."<view>_extension"`: the same naming as
+  `relation/1`.
+  """
+  @spec relation_named(String.t(), String.t()) :: String.t()
+  def relation_named(schema, table), do: ~s("#{schema}"."#{table}_extension")
+
+  @doc "One extension column definition, typed as the view's casts are."
+  @spec column_definition(atom(), term()) :: String.t()
+  def column_definition(name, type), do: ~s("#{name}" #{Printer.pg_type!(type)})
+
+  @doc """
   The extension alias the view binds the join to. One definition, so the join
   and the `:strangler_ext` printer node cannot drift.
   """
