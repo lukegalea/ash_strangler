@@ -311,7 +311,7 @@ defmodule AshStrangler.Union.Sql do
   defp qualify_functions(union, body) do
     if Info.security_definer?(union) do
       schema = Spark.Dsl.Extension.get_opt(union, [:union], :functions_schema, "public")
-      String.replace(body, "uuid_generate_v5(", ~s|"#{schema}".uuid_generate_v5(|
+      String.replace(body, "uuid_generate_v5(", ~s|"#{schema}".uuid_generate_v5(|)
     else
       body
     end
