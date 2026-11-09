@@ -221,6 +221,70 @@ defmodule AshStrangler.CheckTest do
 
       assert output =~ "declares unique set(s) Postgres does not enforce"
     end
+
+    # `UNIQUE (login, lower(email))` allows two rows with the same login and
+    # different emails, so it does not make `login` unique. The expression key
+    # has attnum 0, which an inner join to `pg_attribute` silently drops.
+    test "a unique index mixing a plain column and an expression does not enforce the plain column" do
+      TestRepo.query!("DROP INDEX legacy.index_users_on_login", [])
+
+      TestRepo.query!(
+        "CREATE UNIQUE INDEX index_users_on_login ON legacy.users (login, lower(email))",
+        []
+      )
+
+      {result, output} = check()
+
+      assert output =~ "declares unique set(s) Postgres does not enforce"
+      assert output =~ ~s("login")
+      assert {:exit, {:shutdown, 1}} = result
+    end
+
+    test "a unique index over an expression alone does not enforce the column" do
+      TestRepo.query!("DROP INDEX legacy.index_users_on_login", [])
+
+      TestRepo.query!(
+        "CREATE UNIQUE INDEX index_users_on_login ON legacy.users (lower(login))",
+        []
+      )
+
+      {_result, output} = check()
+
+      assert output =~ "declares unique set(s) Postgres does not enforce"
+    end
+
+    # `INCLUDE` columns are payload for index-only scans, not part of the key.
+    # `UNIQUE (login) INCLUDE (email)` enforces `login` alone.
+    test "a unique index's INCLUDE columns are not part of the set it enforces" do
+      TestRepo.query!("DROP INDEX legacy.index_users_on_login", [])
+
+      TestRepo.query!(
+        "CREATE UNIQUE INDEX index_users_on_login ON legacy.users (login) INCLUDE (email)",
+        []
+      )
+
+      {result, output} = check()
+
+      refute output =~ "declares unique set(s) Postgres does not enforce"
+      assert output =~ "each backed by a unique index"
+      assert result == :ok
+    end
+
+    # The same payload column must not let an index claim a set it does not
+    # enforce: `UNIQUE (email) INCLUDE (login)` is unique over `email`, not over
+    # `login`.
+    test "an INCLUDE column does not make the index enforce that column" do
+      TestRepo.query!("DROP INDEX legacy.index_users_on_login", [])
+
+      TestRepo.query!(
+        "CREATE UNIQUE INDEX index_users_on_login ON legacy.users (email) INCLUDE (login)",
+        []
+      )
+
+      {_result, output} = check()
+
+      assert output =~ "declares unique set(s) Postgres does not enforce"
+    end
   end
 
   # --- the ledger ---------------------------------------------------------

@@ -921,7 +921,10 @@ two links, and each is checked by whatever can actually check it. This verifier
 compares the resource against the twin. `mix ash_strangler.check` compares the
 *twin* against `pg_index` — and a **partial** unique index does not count there,
 because it makes a column unique among the rows matching its predicate, which is
-not what an identity claims.
+not what an identity claims. Neither does an **expression** index: `UNIQUE (tenant_id,
+lower(email))` is not a unique `tenant_id`, and an expression key is never read as
+the plain column it mentions. Only an index's key columns count, never its
+`INCLUDE` columns.
 
 > **A related trap worth knowing:** constraint violations through a view report the
 > **base table's** index name, never the view's. Ash derives the name it expects

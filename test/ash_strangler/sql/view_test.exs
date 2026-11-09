@@ -194,7 +194,7 @@ defmodule AshStrangler.Sql.ViewTest do
                (email)::citext AS email,
                (coalesce(first_name, '') || (' ' || coalesce(last_name, ''))) AS full_name,
                ('00000000-0000-0000-0000-0000000000fe')::uuid AS organization_id,
-               NULL AS created_by_id
+               NULL::uuid AS created_by_id
              FROM legacy.users;
              """
     end

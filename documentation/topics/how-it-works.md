@@ -232,7 +232,7 @@ SELECT
   (coalesce(first_name, '') || (' ' || coalesce(last_name, ''))) AS full_name,
   (deleted_at AT TIME ZONE 'UTC') AS archived_at,
   ('00000000-0000-0000-0000-0000000000fe')::uuid AS organization_id,
-  NULL AS created_by_id
+  NULL::uuid AS created_by_id
 FROM legacy.users;
 ```
 
