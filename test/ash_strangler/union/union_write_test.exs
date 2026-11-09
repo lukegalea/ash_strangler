@@ -143,7 +143,9 @@ defmodule AshStrangler.UnionWriteTest do
     q!("UPDATE #{view} SET template = 'tpl-2', display = 'Ada L'")
     assert [["tpl-2", "Ada L"]] = q!("SELECT template, display FROM #{view}")
     assert [["Ada L"]] = q!("SELECT name FROM #{table}")
-    assert [[1]] = q!("SELECT count(*)::int FROM #{AshStrangler.Union.Info.extension_table(union)}")
+
+    assert [[1]] =
+             q!("SELECT count(*)::int FROM #{AshStrangler.Union.Info.extension_table(union)}")
   end
 
   test "a view DELETE under refuse_delete is refused and the legacy row stays" do
@@ -185,7 +187,11 @@ defmodule AshStrangler.UnionWriteTest do
     q!("GRANT USAGE ON SCHEMA clinic_union TO #{role}")
     q!("GRANT SELECT, UPDATE ON #{view} TO #{role}")
     q!("SET LOCAL ROLE #{role}")
-    assert_raise Postgrex.Error, ~r/permission denied/, fn -> q!("UPDATE #{view} SET display = 'x'") end
+
+    assert_raise Postgrex.Error, ~r/permission denied/, fn ->
+      q!("UPDATE #{view} SET display = 'x'")
+    end
+
     q!("RESET ROLE")
   end
 
@@ -207,7 +213,10 @@ defmodule AshStrangler.UnionWriteTest do
 
     test "creates the extension table of a union that gained one, without an owned table" do
       {view, _table, union} =
-        install!("column :display, :string\ncolumn :template, :string", "map :display, from: :name\nextension [:template]")
+        install!(
+          "column :display, :string\ncolumn :template, :string",
+          "map :display, from: :name\nextension [:template]"
+        )
 
       q!("DROP TABLE #{AshStrangler.Union.Info.extension_table(union)} CASCADE")
       move = AshStrangler.Migration.render_move("MoveTest", [union])
@@ -221,7 +230,10 @@ defmodule AshStrangler.UnionWriteTest do
       {view, _table, union} = install!("column :display, :string", "map :display, from: :name")
 
       q!("DROP VIEW #{view} CASCADE")
-      q!("CREATE VIEW #{view} AS SELECT gen_random_uuid() AS id, 'x'::text AS \"__branch\", 'a'::text AS renamed")
+
+      q!(
+        "CREATE VIEW #{view} AS SELECT gen_random_uuid() AS id, 'x'::text AS \"__branch\", 'a'::text AS renamed"
+      )
 
       error =
         assert_raise Postgrex.Error, fn ->
@@ -229,7 +241,9 @@ defmodule AshStrangler.UnionWriteTest do
         end
 
       assert error.postgres.message =~ "documentation/topics/phases.md"
-      assert AshStrangler.Migration.render_move("MoveTest", [union]) =~ "documentation/topics/phases.md"
+
+      assert AshStrangler.Migration.render_move("MoveTest", [union]) =~
+               "documentation/topics/phases.md"
     end
   end
 end

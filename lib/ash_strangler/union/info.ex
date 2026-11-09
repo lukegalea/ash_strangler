@@ -31,6 +31,7 @@ defmodule AshStrangler.Union.Info do
     TenantKey,
     Unmapped
   }
+
   alias AshStrangler.Union.Map, as: MapEntry
 
   @type kind :: :column | :expression | :constant | :null | :extension | :owned
@@ -153,7 +154,11 @@ defmodule AshStrangler.Union.Info do
   @doc "The reason a branch refuses deletes at `:dual_write`, or `nil`."
   @spec refuse_delete(Legacy.t()) :: String.t() | nil
   def refuse_delete(%Legacy{write_rules: rules}),
-    do: Enum.find_value(rules, fn %RefuseDelete{because: b} -> b; _ -> nil end)
+    do:
+      Enum.find_value(rules, fn
+        %RefuseDelete{because: b} -> b
+        _ -> nil
+      end)
 
   @doc "Whether the union renders its trigger functions `SECURITY DEFINER`."
   @spec security_definer?(module() | Spark.Dsl.t()) :: boolean()
@@ -162,7 +167,8 @@ defmodule AshStrangler.Union.Info do
 
   @doc "The union's extension table, schema-qualified and quoted."
   @spec extension_table(module() | Spark.Dsl.t()) :: String.t()
-  def extension_table(union), do: AshStrangler.Sql.Extension.relation_named(schema(union), "#{view(union)}")
+  def extension_table(union),
+    do: AshStrangler.Sql.Extension.relation_named(schema(union), "#{view(union)}")
 
   @doc "Whether any live branch keeps columns in the extension table."
   @spec extension?(module() | Spark.Dsl.t()) :: boolean()

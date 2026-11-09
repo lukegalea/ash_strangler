@@ -229,9 +229,8 @@ defmodule AshStrangler.UnionVerifierTest do
                valid(owned: ~S|owned :native do not_written_back [:notes], because: "x" end|)
              ) =~ "owned branch takes no `not_written_back`"
 
-      assert rejection(
-               valid(south: inside(@south, ~S|not_written_back [:ghost], because: "x"|))
-             ) =~ "`not_written_back` names :ghost, which is not a declared column"
+      assert rejection(valid(south: inside(@south, ~S|not_written_back [:ghost], because: "x"|))) =~
+               "`not_written_back` names :ghost, which is not a declared column"
 
       columns = @columns <> "column :alias, :string"
       north = inside(@north, "unmapped [:alias], because: \"none\"")

@@ -9,6 +9,7 @@ defmodule AshStrangler.Union.Dsl do
   """
 
   alias AshStrangler.Dsl.Combinators
+
   alias AshStrangler.Union.{
     Column,
     Constant,

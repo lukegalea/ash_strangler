@@ -21,7 +21,17 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
   use Spark.Dsl.Verifier
 
   alias AshStrangler.{Expr, Twin}
-  alias AshStrangler.Union.{Constant, Extension, Info, NotWrittenBack, RefuseDelete, TenantKey, Unmapped}
+
+  alias AshStrangler.Union.{
+    Constant,
+    Extension,
+    Info,
+    NotWrittenBack,
+    RefuseDelete,
+    TenantKey,
+    Unmapped
+  }
+
   alias AshStrangler.Union.Map, as: MapEntry
   alias Spark.Dsl.Verifier
 
@@ -194,7 +204,11 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
               []
           end
       ),
-      for(r <- refusals, String.trim(r.because) == "", do: "`refuse_delete` has an empty `because`"),
+      for(
+        r <- refusals,
+        String.trim(r.because) == "",
+        do: "`refuse_delete` has an empty `because`"
+      ),
       if(length(refusals) > 1, do: ["declare at most one `refuse_delete`"], else: [])
     ])
   end
@@ -213,7 +227,9 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     not_written = Info.not_written_back(branch)
 
     mappings
-    |> Enum.filter(&(is_struct(&1, MapEntry) and is_atom(&1.from) and &1.attribute not in not_written))
+    |> Enum.filter(
+      &(is_struct(&1, MapEntry) and is_atom(&1.from) and &1.attribute not in not_written)
+    )
     |> Enum.group_by(& &1.from, & &1.attribute)
     |> Enum.flat_map(fn
       {from, [_, _ | _] = attributes} ->

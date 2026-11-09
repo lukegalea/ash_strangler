@@ -68,7 +68,11 @@ defmodule AshStrangler.Union.Sql do
   # is refused here with a pointer to the procedure, rather than by the bare Postgres error.
   defp view_guard(union) do
     view = Info.view_name(union)
-    names = [Info.key(union), "__branch"] ++ Enum.map(Info.columns(union), & &1.name) ++ Info.tenant_part_columns(union)
+
+    names =
+      [Info.key(union), "__branch"] ++
+        Enum.map(Info.columns(union), & &1.name) ++ Info.tenant_part_columns(union)
+
     expected = Enum.map_join(names, ", ", &Printer.literal(to_string(&1)))
 
     message =
@@ -250,13 +254,26 @@ defmodule AshStrangler.Union.Sql do
 
   defp read_sql(branch, column, frame) do
     Enum.find_value(branch.mappings, "NULL", fn
-      %MapEntry{attribute: ^column, from: from} when is_atom(from) -> frame.({[], from})
-      %MapEntry{attribute: ^column, from: from} -> Printer.to_sql(from, ref: frame)
-      %Constant{attribute: ^column, value: value} -> Printer.literal(value)
-      %TenantKey{attribute: ^column} = key -> tenant_sql(key, frame)
-      %ExtensionEntry{attributes: attributes} -> if column in attributes, do: "strangler_ext.#{q(column)}"
-      %Unmapped{attributes: attributes} -> if column in attributes, do: "NULL"
-      _ -> nil
+      %MapEntry{attribute: ^column, from: from} when is_atom(from) ->
+        frame.({[], from})
+
+      %MapEntry{attribute: ^column, from: from} ->
+        Printer.to_sql(from, ref: frame)
+
+      %Constant{attribute: ^column, value: value} ->
+        Printer.literal(value)
+
+      %TenantKey{attribute: ^column} = key ->
+        tenant_sql(key, frame)
+
+      %ExtensionEntry{attributes: attributes} ->
+        if column in attributes, do: "strangler_ext.#{q(column)}"
+
+      %Unmapped{attributes: attributes} ->
+        if column in attributes, do: "NULL"
+
+      _ ->
+        nil
     end)
   end
 
@@ -306,7 +323,11 @@ defmodule AshStrangler.Union.Sql do
 
   # `SET search_path = pg_catalog` leaves no schema to resolve `uuid_generate_v5` in.
   defp definer(union),
-    do: if(Info.security_definer?(union), do: " SECURITY DEFINER SET search_path = pg_catalog", else: "")
+    do:
+      if(Info.security_definer?(union),
+        do: " SECURITY DEFINER SET search_path = pg_catalog",
+        else: ""
+      )
 
   defp qualify_functions(union, body) do
     if Info.security_definer?(union) do
