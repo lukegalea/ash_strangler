@@ -91,12 +91,18 @@ defmodule Mix.Tasks.AshStrangler.Check do
   A check that could not *run* is reported as `????`, which is not a failure by
   default: "could not be measured" and "measured clean" are different answers, and
   the report says which one each line is. That covers a query the database
-  rejected (a relation this environment does not have), a repo that could not be
-  resolved or started, and the two warnings that say nothing was measured. The
-  exception is a database that cannot be reached. A connection error is reported
-  once, as `database could not be reached`, and **fails the task**: a gate that
-  stayed green because the database was down would have measured nothing. It is
-  not retried per attribute, because it says nothing about any attribute.
+  rejected and a repo that could not be resolved or started. Two `warn` lines say
+  nothing was measured for the same reason, and do not fail by default either.
+
+  The cast check is the exception, because a cast failure can only show up as a
+  query error. A query it cannot run is a `FAIL`, so a legacy relation this
+  environment does not have fails the task here, and in the twin freshness check,
+  even though other checks print `????` for it. The one case it separates out is a
+  database that cannot be reached: a connection error is reported as
+  `database could not be reached`, once per resource rather than once per
+  attribute because it says nothing about any attribute, and **fails the task**. A
+  gate that stayed green because the database was down would have measured nothing.
+  The other checks against that database still print their own `????` lines.
 
   ## `--strict`
 
@@ -1000,7 +1006,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # number is for is noticing the drain has stopped keeping up — which is why
   # it is reported per relation, where "which legacy table is piling up" is
   # readable, rather than as one global count that hides the pile-up behind
-  # the quiet relations.
+  # the quiet relations. A backlog that could not be read at all is `????`, which
+  # like any other only fails the task under `--strict`.
   defp ledger_backlog(repo, group) do
     group
     |> Enum.filter(&Info.ledger?/1)

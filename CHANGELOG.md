@@ -181,8 +181,8 @@ Requires Elixir 1.20 or later.
 
 - **`mix ash_strangler.check` names an unreachable database as one.** A connection error in the
   cast check used to be retried per attribute and reported as `cast <attribute>` failing for every
-  mapped attribute. It is now reported once, as `database could not be reached`, and still fails the
-  task in the default mode. The moduledoc no longer says an unreachable database reports `????` and
+  mapped attribute. It is now reported once per resource, as `database could not be reached`, and
+  still fails the task in the default mode. The moduledoc no longer says an unreachable database reports `????` and
   passes.
 - **Union `:dual_write` updates no longer fail for every row.** The trigger
   casts each value to the legacy column's own type (a declared `:string` over an
