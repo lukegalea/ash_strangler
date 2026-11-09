@@ -17,6 +17,13 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **`mix ash_strangler.check --strict`:** exits non-zero on every outcome that could not be
+  measured, not only on a failed assertion: every `????` line (including a repo that could not be
+  resolved or started), the two warnings that say nothing was measured (a required attribute no
+  mapping accounts for; an identity key with no mapping), and no resource found, which includes a
+  `--domain` that names no domain. Without it a gate could go green having measured nothing.
+  `--no-data` is a request not to measure and is not counted.
+
 - **Union branch `filter`:** a `legacy` branch takes `filter expr(...)`, an expression over its
   twin's columns printed as the `WHERE` of the branch's select, so a relation that mixes kinds of
   row can feed several branches or only the rows a resource is about. The filter's columns are
@@ -171,6 +178,12 @@ Requires Elixir 1.20 or later.
   a change of shape (rename, retype, drop, reorder) is refused at migrate and needs a written
   `DROP VIEW` and `CREATE VIEW`.
 
+
+- **`mix ash_strangler.check` names an unreachable database as one.** A connection error in the
+  cast check used to be retried per attribute and reported as `cast <attribute>` failing for every
+  mapped attribute. It is now reported once, as `database could not be reached`, and still fails the
+  task in the default mode. The moduledoc no longer says an unreachable database reports `????` and
+  passes.
 - **Union `:dual_write` updates no longer fail for every row.** The trigger
   casts each value to the legacy column's own type (a declared `:string` over an
   integer column used to raise), and `VerifyUnion` refuses two columns mapped

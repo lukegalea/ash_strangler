@@ -66,6 +66,12 @@ databases.
 mix ash_strangler.check --domain MyApp.Domain
 ```
 
+Add `--strict` where this gates CI. By default a check that could not run (a `????`
+line) does not fail the task, so a run that measured nothing can look green;
+`--strict` exits non-zero on every outcome that could not be measured, including
+zero resources found and a `--domain` that names no domain. A database that cannot
+be reached fails the task either way.
+
 This runs the compiled obligations against the real legacy rows: NULLs,
 identities, casts, constraint assertions, twin freshness, join fan-out,
 mechanism costs, ledger backlog, declared losses, and any

@@ -78,6 +78,160 @@ defmodule AshStrangler.CheckTest.Measured do
   end
 end
 
+defmodule AshStrangler.CheckTest.DownRepo do
+  @moduledoc """
+  A repo pointed at a port nothing listens on, so a check against it meets a
+  `DBConnection.ConnectionError` the way a run with the database down does. The
+  pool settings are short so the test does not wait out a default queue.
+  """
+
+  use AshPostgres.Repo,
+    otp_app: :ash_strangler,
+    warn_on_missing_ash_functions?: false
+
+  @impl true
+  def min_pg_version, do: %Version{major: 14, minor: 0, patch: 0}
+
+  @impl true
+  def installed_extensions, do: ["citext"]
+end
+
+defmodule AshStrangler.CheckTest.DownTwin do
+  @moduledoc false
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.DownDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "down_items"
+    schema "legacy"
+    repo AshStrangler.CheckTest.DownRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :name, :string, public?: true
+    attribute :note, :string, public?: true
+    attribute :label, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.CheckTest.DownDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckTest.DownTwin
+    resource AshStrangler.CheckTest.Down
+  end
+end
+
+defmodule AshStrangler.CheckTest.Down do
+  @moduledoc """
+  Three mapped attributes over a twin whose database cannot be reached, so a
+  per-attribute report would show up as three lines.
+  """
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a72"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.DownDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "down_items"
+    schema "strangler"
+    repo AshStrangler.CheckTest.DownRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :name, :string, public?: true
+    attribute :note, :string, public?: true
+    attribute :label, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.CheckTest.DownTwin do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :name, from: :name
+      map :note, from: :note
+      map :label, from: :label
+    end
+  end
+end
+
+defmodule AshStrangler.CheckTest.Unmapped do
+  @moduledoc """
+  A required attribute held by an extension store rather than by a mapping over
+  the legacy columns: the check has no legacy expression to count NULLs over, and
+  says so with a warning rather than a verdict.
+
+  Shares `ExtendedUser`'s table name so the extension table the suite already
+  installed is the one it joins.
+  """
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a73"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.UnmappedDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "extended_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+    attribute :notes, :string, public?: true, default: ""
+    attribute :risk_score, :integer, public?: true, allow_nil?: false
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :login, from: :login
+      extension([:notes, :risk_score])
+    end
+  end
+end
+
+defmodule AshStrangler.CheckTest.UnmappedDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckTest.Unmapped
+  end
+end
+
 defmodule AshStrangler.CheckTest do
   @moduledoc """
   `mix ash_strangler.check` is asserted against a real PostgreSQL server rather
@@ -314,6 +468,98 @@ defmodule AshStrangler.CheckTest do
       {_result, output} = check(["--domain", "AshStrangler.Test.Domain"])
 
       assert output =~ "does not exist yet"
+    end
+  end
+
+  # --- --strict and the database that is not there -------------------------
+
+  describe "--strict" do
+    test "fails a run that measured nothing for a check it could not run" do
+      TestRepo.query!("DROP TABLE legacy_change_events")
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.Test.Domain])
+
+      {default, _output} = check(["--domain", "AshStrangler.Test.Domain"])
+      {strict, output} = check(["--domain", "AshStrangler.Test.Domain", "--strict"])
+
+      assert default == :ok
+      assert output =~ "does not exist yet"
+      assert {:exit, {:shutdown, 1}} = strict
+
+      # The count it reports is the number of `????` lines it printed.
+      unrun = length(Regex.scan(~r/\?\?\?\?/, output))
+      assert unrun > 0
+      assert output =~ "#{unrun} check(s) could not be measured"
+    end
+
+    test "fails a warning that says nothing was measured" do
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.CheckTest.UnmappedDomain])
+      args = ["--domain", "AshStrangler.CheckTest.UnmappedDomain"]
+
+      {default, output} = check(args)
+      {strict, _output} = check(args ++ ["--strict"])
+
+      assert output =~ "no mapping accounts for it, so nothing was measured"
+      assert default == :ok
+      assert {:exit, {:shutdown, 1}} = strict
+    end
+
+    test "fails when no resource was found" do
+      Application.put_env(:ash_strangler, :ash_domains, [])
+
+      {default, output} = check()
+      {strict, strict_output} = check(["--strict"])
+
+      assert default == :ok
+      assert output =~ "No resources use AshStrangler.Resource."
+      assert {:exit, {:shutdown, 1}} = strict
+      assert strict_output =~ "No resources use AshStrangler.Resource."
+    end
+
+    test "fails a --domain that names no domain" do
+      {default, _output} = check(["--domain", "AshStrangler.CheckTest.Typo"])
+      {strict, _output} = check(["--domain", "AshStrangler.CheckTest.Typo", "--strict"])
+
+      assert default == :ok
+      assert {:exit, {:shutdown, 1}} = strict
+    end
+
+    test "exits 0 when everything was measured clean" do
+      {result, output} = check(["--strict"])
+
+      assert result == :ok
+      refute output =~ "could not be measured"
+    end
+  end
+
+  describe "a database that cannot be reached" do
+    setup do
+      Application.put_env(:ash_strangler, AshStrangler.CheckTest.DownRepo,
+        username: "postgres",
+        password: "postgres",
+        hostname: "127.0.0.1",
+        port: 1,
+        database: "nowhere",
+        pool_size: 1,
+        queue_target: 20,
+        queue_interval: 20,
+        connect_timeout: 200
+      )
+
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.CheckTest.DownDomain])
+      on_exit(fn -> Application.delete_env(:ash_strangler, AshStrangler.CheckTest.DownRepo) end)
+    end
+
+    @down ["--domain", "AshStrangler.CheckTest.DownDomain"]
+
+    @tag capture_log: true
+    test "still fails the task by default, once, without naming an attribute" do
+      {result, output} = check(@down)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ "database could not be reached"
+      refute output =~ ~r/cast  (name|note|label)/
+      assert length(Regex.scan(~r/database could not be reached/, output)) == 1
+      assert output =~ ~r/1 assertion\(s\) failed/
     end
   end
 
