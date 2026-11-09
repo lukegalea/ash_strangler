@@ -524,6 +524,8 @@ defmodule AshStrangler.TwinSnapshotTest do
     test "a watched twin notifies its key, and only its key, on its own channel" do
       [function, trigger] = AshStrangler.Sql.Watch.build(Accounts)
       assert function.name == :strangler_watch_shop_accounts_function
+      # An ordinary column is spelled as this function always spelled it.
+      assert function.up =~ ~s|json_build_object('id', affected."id")|
       assert trigger.up =~ ~s(AFTER INSERT OR UPDATE OR DELETE ON "shop"."accounts")
       assert Accounts in AshStrangler.Migration.resources([Clinic])
       assert AshStrangler.Migration.statements(Accounts) == [function, trigger]

@@ -60,7 +60,10 @@ defmodule AshStrangler.Sql.Watch do
       |> Ash.Resource.Info.primary_key()
       |> Enum.map_join(", ", fn attribute ->
         column = Twin.column!(twin, attribute)
-        "#{Printer.literal(column)}, affected.#{Printer.identifier(column)}"
+        # Always quoted, as this function has always been written, so the
+        # generated text of a watched twin with ordinary columns does not move.
+        quoted = String.replace(column, ~s("), ~s(""))
+        "#{Printer.literal(column)}, affected.\"#{quoted}\""
       end)
 
     [

@@ -789,11 +789,11 @@ defmodule AshStrangler.Backfill do
     }
   end
 
-  # Column names are validated as identifiers; the values are not touched at
-  # all. That asymmetry is the contract: `set` values are SQL expressions by
-  # design (`"counter + 1"`, `"upper(login)"`), and there is no bind-parameter
-  # form for a column name, so validation is the only defence available on the
-  # left-hand side.
+  # Column names are quoted as identifiers (`column!/2`); the values are not
+  # touched at all. That asymmetry is the contract: `set` values are SQL
+  # expressions by design (`"counter + 1"`, `"upper(login)"`), and there is no
+  # bind-parameter form for a column name, so quoting is the only defence
+  # available on the left-hand side.
   defp set!(set) do
     set
     |> Enum.map(fn {column, expression} ->

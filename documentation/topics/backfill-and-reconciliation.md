@@ -335,10 +335,12 @@ and the point is to push the work into the database rather than pull forty milli
 rows through the BEAM. They are evaluated against the row being updated, so
 `[counter: "counter + 1"]` is legal and means what it says.
 
-Column names are validated as plain SQL identifiers; values are not touched at
-all. That asymmetry is the contract — there is no bind-parameter form for a column
-name, so validation is the only defence available on the left-hand side, and the
-right-hand side is an expression by design. It is also why the derived plan is the
+Column names are quoted as SQL identifiers, with any quote in a name doubled, so a
+column called `effectiveDate` or `Order Date` is a column and nothing a name can
+hold is SQL; values are not touched at all. That asymmetry is the contract — there
+is no bind-parameter form for a column name, so quoting is the only defence
+available on the left-hand side, and the right-hand side is an expression by
+design. The relation and the flag column stay plain identifiers. It is also why the derived plan is the
 form to prefer whenever there is a mapping to derive it from: every expression it
 produces comes from `AshStrangler.Sql.Printer`, which owns literal escaping in one
 function.
