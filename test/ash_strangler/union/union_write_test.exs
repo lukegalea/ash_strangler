@@ -155,6 +155,44 @@ defmodule AshStrangler.UnionWriteTest do
     assert [[^xmin]] = q!("SELECT xmin::text FROM #{table}")
   end
 
+  test "an update assigns only the columns it changes, so a concurrent legacy commit survives" do
+    {view, table, _} =
+      install!(
+        "column :display, :string\ncolumn :code, :string\ncolumn :template, :string",
+        "map :display, from: :name\nmap :code, from: :code\nextension [:template]"
+      )
+
+    # `bump` stands for a legacy commit landing after the statement scanned the view: the trigger's
+    # NEW and OLD still carry the old values of the columns this statement does not set.
+    q!("""
+    WITH bump AS (UPDATE #{table} SET name = 'parsed', code = 99 RETURNING id)
+    UPDATE #{view} SET template = 'tpl-1' FROM bump
+    """)
+
+    assert [["parsed", 99]] = q!("SELECT name, code FROM #{table}")
+    assert [["tpl-1"]] = q!("SELECT template FROM #{view}")
+  end
+
+  test "an extension upsert overwrites only the extension columns it changes" do
+    {view, _table, union} =
+      install!(
+        "column :a, :string\ncolumn :b, :string",
+        "extension [:a, :b]"
+      )
+
+    q!("UPDATE #{view} SET a = 'a1', b = 'b1'")
+
+    # A second writer's `a` lands between this statement's scan and its trigger.
+    ext = AshStrangler.Union.Info.extension_table(union)
+
+    q!("""
+    WITH bump AS (UPDATE #{ext} SET a = 'a2' RETURNING 1)
+    UPDATE #{view} SET b = 'b2' FROM bump
+    """)
+
+    assert [["a2", "b2"]] = q!("SELECT a, b FROM #{view}")
+  end
+
   test "a view DELETE under refuse_delete is refused and the legacy row stays" do
     {view, table, _} =
       install!(

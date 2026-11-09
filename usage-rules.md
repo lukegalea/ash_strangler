@@ -482,6 +482,8 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
 - Write-through on a `:dual_write` branch: `not_written_back [:col], because: ...` drops a column
   from the update (it keeps the legacy value, and is not a writer of a shared legacy column);
   `extension [:col]` stores it in `<view>_extension` instead of the legacy table;
+  an update assigns only the columns whose value differs from the scanned row (a concurrent legacy
+  commit to the others survives; the same holds for extension columns);
   `refuse_delete because: ...` makes a delete raise `BranchWriteRefused`. On the union,
   `security_definer true` renders the trigger functions `SECURITY DEFINER SET search_path =
   pg_catalog` (twins need a schema). `AshStrangler.Migration.render_move/2` moves an installed union

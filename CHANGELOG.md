@@ -17,6 +17,12 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **A union `:dual_write` update assigns only the columns it changed:** the trigger's `NEW` and `OLD` are
+  both the view scan, so a column the statement left alone carried a value that could predate a
+  concurrent commit to the legacy row, and assigning it back reverted that commit. Each legacy column is
+  now `col = CASE WHEN NEW.x IS DISTINCT FROM OLD.x THEN <new> ELSE col END`, and the extension upsert
+  overwrites only the changed extension columns. Writing a column back to the value the scan showed is
+  indistinguishable from not writing it, as with a twin's `on_update: :changed_columns`.
 - **The Clarity "Strangler Mapping" tab shows the mapping, not a count:** it was a relation-level
   Mermaid overview whose edges read "9 mapped, 3 read only". It is now Markdown, rendered by the new
   `AshStrangler.Diagram.Report`. A resource gets its phase, write mode, view and legacy relations

@@ -111,7 +111,11 @@ stored, so `RETURNING` carries the key and every default. In `:dual_write`, an
 update writes the columns the branch renames (`map :x, from: :column`) and
 refuses a changed column that has no legacy column behind it (an expression, a
 constant or an unmapped column), and one read from a legacy column that forms the
-key. Each value is cast to the legacy column's own type. Two columns mapped from
+key. Each value is cast to the legacy column's own type. Only a column whose value differs from the
+view row the statement scanned is assigned (`col = CASE WHEN NEW.x IS DISTINCT FROM OLD.x THEN ... ELSE col END`),
+so a legacy commit that lands between the scan and the trigger is kept for every column the statement did not
+change; an extension upsert likewise overwrites only its changed columns. Writing a column back to the value it
+showed is indistinguishable from not writing it. Two columns mapped from
 one legacy column are refused at compile time on a `:dual_write` branch: map all
 but one with `from: expr(column)`. Updating a key is refused, and so is an
 insert whose supplied key is already in the view.
