@@ -106,8 +106,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   executing it, and compares with what the attribute stores. A Postgres enum and a
   type with no Ash type are reported as such, never read as a match. Typmods
   (`numeric(10, 2)`, `varchar(20)`) are not compared. **A pass is not a statement
-  about the rows**: a matching type does not show that every row casts, and that
-  is a question about data the cast check puts to the data.
+  about the rows**: a matching type does not show that every row casts.
 
   ## The estate obligation report
 
@@ -798,16 +797,14 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   # --- column types ------------------------------------------------------
 
-  # The type each mapping *yields*, against the type its attribute stores. The
-  # cast check above proves every row projects; it cannot say that what comes out
-  # is what the attribute expects, because Postgres is happy to project an `int4`
-  # where Ash will read a string. A twin whose column changed type is the usual
-  # way to get there: the mapping carries no cast, because the twin said the two
-  # were already the same.
+  # The type each mapping *yields*, against the type its attribute stores. Postgres
+  # is happy to project an `int4` where Ash will read a string. A twin whose column
+  # changed type is the usual way to get there: the mapping carries no cast, because
+  # the twin said the two were already the same.
   #
   # The type is read, not computed from rows. `ON false` joins nothing, so the
   # projection is parsed and typed and never executed -- a row that cannot be cast
-  # makes no difference to this question, and the cast check is where it fails.
+  # makes no difference to this question.
   # `pg_typeof` of the (NULL) joined column is the type of the expression.
   @projected_type """
   SELECT t.typname, t.typtype::text, t.typcategory::text, e.typname, b.typname
@@ -861,8 +858,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
             @ok,
             "column types",
             "#{matched} projection(s) yield the type their attribute stores. Typmods are not " <>
-              "compared, and a matching type does not show that every row casts: the cast " <>
-              "check does that."
+              "compared, and a matching type does not show that every row casts."
           )
         ])
       else
@@ -1070,10 +1066,12 @@ defmodule Mix.Tasks.AshStrangler.Check do
   defp measure_twin(repo, twin, resources, catalog) do
     Mix.shell().info("\n  #{inspect(twin)} against #{Twin.relation(twin)}")
 
+    freshness = twin_freshness(repo, twin)
+
     tally([
-      twin_freshness(repo, twin),
+      freshness,
       twin_identities(repo, twin),
-      twin_columns(twin, resources, catalog)
+      twin_columns(twin, resources, catalog, freshness)
     ])
   end
 
@@ -1155,19 +1153,16 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # step. With a `one_of` present and every value decoded, `GetTotal` is proven
   # total at compile time and no assertion is emitted, so a label added to the
   # enum later is a value nothing re-checks.
-  defp twin_columns(twin, resources, {:ok, catalog}) do
+  defp twin_columns(twin, resources, {:ok, catalog}, freshness) do
     {schema, table} = relation_parts(twin)
 
-    # An absent relation has been reported as a failure by the freshness check, and
-    # says nothing here: there is nothing to compare, and a second failure for one
-    # missing table would only hide that it is one.
     case Introspection.relation(catalog, "#{schema}.#{table}") do
       {:ok, relation} -> compare_twin(twin, relation, catalog, resources)
-      :error -> @none
+      :error -> absent_from_catalog(twin, freshness)
     end
   end
 
-  defp twin_columns(_twin, _resources, {:error, error}) do
+  defp twin_columns(_twin, _resources, {:error, error}, _freshness) do
     emit(
       @unrun,
       "twin columns",
@@ -1176,21 +1171,37 @@ defmodule Mix.Tasks.AshStrangler.Check do
     )
   end
 
+  # An absent relation has been reported as a failure by the freshness check, and
+  # says nothing here: there is nothing to compare, and a second failure for one
+  # missing table would only hide that it is one. A relation the freshness check
+  # did find, and the catalog leaves out (an extension's own table), is one nothing
+  # was compared for.
+  defp absent_from_catalog(_twin, {failed, _unmeasured}) when failed > 0, do: @none
+
+  defp absent_from_catalog(twin, _freshness) do
+    emit(
+      @unrun,
+      "twin columns",
+      "`#{Twin.relation(twin)}` is not in the catalog read (it may belong to an extension), " <>
+        "so the twin's types and value sets were not compared."
+    )
+  end
+
   defp compare_twin(twin, relation, catalog, resources) do
     secrets = Twin.secrets(twin)
     wrote = relation |> Introspection.typed_columns(catalog, secrets) |> Map.new(&{&1.column, &1})
 
-    findings =
+    compared =
       twin
       |> Ash.Resource.Info.attributes()
-      |> Enum.flat_map(fn attribute ->
-        column = Twin.column!(twin, attribute.name)
+      |> Enum.map(&{&1, Twin.column!(twin, &1.name)})
+      |> Enum.filter(fn {_attribute, column} ->
+        column not in secrets and Map.has_key?(wrote, column)
+      end)
 
-        if column in secrets or not Map.has_key?(wrote, column) do
-          []
-        else
-          compare_attribute(twin, attribute, wrote[column], resources)
-        end
+    findings =
+      Enum.flat_map(compared, fn {attribute, column} ->
+        compare_attribute(twin, attribute, wrote[column], resources)
       end)
 
     case findings do
@@ -1198,7 +1209,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
         emit(
           @ok,
           "twin columns",
-          "#{length(Twin.columns(twin))} column(s) match what gen.twin writes today"
+          "#{length(compared)} column(s) match what gen.twin writes today"
         )
 
       findings ->

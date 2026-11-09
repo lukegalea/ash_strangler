@@ -782,6 +782,30 @@ defmodule AshStrangler.CheckCatalogTest do
       assert strict_output =~ "could not be measured"
     end
 
+    test "the pass line counts only the columns it compared" do
+      orders!()
+      TestRepo.query!("ALTER TABLE legacy.catalog_orders DROP COLUMN note", [])
+
+      {_result, output} = check()
+
+      assert output =~ "5 column(s) match what gen.twin writes today"
+      refute output =~ "6 column(s) match what gen.twin writes today"
+    end
+
+    test "a relation the catalog leaves out while information_schema sees it was not measured" do
+      orders!()
+
+      TestRepo.query!("ALTER EXTENSION citext ADD TABLE legacy.catalog_orders", [])
+
+      {result, output} = check([])
+
+      assert output =~ ~r/\?\?\?\?.*twin columns/
+      assert result == :ok
+
+      {strict_result, _output} = check(["--strict"])
+      assert {:exit, {:shutdown, 1}} = strict_result
+    end
+
     test "--strict counts a column whose type has no Ash type" do
       orders!(amount: "inet")
 

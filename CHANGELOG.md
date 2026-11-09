@@ -26,7 +26,8 @@ Requires Elixir 1.20 or later.
   that is absent stays a failure of the freshness check. A new warning-level "column types" step
   asks Postgres for the type each mapping yields, without executing it, and compares it with the
   type the attribute stores; a Postgres enum and a type with no Ash type are reported, not
-  collapsed. A passing type does not show that every row casts.
+  collapsed, and `--strict` counts them, because nothing was compared for them. A passing type does
+  not show that every row casts.
 - **`AshStrangler.Twin.Introspection`:** what the twin generator decides about a relation (the
   columns with their Ash types and value sets, the identities and unique sets, the coarse type
   comparison), callable from a task that does not load Igniter. `mix ash_strangler.gen.twin` writes
