@@ -70,7 +70,8 @@ Add `--strict` where this gates CI. By default a check that could not run (a `??
 line) does not fail the task, so a run that measured nothing can look green;
 `--strict` exits non-zero on every outcome that could not be measured, including
 zero resources found and a `--domain` that names no domain. A database that cannot
-be reached fails the task either way.
+be reached fails the task either way. `--strict` and `--no-data` contradict each
+other and the task refuses the pair.
 
 This runs the compiled obligations against the real legacy rows: NULLs,
 identities, casts, constraint assertions, twin freshness, join fan-out,

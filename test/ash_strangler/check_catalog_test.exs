@@ -255,6 +255,7 @@ defmodule AshStrangler.CheckCatalogTest.ShakyView do
     attribute :as_text, :string, public?: true
     attribute :as_citext, :string, public?: true
     attribute :cast_later, :integer, public?: true
+    attribute :also_cast_later, :integer, public?: true
   end
 
   actions do
@@ -285,6 +286,82 @@ defmodule AshStrangler.CheckCatalogTest.ShakyView do
         from: expr(fragment("(?)::int", note)),
         read_only?: true,
         because: "fixture"
+
+      map :also_cast_later,
+        from: expr(fragment("(?)::int", handle)),
+        read_only?: true,
+        because: "fixture"
+    end
+  end
+end
+
+defmodule AshStrangler.CheckCatalogTest.MixedDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckCatalogTest.MixedTwin
+    resource AshStrangler.CheckCatalogTest.MixedView
+  end
+end
+
+defmodule AshStrangler.CheckCatalogTest.MixedTwin do
+  @moduledoc "A twin over a relation whose name Postgres folds unless it is quoted."
+  use Ash.Resource,
+    domain: AshStrangler.CheckCatalogTest.MixedDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "Mixed_Items"
+    schema "legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :name, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.CheckCatalogTest.MixedView do
+  @moduledoc false
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a85"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckCatalogTest.MixedDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "mixed_items_view"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :name, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.CheckCatalogTest.MixedTwin do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :name, from: :name, read_only?: true, because: "fixture"
     end
   end
 end
@@ -408,6 +485,7 @@ defmodule AshStrangler.CheckCatalogTest do
   @domain "AshStrangler.CheckCatalogTest.Domain"
   @shaky_domain "AshStrangler.CheckCatalogTest.ShakyDomain"
   @edge_domain "AshStrangler.CheckCatalogTest.EdgeDomain"
+  @mixed_domain "AshStrangler.CheckCatalogTest.MixedDomain"
 
   setup do
     previous = Application.get_env(:ash_strangler, :ash_domains)
@@ -415,7 +493,8 @@ defmodule AshStrangler.CheckCatalogTest do
     Application.put_env(:ash_strangler, :ash_domains, [
       AshStrangler.CheckCatalogTest.Domain,
       AshStrangler.CheckCatalogTest.ShakyDomain,
-      AshStrangler.CheckCatalogTest.EdgeDomain
+      AshStrangler.CheckCatalogTest.EdgeDomain,
+      AshStrangler.CheckCatalogTest.MixedDomain
     ])
 
     shell = Mix.shell()
@@ -670,6 +749,7 @@ defmodule AshStrangler.CheckCatalogTest do
       # the freshness line already failed the task for this.
       refute output =~ ~r/\?\?\?\?.*twin column/
       refute output =~ ~r/ok.*twin columns/
+      refute output =~ ~r/\?\?\?\?.*twin identities/
     end
 
     test "a table dropped after the twin was generated fails by default too" do
@@ -684,6 +764,9 @@ defmodule AshStrangler.CheckCatalogTest do
       # step is not reported as having passed.
       assert output =~ ~r/\?\?\?\?.*column types/
       refute output =~ ~r/ok.*column types/
+      # The freshness check has failed for the one missing table; a second FAIL
+      # claiming its unique sets are unenforced would only hide that.
+      refute output =~ ~r/twin identities/
     end
   end
 
@@ -939,6 +1022,107 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert output =~ "Typmods are not compared"
       assert output =~ "does not show that every row casts"
+    end
+  end
+
+  describe "casts" do
+    test "a row that cannot be cast fails the check, naming each column that cannot" do
+      shaky!()
+
+      TestRepo.query!(
+        "INSERT INTO legacy.catalog_shaky (id, qty, handle, note) VALUES (1, 3, 'xyz', 'abc')",
+        []
+      )
+
+      # The precondition, over the same expressions the check builds: evaluated,
+      # each projection raises.
+      assert {:error, %Postgrex.Error{}} =
+               TestRepo.query("SELECT (note)::int FROM legacy.catalog_shaky", [])
+
+      assert {:error, %Postgrex.Error{}} =
+               TestRepo.query("SELECT (handle)::int FROM legacy.catalog_shaky", [])
+
+      {result, output} = check([], @shaky_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*  cast  cast_later/
+      assert output =~ ~r/FAIL.*  cast  also_cast_later/
+      assert output =~ "invalid input syntax for type integer"
+      refute output =~ "every mapping projects over"
+      refute output =~ ~r/FAIL.*  cast  (qty|addr|handle|as_text|as_citext)/
+    end
+
+    test "a row that casts is a pass" do
+      shaky!()
+
+      TestRepo.query!(
+        "INSERT INTO legacy.catalog_shaky (id, qty, handle, note) VALUES (1, 3, '7', '42')",
+        []
+      )
+
+      {_result, output} = check([], @shaky_domain)
+
+      assert output =~ "every mapping projects over all 8 column(s)"
+      refute output =~ ~r/FAIL.*  cast/
+    end
+
+    test "--no-data does not run the casts" do
+      shaky!()
+
+      TestRepo.query!(
+        "INSERT INTO legacy.catalog_shaky (id, qty, handle, note) VALUES (1, 3, 'xyz', 'abc')",
+        []
+      )
+
+      {result, output} = check(["--no-data"], @shaky_domain)
+
+      assert result == :ok
+      assert output =~ "Nothing was measured"
+      refute output =~ ~r/(ok|FAIL|warn|\?\?\?\?).*casts?\b/
+    end
+  end
+
+  describe "the twin identities" do
+    test "an invalid unique index does not count as enforcing the set" do
+      orders!()
+
+      {_result, output} = check([], @domain)
+      assert output =~ ~r/ok.*twin identities/
+
+      # What a failed `CREATE INDEX CONCURRENTLY` leaves behind.
+      TestRepo.query!(
+        "UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'legacy.catalog_orders_pkey'::regclass",
+        []
+      )
+
+      {result, output} = check([], @domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*twin identities/
+      assert output =~ "declares unique set(s) Postgres does not enforce"
+    end
+
+    # Only the catalog reads are asked about: the task's other queries spell the
+    # relation unquoted, as every statement `Twin.relation/1` feeds does.
+    test "a relation whose name is mixed-case is read by name" do
+      TestRepo.query!(
+        ~s|CREATE TABLE legacy."Mixed_Items" (id bigint PRIMARY KEY, name text)|,
+        []
+      )
+
+      {_result, output} = check([], @mixed_domain)
+
+      assert output =~ ~r/ok.*twin freshness/
+      refute output =~ ~r/\?\?\?\?.*twin identities/
+      assert output =~ ~r/ok.*twin identities\n\s+1 set\(s\), each backed by a unique index/
+    end
+
+    test "a mixed-case relation that was dropped is a plain FAIL, with nothing unmeasured beside it" do
+      {result, output} = check([], @mixed_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*twin freshness/
+      refute output =~ ~r/twin identities/
     end
   end
 
