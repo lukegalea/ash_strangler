@@ -157,9 +157,11 @@ Requires Elixir 1.20 or later.
   `NULL` in the view, which PostgreSQL types as `text`, so `created_by_id = other.id` on a `uuid`
   attribute failed with `operator does not exist: text = uuid`. It now renders `NULL::uuid` (the
   attribute's Postgres type). A type the printer's table does not name keeps the bare `NULL`.
-  **Existing installs need a `DROP VIEW` and `CREATE VIEW`:** `CREATE OR REPLACE VIEW` cannot change
-  a column's type, so re-running a regenerated migration over a view built by an earlier version
-  fails with `cannot change data type of view column`.
+  **Existing installs with such a column of a type other than `text` need a `DROP VIEW` and
+  `CREATE VIEW`:** `CREATE OR REPLACE VIEW` cannot change a column's type, so re-running a
+  regenerated migration over a view built by an earlier version fails with
+  `cannot change data type of view column`. A `:string` attribute was `text` already and replaces
+  in place.
 
 - **`ash_strangler.check` reads a twin identity's backing index by its key columns:** an
   expression index (`UNIQUE (tenant_id, lower(email))`) no longer reads as a unique `tenant_id`, and

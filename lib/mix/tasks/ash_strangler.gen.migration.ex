@@ -38,7 +38,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
   only add columns at the end; renaming, retyping, dropping or reordering a view
   column is refused by PostgreSQL when the migration runs, and needs a written
   `DROP VIEW` and `CREATE VIEW`. See "Changing a view's shape, in any phase" in
-  the phases guide (`documentation/topics/phases.md`).
+  the [phases guide](phases.md).
 
   ## Options
 
