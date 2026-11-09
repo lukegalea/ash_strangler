@@ -17,6 +17,23 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **`mix ash_strangler.check` compares a twin with the live catalog:** for each column a twin
+  declares, the check re-derives what `mix ash_strangler.gen.twin` would write today and compares.
+  A value set that grew (an enum label or `CHECK` value the twin's `one_of` lacks) fails, naming the
+  mappings that read the column; a changed coarse Ash type fails; a narrowed set, a `one_of` the
+  catalog no longer yields, and a differing `allow_nil?` warn. Value sets compare as sets, a
+  hand-written twin is held only to what it declares (by its `source:` column names), and a relation
+  that is absent stays a failure of the freshness check. A new warning-level "column types" step
+  asks Postgres for the type each mapping yields, without executing it, and compares it with the
+  type the attribute stores; a Postgres enum and a type with no Ash type are reported, not
+  collapsed, and `--strict` counts them, because nothing was compared for them. A passing type does
+  not show that every row casts.
+- **`AshStrangler.Twin.Introspection`:** what the twin generator decides about a relation (the
+  columns with their Ash types and value sets, the identities and unique sets, the coarse type
+  comparison), callable from a task that does not load Igniter. `mix ash_strangler.gen.twin` writes
+  the same files through it. `AshStrangler.Snapshot.Catalog.read/2` reads the catalog through any
+  function that runs SQL, and `AshStrangler.Snapshot.Types.ash_type/1` exposes the type table.
+
 - **Union write-through:** a `legacy` union branch takes `not_written_back [...], because:` (the
   columns a `:dual_write` update drops, which no longer count as writers of a shared legacy
   column), `extension [...]` (columns stored in `<view>_extension`, joined into the view and

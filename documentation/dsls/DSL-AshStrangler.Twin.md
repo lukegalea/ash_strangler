@@ -64,8 +64,23 @@ mitigations, and they answer different questions:
     column, whenever the twin's columns, types, nullability or primary key
     disagree with it. The catalog in turn is held to the live database by
     `mix ash_strangler.snapshot drift`.
-  * Without a snapshot, `mix ash_strangler.check` diffs every twin against
-    `information_schema` and reports the difference.
+  * Without a snapshot, `mix ash_strangler.check` diffs every twin against the
+    live database. What that covers:
+
+      * **freshness**: the twin's columns against `information_schema.columns`,
+        so a column added or dropped is reported;
+      * **identities**: the twin's unique sets against `pg_index`, key columns
+        of whole-table, plain-column indexes only;
+      * **twin columns**: for each column the twin declares, what
+        `mix ash_strangler.gen.twin` would write today. A value set that grew (an
+        enum label or `CHECK` value the twin's `one_of` lacks) and a coarse type
+        that changed fail; a narrowed set, a `one_of` the catalog no longer
+        yields, and a nullability that differs warn.
+
+    It does not cover a column the twin leaves out beyond reporting it, a
+    typmod (`varchar(20)` against `varchar(40)`), a default, a collation, or a
+    change inside a `CHECK` that is not a plain `IN` list. A hand-written twin is
+    held only to what it declares.
 
 ## Secrets
 

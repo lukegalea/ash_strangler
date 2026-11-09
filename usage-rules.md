@@ -122,8 +122,9 @@ incomplete backfill produces missing rows, not an error.
 
 2. **A twin is a snapshot, so run `mix ash_strangler.check`.** A column the legacy
    application's next migration adds is invisible to every mapping until the twin
-   is regenerated. `check` diffs each twin against `information_schema.columns` and
-   its unique sets against `pg_index`, and exits non-zero on a mismatch so it can
+   is regenerated. `check` diffs each twin against `information_schema.columns`, its unique sets
+   against `pg_index`, and each declared column against what `gen.twin` would write
+   today (a widened `one_of` or a changed coarse type fails), and exits non-zero on a mismatch so it can
    gate CI. Without that, the typed layer inherits exactly the staleness problem it
    was built to remove.
 
