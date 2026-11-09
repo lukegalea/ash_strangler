@@ -2,15 +2,29 @@
 #
 # SPDX-License-Identifier: MIT
 
-with {:module, Clarity.Content} <- Code.ensure_loaded(Clarity.Content),
-     {:module, _} <- Code.ensure_compiled(AshStrangler.Diagram.Mapping) do
+with {:module, Clarity.Content} <- Code.ensure_loaded(Clarity.Content) do
   defmodule AshStrangler.ClarityContent.MappingDiagram do
     @moduledoc """
     Content provider showing the legacy-to-new mapping inside `Clarity`.
 
-    Applications and domains get the overview — which relations feed which
-    resources — because a column-level diagram of everything is a picture of
-    nothing. A single resource gets the full mapping, column by column.
+    The tab is Markdown, not a diagram. A mapping is a list of facts about
+    columns -- which legacy column feeds which attribute, through what SQL, in
+    which direction, and why a value is read only -- and a picture either drops
+    those facts (a relation-level overview that says "9 mapped, 3 read only") or
+    drowns in them (a column-level graph of a dozen resources). A table keeps one
+    row per attribute and has room for the text. See `AshStrangler.Diagram.Report`
+    for exactly what each level holds.
+
+    * **A resource** gets its phase, write mode, view and legacy relations, then
+      one row per attribute, the read-only attributes by name with their reasons,
+      and the legacy columns that nothing reads or that are `retired`.
+    * **A domain or an application** gets an index of legacy relation to the
+      resources it feeds, a one-row-per-resource summary that names its read-only
+      and unmapped attributes, and then the section of every resource.
+
+    The Mermaid renderers (`AshStrangler.Diagram.Mapping` and
+    `AshStrangler.Diagram.Overview`) are still what the README and
+    `mix ash_strangler.gen.diagram` use.
 
     Only offered where there is something to show: `applies?/2` is false for a
     resource with no `strangler` block, so this does not add an empty tab to
@@ -19,8 +33,7 @@ with {:module, Clarity.Content} <- Code.ensure_loaded(Clarity.Content),
 
     @behaviour Clarity.Content
 
-    alias AshStrangler.Diagram.Mapping
-    alias AshStrangler.Diagram.Overview
+    alias AshStrangler.Diagram.Report
     alias Clarity.Vertex
     alias Clarity.Vertex.Ash.Domain
     alias Clarity.Vertex.Ash.Resource
@@ -38,24 +51,14 @@ with {:module, Clarity.Content} <- Code.ensure_loaded(Clarity.Content),
     def applies?(_vertex, _lens), do: false
 
     @impl Clarity.Content
-    def render_static(%Vertex.Application{app: app}, _lens) do
-      [app] |> Overview.for_applications() |> mermaid()
-    end
+    def render_static(%Vertex.Application{app: app}, _lens),
+      do: {:markdown, [app] |> strangled_in() |> Report.for_resources()}
 
-    def render_static(%Domain{domain: domain}, _lens) do
-      [domain] |> Overview.for_domains() |> mermaid()
-    end
+    def render_static(%Domain{domain: domain}, _lens),
+      do: {:markdown, domain |> resources() |> Report.for_resources()}
 
-    def render_static(%Resource{resource: resource}, _lens) do
-      [resource] |> Mapping.for_resources() |> mermaid()
-    end
-
-    defp mermaid(diagram) do
-      diagram
-      |> AshDiagram.compose()
-      |> IO.iodata_to_binary()
-      |> then(&{:mermaid, &1})
-    end
+    def render_static(%Resource{resource: resource}, _lens),
+      do: {:markdown, Report.for_resources([resource])}
 
     defp strangled_in(apps) do
       apps

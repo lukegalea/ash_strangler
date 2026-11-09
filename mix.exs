@@ -226,6 +226,7 @@ defmodule AshStrangler.MixProject do
           AshStrangler.Lineage,
           AshStrangler.Diagram.Mapping,
           AshStrangler.Diagram.Overview,
+          AshStrangler.Diagram.Report,
           AshStrangler.Lineage.OpenLineage
         ],
         Internals: ~r/.*/
