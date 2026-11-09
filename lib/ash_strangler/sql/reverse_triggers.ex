@@ -32,6 +32,12 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   value survives. The old application cannot see those columns, so it cannot be the
   one to change them.
 
+  A trigger cannot tell a column the statement left out from one set to `NULL`, so
+  a mapped column an `INSERT` leaves out is stored as `NULL`. A legacy `DEFAULT` the
+  old application relied on belongs on the view, in the cutover migration
+  (`ALTER VIEW ... ALTER COLUMN ... SET DEFAULT`), where PostgreSQL applies it
+  before the trigger runs.
+
   ## When these are emitted, and when they are not
 
   An `INSTEAD OF` trigger is a trade (`AshStrangler.Mechanism`): on an
@@ -47,11 +53,14 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       `INSERT` would store `legacy_id` and leave the key unset, and a plain `UPDATE`
       of `id` would leave the two disagreeing. Any derived key needs the trigger.
 
-  The one shape that needs neither is an `:identity` key on a resource with no
-  `legacy_id`, whose view exposes the owned key itself, with every other column a
-  plain rename (`AshStrangler.Mechanism.classify/1` is `:plain`). Then the view is
-  auto-updatable, nothing is emitted, and `ON CONFLICT` keeps working. `needed?/1`
-  is that decision.
+    * **A legacy column more than one attribute reads** would reach only the one
+      the view column refers to, leaving the other stale.
+
+  The one shape that needs none of these is an `:identity` key on a resource with
+  no `legacy_id`, whose view exposes the owned key itself, with every other column a
+  plain rename (`AshStrangler.Mechanism.classify/1` is `:plain`) of a legacy column
+  nothing else reads. Then the view is auto-updatable, nothing is emitted, and
+  `ON CONFLICT` keeps working. `needed?/1` is that decision.
 
   A `retired` column (`AshStrangler.Retired`) does not force the trigger by itself:
   it is a NULL constant, which only errors if something assigns to it. With the
@@ -95,11 +104,16 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   `deleted_at` and a legacy `UPDATE` of `deleted_at` archives. A legacy `DELETE`
   is a request to delete, and is not rewritten into an archive.
 
-  ## `on_update` is not consulted
+  ## An `UPDATE` assigns only what the statement changed
 
-  `on_update` exists because the legacy table may have its own triggers and
-  `updated_at` columns that an assignment of an unchanged value would disturb. The
-  owned table is Ash's, so an `UPDATE` assigns every mapped column.
+  `NEW` holds every column of the view, so a statement that touched one column
+  looks like an assignment of all of them. Re-deriving the rest would run each
+  stored value through the mapping's round trip, and a value the legacy shape
+  cannot express (a state the `decode` table does not list, written by the new
+  application) reads as NULL through the view and would be stored back as NULL
+  while the old application is told `UPDATE 1`. So each column is assigned only when
+  a legacy column it reads differs between `NEW` and `OLD`. This does not depend on
+  `on_update`, whose reasons are about the legacy table's own triggers.
 
   ## One SQL command per statement, and order-independent downs
 
@@ -109,8 +123,12 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   by `to_regclass`, because `down` runs in list order.
   """
 
-  alias AshStrangler.{Info, Lens, Mechanism, Twin}
+  alias AshStrangler.{Expr, Info, Key, Lens, Mechanism, Twin}
   alias AshStrangler.Sql.{Printer, ReverseView, View}
+
+  # The alias of the owned table in a generated `UPDATE`, so a column's stored value
+  # is never read by a bare name a PL/pgSQL variable could shadow.
+  @target "strangler_target"
 
   @doc """
   Whether the old application's writes need `INSTEAD OF` triggers, per the rule in
@@ -123,7 +141,10 @@ defmodule AshStrangler.Sql.ReverseTriggers do
         true
 
       {:key, _column} ->
-        resource |> view_lenses() |> Enum.any?(&(Mechanism.classify(&1) not in [:none, :plain]))
+        lenses = view_lenses(resource)
+
+        Enum.any?(lenses, &(Mechanism.classify(&1) not in [:none, :plain])) or
+          shared_legacy_column?(resource, lenses)
     end
   end
 
@@ -146,6 +167,16 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     else
       _ -> []
     end
+  end
+
+  # A view column is a reference to one owned column. When two attributes read the
+  # same legacy column, or a mapping reads the key's, a plain view would carry the
+  # write to one of them and leave the other stale.
+  defp shared_legacy_column?(resource, lenses) do
+    written = Enum.flat_map(lenses, fn lens -> Enum.map(Lens.writes(lens), &elem(&1, 0)) end)
+    columns = written ++ Key.columns(Info.key(resource))
+
+    length(Enum.uniq(columns)) != length(columns)
   end
 
   defp view_lenses(resource) do
@@ -180,14 +211,14 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       new_key: nw.(key.from),
       key_expression: View.key_expression(resource, key, fn {_path, from} -> nw.(from) end),
       assignments: assignments(resource, twin, key, exposure),
-      decode_guards: decode_guards(resource, twin),
+      decode_guards: decode_guards(resource),
       retired: retired(resource, twin)
     }
   end
 
-  # `{owned_column, expression_over_NEW}` for every attribute with a legacy source,
-  # in the lenses' declaration order. The key and `legacy_id` columns are the
-  # trigger's own and are never assigned from a mapping.
+  # `{owned_column, expression_over_NEW, changed_condition}` for every attribute with
+  # a legacy source, in the lenses' declaration order. The key and `legacy_id` columns
+  # are the trigger's own and are never assigned from a mapping.
   defp assignments(resource, twin, key, exposure) do
     frame = forward_frame(twin)
 
@@ -199,10 +230,20 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     |> view_lenses()
     |> Enum.filter(&(&1.writes != [] and not is_nil(&1.forward)))
     |> Enum.map(
-      &{ReverseView.owned_column(resource, &1.attribute), Printer.to_sql(&1.forward, ref: frame)}
+      &{ReverseView.owned_column(resource, &1.attribute), Printer.to_sql(&1.forward, ref: frame),
+       changed_condition(&1, twin)}
     )
-    |> Enum.reject(fn {column, _expression} -> column in reserved end)
-    |> Enum.uniq_by(fn {column, _expression} -> column end)
+    |> Enum.reject(fn {column, _expression, _changed} -> column in reserved end)
+    |> Enum.uniq_by(fn {column, _expression, _changed} -> column end)
+  end
+
+  # Whether the statement changed a legacy column this mapping reads.
+  defp changed_condition(lens, twin) do
+    lens.forward
+    |> Expr.refs()
+    |> Enum.map(fn {_path, attribute} -> ReverseView.legacy_column(twin, attribute) end)
+    |> Enum.uniq()
+    |> Enum.map_join(" OR ", &"NEW.#{&1} IS DISTINCT FROM OLD.#{&1}")
   end
 
   # The frame the forward expressions are read in: a twin attribute is the column
@@ -221,20 +262,25 @@ defmodule AshStrangler.Sql.ReverseTriggers do
 
   # A `decode` table has no counterpart for a legacy value it does not list, and the
   # forward expression answers NULL for it. Storing that NULL would lose what the
-  # old application wrote and report success, so the write is refused.
-  defp decode_guards(resource, twin) do
-    frame = forward_frame(twin)
+  # old application wrote and report success, so the write is refused. The test is
+  # whether the table lists the value, because a listed value may decode to NULL.
+  defp decode_guards(resource) do
+    twin = Info.twin(resource)
 
     resource
     |> view_lenses()
     |> Enum.filter(&(&1.combinator == :decode))
     |> Enum.map(fn lens ->
-      column = Twin.column!(twin, lens.entry.from)
+      listed =
+        lens.entry.values
+        |> Enum.map(fn {legacy, _modern} -> legacy end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map_join(", ", &Printer.literal/1)
 
       %{
         legacy: "NEW." <> ReverseView.legacy_column(twin, lens.entry.from),
-        label: column,
-        decoded: Printer.to_sql(lens.forward, ref: frame)
+        label: Twin.column!(twin, lens.entry.from),
+        listed: listed
       }
     end)
   end
@@ -326,11 +372,11 @@ defmodule AshStrangler.Sql.ReverseTriggers do
         # Nothing the old application can write, still a row that must exist: the
         # statement is a no-op that fails when the row is gone.
         [] ->
-          "#{ctx.stored_key_column} = #{ctx.stored_key_column}"
+          "#{ctx.stored_key_column} = #{@target}.#{ctx.stored_key_column}"
 
         assignments ->
-          Enum.map_join(assignments, ",\n        ", fn {column, expression} ->
-            "#{column} = #{expression}"
+          Enum.map_join(assignments, ",\n        ", fn {column, expression, changed} ->
+            "#{column} = CASE WHEN #{changed} THEN #{expression} ELSE #{@target}.#{column} END"
           end)
       end
 
@@ -346,7 +392,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
         RAISE EXCEPTION 'cannot change the key of %: % -> %', #{ctx.view_literal}, OLD.#{ctx.view_key_column}, NEW.#{ctx.view_key_column};
       END IF;
 
-      UPDATE #{ctx.owned}
+      UPDATE #{ctx.owned} AS #{@target}
       SET #{assignments}
       WHERE #{ctx.stored_key_column} = OLD.#{ctx.view_key_column}
       RETURNING * INTO stored;
@@ -389,7 +435,10 @@ defmodule AshStrangler.Sql.ReverseTriggers do
         :key -> []
       end
 
-    [{ctx.owned_key_column, ctx.key_expression}] ++ legacy_id ++ ctx.assignments
+    mapped =
+      Enum.map(ctx.assignments, fn {column, expression, _changed} -> {column, expression} end)
+
+    [{ctx.owned_key_column, ctx.key_expression}] ++ legacy_id ++ mapped
   end
 
   # --- guards -----------------------------------------------------------------
@@ -418,7 +467,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   defp decode_guards_sql(ctx) do
     Enum.map_join(ctx.decode_guards, "", fn guard ->
       """
-        IF #{guard.legacy} IS NOT NULL AND #{guard.decoded} IS NULL THEN
+        IF #{guard.legacy} IS NOT NULL AND #{guard.legacy} NOT IN (#{guard.listed}) THEN
           RAISE EXCEPTION 'cannot write %.%: the value % has no counterpart in the new model', #{ctx.view_literal}, #{Printer.literal(guard.label)}, #{guard.legacy};
         END IF;
 

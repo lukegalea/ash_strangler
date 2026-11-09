@@ -322,7 +322,16 @@ A row the old application writes is therefore stored as a backfill would have
 stored it. The owned key is computed with the very expression the forward view uses
 and the legacy key is stored as `legacy_id`. An attribute with no legacy source (an
 `unmapped` or a `constant`) is not assigned: the owned table's defaults apply on an
-`INSERT` and its stored value survives an `UPDATE`.
+`INSERT` and its stored value survives an `UPDATE`. An `UPDATE` assigns only the
+columns whose legacy source the statement changed, so a stored value the legacy shape
+cannot express survives an update of some other column.
+
+A trigger cannot tell a column the statement left out from one it set to `NULL`, so
+an `INSERT` that leaves out a mapped column stores `NULL` for it: the legacy table's
+`DEFAULT` is gone with the table, and the owned column's default is not consulted.
+If the old application relies on a column default, put it on the view in the cutover
+migration (`ALTER VIEW users ALTER COLUMN status SET DEFAULT 'pending'`), and
+PostgreSQL fills it in before the trigger runs.
 
 **They are emitted only when a plain view cannot carry the write**, because a
 trigger costs the old application `ON CONFLICT` and `WITH CHECK OPTION`. The rule
@@ -331,10 +340,12 @@ is PostgreSQL's:
 - a view column is updatable only if it is a *simple reference* to a base column, so
   any `decode`, cast, `zone:` or `collapse` column needs the trigger; and
 - the owned key is *derived* from the legacy key, which a plain view would never
-  compute, so any derived key needs it too, as does a stored `legacy_id`.
+  compute, so any derived key needs it too, as does a stored `legacy_id`; and
+- a view column refers to one owned column, so a legacy column that more than one
+  attribute reads needs it, or the other attribute goes stale.
 
-The one shape that needs neither is an `:identity` key on a resource with no
-`legacy_id` and plain renames for every other column: then the view is
+The one shape that needs none of these is an `:identity` key on a resource with no
+`legacy_id` and plain renames of otherwise unshared columns: then the view is
 auto-updatable and nothing is emitted. `ReverseTriggers.needed?/1` is that decision.
 
 The three traps of the dual-write triggers are honoured. `RETURNING` reports the

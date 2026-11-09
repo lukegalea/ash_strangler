@@ -106,7 +106,8 @@ defmodule AshStrangler.ReverseWritesTest do
         ttl text,
         state_code integer,
         archived_at timestamptz,
-        region text DEFAULT 'eu'
+        region text DEFAULT 'eu',
+        "order" text
       )
       """,
       []
@@ -118,7 +119,8 @@ defmodule AshStrangler.ReverseWritesTest do
         id uuid PRIMARY KEY,
         legacy_id uuid,
         title text,
-        note text
+        note text,
+        note_copy text
       )
       """,
       []
@@ -339,6 +341,20 @@ defmodule AshStrangler.ReverseWritesTest do
                TestRepo.query!("SELECT region, state_code FROM strangler.rw_gadgets", [])
     end
 
+    test "a mapped column the statement leaves out takes a default the view declares" do
+      TestRepo.query!(
+        ~s|ALTER VIEW rw_legacy.gadgets ALTER COLUMN "Name" SET DEFAULT 'unnamed'|,
+        []
+      )
+
+      TestRepo.query!(
+        ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", status) VALUES (8, 'active')|,
+        []
+      )
+
+      assert %{rows: [["unnamed"]]} = TestRepo.query!("SELECT ttl FROM strangler.rw_gadgets", [])
+    end
+
     test "a positional INSERT lands in the twin's column order" do
       TestRepo.query!(
         "INSERT INTO rw_legacy.gadgets VALUES (9, 'active', 'Zed', '2024-01-01 00:00:00', NULL)",
@@ -481,6 +497,66 @@ defmodule AshStrangler.ReverseWritesTest do
     end
   end
 
+  describe "a legacy UPDATE of one column" do
+    test "leaves a stored value the legacy shape cannot express" do
+      install!(gadget_resource())
+      insert_owned!(7, "Alpha", 99)
+
+      assert %{rows: [[nil]]} = TestRepo.query!("SELECT status FROM rw_legacy.gadgets", [])
+
+      TestRepo.query!(~s|UPDATE rw_legacy.gadgets SET "Name" = 'Beta' WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [["Beta", 99]]} =
+               TestRepo.query!("SELECT ttl, state_code FROM strangler.rw_gadgets", [])
+    end
+  end
+
+  describe "a decode that maps a legacy value to NULL" do
+    test "is a counterpart, so the value is written rather than refused" do
+      resource =
+        gadget_resource(
+          decode: ~s|decode :state_code, from: :status, values: %{active: 0, retired: nil}|
+        )
+
+      install!(resource)
+
+      TestRepo.query!(
+        ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", status) VALUES (5, 'retired')|,
+        []
+      )
+
+      assert %{rows: [[5, nil]]} =
+               TestRepo.query!("SELECT legacy_id, state_code FROM strangler.rw_gadgets", [])
+
+      assert_raise Postgrex.Error, ~r/the value weird has no counterpart/, fn ->
+        TestRepo.query!(
+          ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", status) VALUES (6, 'weird')|,
+          []
+        )
+      end
+    end
+  end
+
+  describe "a legacy column more than one mapping reads" do
+    test "needs the trigger: a plain view would carry the write to only one of them" do
+      resource = thing_resource(note_copy?: true)
+
+      assert ReverseTriggers.needed?(resource)
+      install!(resource)
+
+      id = Ash.UUID.generate()
+
+      TestRepo.query!("INSERT INTO rw_legacy.things (id, note) VALUES ($1, 'first')", [
+        Ecto.UUID.dump!(id)
+      ])
+
+      TestRepo.query!("UPDATE rw_legacy.things SET note = 'second'", [])
+
+      assert %{rows: [["second", "second"]]} =
+               TestRepo.query!("SELECT note, note_copy FROM strangler.rw_things", [])
+    end
+  end
+
   # --- the statements themselves ----------------------------------------------
 
   describe "the generated statements" do
@@ -590,6 +666,15 @@ defmodule AshStrangler.ReverseWritesTest do
       end
 
     ledger = if Keyword.get(opts, :ledger?, false), do: "notify? true\nledger? true", else: ""
+    table = Keyword.get(opts, :table, "rw_gadgets")
+    title_source = Keyword.get(opts, :title_source, :ttl)
+
+    decode =
+      Keyword.get(
+        opts,
+        :decode,
+        "decode :state_code, from: :status, values: %{active: 0, retired: 1}"
+      )
 
     define!("""
     defmodule #{name} do
@@ -600,7 +685,7 @@ defmodule AshStrangler.ReverseWritesTest do
         extensions: [AshStrangler.Resource]
 
       postgres do
-        table "rw_gadgets"
+        table "#{table}"
         schema "strangler"
         repo AshStrangler.TestRepo
       end
@@ -608,7 +693,7 @@ defmodule AshStrangler.ReverseWritesTest do
       attributes do
         attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
         attribute :legacy_id, :integer, allow_nil?: false, public?: true
-        attribute :title, :string, public?: true, source: :ttl
+        attribute :title, :string, public?: true, source: :#{title_source}
         attribute :state_code, :integer, public?: true, constraints: [min: 0, max: 1]
         attribute :archived_at, :utc_datetime_usec, public?: true
         attribute :region, :string, public?: true, default: "eu"
@@ -623,7 +708,7 @@ defmodule AshStrangler.ReverseWritesTest do
 
           map :title, from: :display_name
           map :archived_at, from: :deleted_at, zone: "UTC"
-          decode :state_code, from: :status, values: %{active: 0, retired: 1}
+          #{decode}
 
           unmapped [:legacy_id], as: :null, because: "Carried by the backfill, not projected."
           unmapped [:region], as: :null, because: "Owned by the new application; the old one never saw it."
@@ -648,6 +733,13 @@ defmodule AshStrangler.ReverseWritesTest do
         do: ~s|unmapped [:legacy_id], as: :null, because: "Carried, not projected."|,
         else: ""
 
+    note_copy? = Keyword.get(opts, :note_copy?, false)
+
+    note_copy_attribute =
+      if note_copy?, do: "attribute :note_copy, :string, public?: true", else: ""
+
+    note_copy_map = if note_copy?, do: "map :note_copy, from: :note", else: ""
+
     define!("""
     defmodule #{name} do
       use Ash.Resource,
@@ -667,6 +759,7 @@ defmodule AshStrangler.ReverseWritesTest do
         #{legacy_id}
         attribute :title, :string, public?: true
         attribute :note, :string, public?: true
+        #{note_copy_attribute}
       end
 
       strangler do
@@ -677,6 +770,7 @@ defmodule AshStrangler.ReverseWritesTest do
 
           map :title, from: :title
           map :note, from: :note
+          #{note_copy_map}
           #{unmapped}
         end
       end
