@@ -247,7 +247,8 @@ mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json
 measures them against the legacy database and writes JSON in the
 `ash_strangler.obligations/1` format. `--no-data` skips the queries. The task
 exits 1 when an obligation fails or can't be measured, or when the estate has a
-problem.
+problem. That is `--strict`'s behaviour already, so `--strict` changes nothing
+here.
 
 | Key | Meaning |
 |---|---|

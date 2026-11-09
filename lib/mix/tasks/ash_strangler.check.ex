@@ -13,6 +13,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
       mix ash_strangler.check
       mix ash_strangler.check --domain MyApp.Accounts
       mix ash_strangler.check --no-data
+      mix ash_strangler.check --strict
       mix ash_strangler.check --estate MyApp.Legacy.Estate --report obligations.json
 
   ## Proven, or measured — never asserted
@@ -87,10 +88,38 @@ defmodule Mix.Tasks.AshStrangler.Check do
   contains is a warning by construction, and refusing on it would refuse correct
   mappings.
 
-  A check that could not *run* — no database reachable — is reported as such and
-  does not fail the task. "Could not be measured" and "measured clean" are
-  different answers, and collapsing them is how a green build comes to mean
-  nothing.
+  A check that could not *run* is reported as `????`, which is not a failure by
+  default: "could not be measured" and "measured clean" are different answers, and
+  the report says which one each line is. That covers a query the database
+  rejected and a repo that could not be resolved or started. Two `warn` lines say
+  nothing was measured for the same reason, and do not fail by default either.
+
+  The cast check is the exception, because a cast failure can only show up as a
+  query error. A query it cannot run is a `FAIL`, so a legacy relation this
+  environment does not have fails the task here, and in the twin freshness check,
+  even though other checks print `????` for it. The one case it separates out is a
+  database that cannot be reached: a connection error is reported as
+  `database could not be reached`, once per resource rather than once per
+  attribute because it says nothing about any attribute, and **fails the task**. A
+  gate that stayed green because the database was down would have measured nothing.
+  The other checks against that database still print their own `????` lines.
+
+  ## `--strict`
+
+  `--strict` makes the task exit non-zero on every outcome that could not be
+  measured, because collapsing "could not be measured" into "passed" is how a
+  green build comes to mean nothing:
+
+    * every `????` line, including a repo that could not be resolved or started;
+    * a warning whose message says nothing was measured: a required attribute no
+      mapping accounts for, and an identity key with no mapping to group by;
+    * no resources found, which includes a `--domain` that names no domain.
+
+  The count of such checks is printed before the task exits. `--no-data` is a
+  request not to measure and is not counted, and `--estate` already fails when an
+  obligation cannot be measured, so `--strict` changes nothing there.
+
+      mix ash_strangler.check --domain MyApp.Accounts --strict
 
   Run it before every phase change. The phases are one-way in practice: moving to
   `:read_from_new` while the backfill is incomplete produces missing rows, not an
@@ -104,7 +133,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   @requirements ["app.config"]
 
-  @switches [domain: :string, data: :boolean, estate: :boolean, report: :string]
+  @switches [domain: :string, data: :boolean, estate: :boolean, report: :string, strict: :boolean]
 
   @ok "\e[32mok\e[0m  "
   @fail "\e[31mFAIL\e[0m"
@@ -115,6 +144,11 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # not de-indented by the heredoc they land in, so a continuation line has to
   # count them out itself.
   @continued "\n             "
+
+  # What a check reports back: assertions that failed, and checks that could not
+  # be measured. They are separate counts because only the first fails the task
+  # by default, and `--strict` is the switch that makes the second fail it too.
+  @none {0, 0}
 
   @impl Mix.Task
   def run(args) do
@@ -167,7 +201,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
     resources = strangled_resources(opts[:domain])
 
     if resources == [] do
-      Mix.shell().info("No resources use AshStrangler.Resource.")
+      no_resources(opts)
     else
       Enum.each(resources, &report/1)
 
@@ -177,22 +211,47 @@ defmodule Mix.Tasks.AshStrangler.Check do
       # `AshStrangler.Mapping.verify_target/1` for why it cannot be a verifier.
       target_failures = Enum.count(resources, &report_target_mismatch/1)
 
-      failures =
-        target_failures +
-          if opts[:data] == false do
-            Mix.shell().info(skipped_note())
-            0
-          else
-            measure(resources)
-          end
+      {failures, unmeasured} =
+        if opts[:data] == false do
+          Mix.shell().info(skipped_note())
+          @none
+        else
+          measure(resources)
+        end
 
       Mix.shell().info(manual_checks())
 
-      if failures > 0 do
-        Mix.shell().error("#{failures} assertion(s) failed against the legacy data.")
-        exit({:shutdown, 1})
-      end
+      conclude(target_failures + failures, unmeasured, opts[:strict] == true)
     end
+  end
+
+  # Zero resources is not "measured clean". A mistyped `--domain` lands here as
+  # well, and a gate that goes green on it has checked nothing.
+  defp no_resources(opts) do
+    Mix.shell().info("No resources use AshStrangler.Resource.")
+
+    if opts[:strict] do
+      Mix.shell().error(
+        "--strict: nothing was measured, because no resource was found" <>
+          if(opts[:domain], do: " in #{opts[:domain]}.", else: ".")
+      )
+
+      exit({:shutdown, 1})
+    end
+  end
+
+  defp conclude(failures, unmeasured, strict?) do
+    if failures > 0,
+      do: Mix.shell().error("#{failures} assertion(s) failed against the legacy data.")
+
+    if strict? and unmeasured > 0 do
+      Mix.shell().error(
+        "#{unmeasured} check(s) could not be measured, and --strict does not count " <>
+          "a check that did not run as one that passed."
+      )
+    end
+
+    if failures > 0 or (strict? and unmeasured > 0), do: exit({:shutdown, 1})
   end
 
   defp strangled_resources(domain_filter) do
@@ -379,7 +438,13 @@ defmodule Mix.Tasks.AshStrangler.Check do
     resources
     |> Enum.group_by(&repo(&1))
     |> Enum.map(fn {repo, group} -> measure_group(repo, group) end)
-    |> Enum.sum()
+    |> tally()
+  end
+
+  defp tally(results) do
+    Enum.reduce(results, @none, fn {failed, unmeasured}, {total_failed, total_unmeasured} ->
+      {total_failed + failed, total_unmeasured + unmeasured}
+    end)
   end
 
   defp measure_group(nil, group) do
@@ -389,7 +454,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
           No repo could be resolved from the twin, so nothing was measured.
     """)
 
-    0
+    {0, 1}
   end
 
   # `Ecto.Migrator.with_repo/2` rather than `app.start`, because a repo is not
@@ -407,14 +472,14 @@ defmodule Mix.Tasks.AshStrangler.Check do
       run_checks(repo, group)
     else
       case Ecto.Migrator.with_repo(repo, &run_checks(&1, group)) do
-        {:ok, failures, _apps} -> failures
+        {:ok, tally, _apps} -> tally
         {:error, reason} -> unavailable(repo, reason)
       end
     end
   end
 
   defp run_checks(repo, group) do
-    Enum.sum(
+    tally(
       Enum.map(group, &measure_resource(repo, &1)) ++
         measure_twins(repo, group) ++ [ledger_backlog(repo, group)]
     )
@@ -425,11 +490,11 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
     #{@unrun}  #{inspect(repo)} could not be started: #{inspect(reason)}
           Nothing was measured for it. That is not the same answer as "measured
-          clean", so the task does not fail on it -- but a CI run reporting this has
-          checked nothing.
+          clean", so the task does not fail on it unless `--strict` is given -- but
+          a CI run reporting this has checked nothing.
     """)
 
-    0
+    {0, 1}
   end
 
   defp measure_resource(repo, resource) do
@@ -443,7 +508,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
       &fan_out_check(repo, &1)
     ]
     |> Enum.map(& &1.(resource))
-    |> Enum.sum()
+    |> tally()
   end
 
   # --- allow_nil? false --------------------------------------------------
@@ -456,7 +521,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
     |> Ash.Resource.Info.attributes()
     |> Enum.reject(& &1.allow_nil?)
     |> Enum.map(&null_check(repo, resource, &1, lenses, key))
-    |> Enum.sum()
+    |> tally()
   end
 
   defp null_check(repo, resource, attribute, lenses, key) do
@@ -473,7 +538,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
         null_check_lens(repo, resource, label, lens)
 
       true ->
-        emit(@warn, label, "no mapping accounts for it, so nothing was measured")
+        not_measured(label, "no mapping accounts for it, so nothing was measured")
     end
   end
 
@@ -514,7 +579,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
     resource
     |> Ash.Resource.Info.identities()
     |> Enum.map(&identity_check(repo, resource, &1, lenses))
-    |> Enum.sum()
+    |> tally()
   end
 
   defp identity_check(repo, resource, identity, lenses) do
@@ -522,7 +587,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
     expressions = Enum.map(identity.keys, &identity_expression(resource, &1, lenses))
 
     if Enum.any?(expressions, &is_nil/1) do
-      emit(@warn, label, "a key has no mapping to group by, so nothing was measured")
+      not_measured(label, "a key has no mapping to group by, so nothing was measured")
     else
       count_duplicates(repo, resource, identity, label, expressions)
     end
@@ -585,27 +650,74 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # 'abc'::integer` is an error, not a NULL -- so the count of failing rows is not
   # a number a query can return. What matters is which attribute cannot be
   # projected, and the retry is what names it.
+  #
+  # A connection error is not a cast failure, and retrying it per attribute would
+  # report the database being down as a problem with every column. It is reported
+  # once, as the database not being reachable, and it is still a failure: a gate
+  # that went green because the database was down would measure nothing and say so
+  # only in a line nobody reads.
   defp cast_check(repo, resource) do
     projections = projections(resource)
 
-    case query(repo, projection_sql(resource, projections)) do
+    case run_query(repo, projection_sql(resource, projections), []) do
       {:ok, _result} ->
         emit(@ok, "casts", "every mapping projects over all #{length(projections)} column(s)")
 
-      {:error, _message} ->
-        Enum.sum(Enum.map(projections, &cast_check_one(repo, resource, &1)))
+      {:error, error} ->
+        if connection_error?(error) do
+          unreachable(error)
+        else
+          cast_checks_each(repo, resource, projections, Exception.message(error))
+        end
+    end
+  end
+
+  # Every attribute passing alone leaves the projection as a whole unexplained, and
+  # the check still did not run, so that is reported rather than left as silence.
+  defp cast_checks_each(repo, resource, projections, whole_failure) do
+    projections
+    |> Enum.reduce_while(@none, fn projection, total ->
+      {direction, result} = cast_check_one(repo, resource, projection)
+      {direction, tally([total, result])}
+    end)
+    |> case do
+      @none ->
+        emit(
+          @unrun,
+          "casts",
+          "the whole projection failed though each attribute projects alone: #{whole_failure}"
+        )
+
+      result ->
+        result
     end
   end
 
   defp cast_check_one(repo, resource, {attribute, expression}) do
-    case query(repo, projection_sql(resource, [{attribute, expression}])) do
+    case run_query(repo, projection_sql(resource, [{attribute, expression}]), []) do
       {:ok, _result} ->
-        0
+        {:cont, @none}
 
-      {:error, message} ->
-        emit(@fail, "cast  #{attribute}", "#{expression} — #{message}")
+      {:error, error} ->
+        if connection_error?(error) do
+          {:halt, unreachable(error)}
+        else
+          {:cont,
+           emit(@fail, "cast  #{attribute}", "#{expression} — #{Exception.message(error)}")}
+        end
     end
   end
+
+  defp unreachable(error) do
+    emit(
+      @fail,
+      "database could not be reached",
+      "#{Exception.message(error)}\n              The casts could not be run, and this is not a statement about any attribute."
+    )
+  end
+
+  defp connection_error?(%DBConnection.ConnectionError{}), do: true
+  defp connection_error?(_error), do: false
 
   defp projection_sql(resource, projections) do
     selected =
@@ -644,7 +756,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
     resource
     |> Obligations.assertions()
     |> Enum.map(&obligation_check(repo, &1))
-    |> Enum.sum()
+    |> tally()
   end
 
   defp obligation_check(repo, finding) do
@@ -693,7 +805,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # has.
   defp fan_out_check(repo, resource) do
     case Info.joins(resource) do
-      [] -> 0
+      [] -> @none
       _joins -> measure_fan_out(repo, resource)
     end
   end
@@ -747,7 +859,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   defp measure_twin(repo, twin) do
     Mix.shell().info("\n  #{inspect(twin)} against #{Twin.relation(twin)}")
 
-    twin_freshness(repo, twin) + twin_identities(repo, twin)
+    tally([twin_freshness(repo, twin), twin_identities(repo, twin)])
   end
 
   @information_schema_columns """
@@ -894,15 +1006,15 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # number is for is noticing the drain has stopped keeping up — which is why
   # it is reported per relation, where "which legacy table is piling up" is
   # readable, rather than as one global count that hides the pile-up behind
-  # the quiet relations.
+  # the quiet relations. A backlog that could not be read at all is `????`, which
+  # like any other only fails the task under `--strict`.
   defp ledger_backlog(repo, group) do
     group
     |> Enum.filter(&Info.ledger?/1)
     |> Enum.map(&Info.relation/1)
     |> Enum.uniq()
-    |> Enum.each(&ledger_backlog_for(repo, &1))
-
-    0
+    |> Enum.map(&ledger_backlog_for(repo, &1))
+    |> tally()
   end
 
   defp ledger_backlog_for(repo, relation) do
@@ -968,18 +1080,40 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # error is returned rather than raised, because one relation this environment
   # does not have is not a reason to stop reporting the rest.
   defp query(repo, sql, params \\ []) do
-    case repo.query(sql, params) do
+    case run_query(repo, sql, params) do
       {:ok, result} -> {:ok, result}
       {:error, error} -> {:error, Exception.message(error)}
     end
-  rescue
-    error -> {:error, Exception.message(error)}
   end
 
+  # The exception itself, for the one caller that needs to tell a connection error
+  # from a query the database understood and rejected.
+  defp run_query(repo, sql, params) do
+    case repo.query(sql, params) do
+      {:ok, result} -> {:ok, result}
+      {:error, error} -> {:error, error}
+    end
+  rescue
+    error -> {:error, error}
+  end
+
+  # A failed assertion counts as a failure; a check that did not run counts as
+  # unmeasured, which fails the task only under `--strict`.
   defp emit(marker, label, detail) do
     Mix.shell().info("    #{marker}  #{label}\n              #{detail}")
 
-    if marker == @fail, do: 1, else: 0
+    case marker do
+      @fail -> {1, 0}
+      @unrun -> {0, 1}
+      _ -> @none
+    end
+  end
+
+  # A warning whose message says nothing was measured is a could-not-measure
+  # outcome like `????`, and counted as one.
+  defp not_measured(label, detail) do
+    emit(@warn, label, detail)
+    {0, 1}
   end
 
   defp skipped_note do
