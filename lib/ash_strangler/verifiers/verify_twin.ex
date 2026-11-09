@@ -27,7 +27,8 @@ defmodule AshStrangler.Verifiers.VerifyTwin do
   both.
 
   That half is `mix ash_strangler.check`, which diffs every twin against
-  `information_schema` and reports the difference. Saying so plainly matters: a
+  `information_schema`, compares each column it declares with what the generator
+  would write today, and reports the difference. Saying so plainly matters: a
   verifier that appeared to check the legacy schema but only checked a snapshot of
   it would be trusted for something it does not do.
   """

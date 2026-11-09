@@ -36,7 +36,9 @@ if Code.ensure_loaded?(Igniter) do
     ... end`), and `AshStrangler.Verifiers.VerifySnapshot` fails compilation
     when they disagree; `mix ash_strangler.snapshot drift` holds the catalog to
     the live database. A twin generated live has `mix ash_strangler.check`,
-    which diffs it against `information_schema.columns`.
+    which diffs it against `information_schema.columns` and compares each column
+    it declares with what this task would write for it today. What this task reads
+    from the catalog is `AshStrangler.Twin.Introspection`, which `check` calls too.
 
     ## Secrets
 

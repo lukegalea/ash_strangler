@@ -96,6 +96,22 @@ defmodule AshStrangler.Snapshot.Types do
   end
 
   @doc """
+  The Ash type a Postgres base type (`pg_type.typname`) is carried as, or `nil`
+  when there is none.
+
+  The one table both the twin generator and `mix ash_strangler.check` read.
+  `citext` is `:ci_string` and `text` is `:string`; the two are kept apart on
+  purpose, because a `:ci_string` identity is case-insensitive and a `text`
+  unique index is not.
+  """
+  @spec ash_type(String.t()) :: atom() | nil
+  def ash_type(typname), do: @types[typname]
+
+  @doc "Every Ash type `ash_type/1` can give."
+  @spec ash_types() :: [atom()]
+  def ash_types, do: @types |> Map.values() |> Enum.uniq()
+
+  @doc """
   The literal values of a `CHECK` constraint over `column`, when the constraint
   is exactly `column IN (...)` (or `column = 'only'`). `:error` otherwise.
   """

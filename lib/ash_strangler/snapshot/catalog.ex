@@ -243,7 +243,21 @@ defmodule AshStrangler.Snapshot.Catalog do
     catalog
   end
 
-  defp read(query, schemas) do
+  @doc """
+  Reads the catalog of `schemas` through `query`, a function from one of the
+  catalog's SQL statements to its rows. The statement takes the schema list as
+  `$1`, so `query` is expected to bind it.
+
+  `introspect/2` is this over a `Postgrex` connection inside a read-only
+  transaction with an empty `search_path`. A caller that cannot open that
+  transaction (`mix ash_strangler.check` reads inside the repo's own connection,
+  which may be a test's sandbox) passes its own `query`, and has to set the empty
+  `search_path` itself. A `CHECK` definition prints a type or operator outside the
+  path with its schema, and the value-set parse only reads one of those printings,
+  so the same column types differently under a different `search_path`.
+  """
+  @spec read((String.t() -> [list()]), [String.t()]) :: map()
+  def read(query, schemas) do
     relations = query.(@relations)
     names = Map.new(relations, fn [oid, schema, name | _] -> {oid, "#{schema}.#{name}"} end)
     by_relation = &group(query.(&1), names)
