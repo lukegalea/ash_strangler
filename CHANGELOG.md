@@ -208,7 +208,8 @@ Requires Elixir 1.20 or later.
   enforce.
 - **`mix ash_strangler.check` reads a twin's unique indexes by schema and relation name,** not
   through `$1::text::regclass`. A mixed-case relation is found, and a relation that has been dropped
-  is a plain `FAIL` of the freshness check with no `????` beside it.
+  is a plain `FAIL` of the freshness check, with no `????` and no second line for twin identities
+  beside it.
 - **`mix ash_strangler.check --strict --no-data` is refused.** One says to fail on anything that was
   not measured and the other says to measure nothing. The task now raises at startup, before any
   check runs, and exits non-zero. It used to exit 0. The moduledoc and the docs said so and now say

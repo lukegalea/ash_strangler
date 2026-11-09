@@ -764,7 +764,9 @@ defmodule AshStrangler.CheckCatalogTest do
       # step is not reported as having passed.
       assert output =~ ~r/\?\?\?\?.*column types/
       refute output =~ ~r/ok.*column types/
-      refute output =~ ~r/\?\?\?\?.*twin identities/
+      # The freshness check has failed for the one missing table; a second FAIL
+      # claiming its unique sets are unenforced would only hide that.
+      refute output =~ ~r/twin identities/
     end
   end
 
@@ -1120,7 +1122,7 @@ defmodule AshStrangler.CheckCatalogTest do
 
       assert {:exit, {:shutdown, 1}} = result
       assert output =~ ~r/FAIL.*twin freshness/
-      refute output =~ ~r/\?\?\?\?.*twin identities/
+      refute output =~ ~r/twin identities/
     end
   end
 

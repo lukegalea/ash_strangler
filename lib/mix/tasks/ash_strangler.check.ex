@@ -1423,6 +1423,13 @@ defmodule Mix.Tasks.AshStrangler.Check do
    GROUP BY x.indexrelid
   """
 
+  @relation_exists """
+  SELECT 1
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = $1 AND c.relname = $2
+  """
+
   # An identity Postgres does not enforce is worse than no identity at all: Ash
   # uses it to plan upserts and to report "has already been taken" from a `SELECT`,
   # while the write path keeps accepting duplicates. The failure is therefore
@@ -1435,13 +1442,16 @@ defmodule Mix.Tasks.AshStrangler.Check do
     else
       {schema, table} = relation_parts(twin)
 
-      case query(repo, @unique_indexes, [schema, table]) do
-        {:ok, %{rows: rows}} ->
-          enforced = MapSet.new(rows, fn [columns] -> MapSet.new(columns) end)
-          compare_identities(declared, enforced, twin)
-
-        {:error, message} ->
-          emit(@unrun, "twin identities", message)
+      with {:ok, %{rows: [_]}} <- query(repo, @relation_exists, [schema, table]),
+           {:ok, %{rows: rows}} <- query(repo, @unique_indexes, [schema, table]) do
+        enforced = MapSet.new(rows, fn [columns] -> MapSet.new(columns) end)
+        compare_identities(declared, enforced, twin)
+      else
+        # A relation that has gone has no indexes, and the freshness check has
+        # already failed for it. Saying its sets are unenforced as well would be a
+        # second failure for one missing table.
+        {:ok, %{rows: []}} -> @none
+        {:error, message} -> emit(@unrun, "twin identities", message)
       end
     end
   end
