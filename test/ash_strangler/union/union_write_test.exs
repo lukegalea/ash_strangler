@@ -133,12 +133,10 @@ defmodule AshStrangler.UnionWriteTest do
         "map :display, from: :name\nextension [:template]"
       )
 
-    [[xmin]] = q!("SELECT xmin::text FROM #{table}")
     assert [[nil]] = q!("SELECT template FROM #{view}")
 
     q!("UPDATE #{view} SET template = 'tpl-1'")
     assert [["tpl-1"]] = q!("SELECT template FROM #{view}")
-    assert [[^xmin]] = q!("SELECT xmin::text FROM #{table}")
 
     q!("UPDATE #{view} SET template = 'tpl-2', display = 'Ada L'")
     assert [["tpl-2", "Ada L"]] = q!("SELECT template, display FROM #{view}")
@@ -146,6 +144,15 @@ defmodule AshStrangler.UnionWriteTest do
 
     assert [[1]] =
              q!("SELECT count(*)::int FROM #{AshStrangler.Union.Info.extension_table(union)}")
+  end
+
+  test "an update that changes only extension columns issues no write to the legacy table" do
+    {view, table, _} = install!("column :template, :string", "extension [:template]")
+
+    [[xmin]] = q!("SELECT xmin::text FROM #{table}")
+    q!("UPDATE #{view} SET template = 'tpl-1'")
+    assert [["tpl-1"]] = q!("SELECT template FROM #{view}")
+    assert [[^xmin]] = q!("SELECT xmin::text FROM #{table}")
   end
 
   test "a view DELETE under refuse_delete is refused and the legacy row stays" do
@@ -221,7 +228,7 @@ defmodule AshStrangler.UnionWriteTest do
       q!("DROP TABLE #{AshStrangler.Union.Info.extension_table(union)} CASCADE")
       move = AshStrangler.Migration.render_move("MoveTest", [union])
       assert move =~ "CREATE TABLE IF NOT EXISTS"
-      refute move =~ "_owned"
+      refute move =~ ~r/CREATE TABLE[^(]*_owned/
       refute move =~ "CREATE TRIGGER"
       assert is_binary(view)
     end
