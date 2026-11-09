@@ -133,8 +133,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
   A check that could not *run* is reported as `????`, which is not a failure by
   default: "could not be measured" and "measured clean" are different answers, and
   the report says which one each line is. That covers a query the database
-  rejected and a repo that could not be resolved or started. Two `warn` lines say
-  nothing was measured for the same reason, and do not fail by default either.
+  rejected and a repo that could not be resolved or started. A `warn` line that
+  says nothing was measured is the same answer, and does not fail by default either.
 
   The cast check is the exception, because a cast failure can only show up as a
   query error. A query it cannot run is a `FAIL`, so a legacy relation this
@@ -154,7 +154,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
     * every `????` line, including a repo that could not be resolved or started;
     * a warning whose message says nothing was measured: a required attribute no
-      mapping accounts for, and an identity key with no mapping to group by;
+      mapping accounts for, an identity key with no mapping to group by, a mapping
+      that yields a Postgres enum or a type with no Ash type, and a twin column that
+      could not be compared with the catalog;
     * no resources found, which includes a `--domain` that names no domain.
 
   The count of such checks is printed before the task exits. `--no-data` is a
@@ -834,8 +836,11 @@ defmodule Mix.Tasks.AshStrangler.Check do
       case run_query(repo, sql, []) do
         {:ok, %{rows: [row]}} ->
           case compare_projected(resource, attribute, row) do
-            :ok -> {:cont, {matched + 1, total}}
-            {:warn, detail} -> {:cont, {matched, tally([total, type_warning(attribute, detail)])}}
+            :ok ->
+              {:cont, {matched + 1, total}}
+
+            {finding, detail} ->
+              {:cont, {matched, tally([total, flag(finding, "column types  #{attribute}", detail)])}}
           end
 
         {:ok, _other} ->
@@ -865,7 +870,10 @@ defmodule Mix.Tasks.AshStrangler.Check do
     end)
   end
 
-  defp type_warning(attribute, detail), do: emit(@warn, "column types  #{attribute}", detail)
+  # A warning that compared the two and found them different is a measurement. One
+  # that could not compare them is not, and `--strict` counts it.
+  defp flag(:not_measured, label, detail), do: not_measured(label, detail)
+  defp flag(marker, label, detail), do: emit(marker, label, detail)
 
   defp compare_projected(resource, attribute, [typname, typtype, category, element, base]) do
     case {Ash.Resource.Info.attribute(resource, attribute),
@@ -874,16 +882,16 @@ defmodule Mix.Tasks.AshStrangler.Check do
         :ok
 
       {_attribute, {:enum, name}} ->
-        {:warn,
+        {:not_measured,
          "the mapping yields the Postgres enum `#{name}`, which is not compared with the " <>
-           "attribute's type: its labels are a value set, and the twin column check above " <>
-           "holds the twin's `one_of` to them."}
+           "attribute's type: its labels are a value set, and the twin column check " <>
+           "holds the twin's `one_of` to them. Nothing was measured here."}
 
       {attribute, {:unknown, name}} ->
-        {:warn,
+        {:not_measured,
          "the mapping yields `#{name}`, which has no Ash type, so it was not compared with " <>
            "what the attribute stores (#{inspect(Introspection.coarse(attribute.type, attribute.constraints))}). " <>
-           "Check the cast by hand."}
+           "Nothing was measured here: check the cast by hand."}
 
       {attribute, {:ok, name, ash_type}} ->
         stored = Introspection.coarse(attribute.type, attribute.constraints)
@@ -892,7 +900,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
         if stored == yielded do
           :ok
         else
-          {:warn,
+          {@warn,
            "the mapping yields `#{name}` (#{inspect(yielded)}); the attribute stores " <>
              "#{inspect(stored)}. Rows will not read back as the attribute expects. " <>
              "Typmods are not compared."}
@@ -1179,8 +1187,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
       findings ->
         findings
-        |> Enum.map(fn {marker, attribute, detail} ->
-          emit(marker, "twin column  #{attribute}", detail)
+        |> Enum.map(fn {finding, attribute, detail} ->
+          flag(finding, "twin column  #{attribute}", detail)
         end)
         |> tally()
     end
@@ -1198,12 +1206,14 @@ defmodule Mix.Tasks.AshStrangler.Check do
   defp type_findings(_twin, attribute, %{type: nil, name: name, note: note})
        when not is_nil(name) do
     [
-      {@warn, attribute.name,
+      {:not_measured, attribute.name,
        note
        |> String.split("\n", parts: 2)
        |> hd()
        |> String.trim()
-       |> Kernel.<>(" The twin declares #{inspect(attribute.name)} anyway.")}
+       |> Kernel.<>(
+         " The twin declares #{inspect(attribute.name)} anyway, and it was not compared."
+       )}
     ]
   end
 

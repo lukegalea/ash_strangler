@@ -289,6 +289,112 @@ defmodule AshStrangler.CheckCatalogTest.ShakyView do
   end
 end
 
+defmodule AshStrangler.CheckCatalogTest.EdgeDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckCatalogTest.Edge
+    resource AshStrangler.CheckCatalogTest.EdgeView
+  end
+end
+
+defmodule AshStrangler.CheckCatalogTest.EnumStoredAsPgEnum do
+  @moduledoc "An Ash enum whose storage type is the Postgres enum's own name."
+  use Ash.Type.Enum, values: [:new, :done]
+
+  @impl true
+  def storage_type, do: :catalog_edge_state
+end
+
+defmodule AshStrangler.CheckCatalogTest.Edge do
+  @moduledoc """
+  A twin over `legacy.catalog_edge`, whose columns are the ones a live catalog
+  read can get wrong: a `CHECK` over `citext` (which `pg_get_constraintdef` prints
+  differently under a different `search_path`), an enum in another schema, a
+  column whose name no attribute can take, and a storage type the generator's
+  table does not have.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.CheckCatalogTest.EdgeDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "catalog_edge"
+    schema "legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :label, :ci_string, allow_nil?: false, public?: true
+
+    attribute :stage, :atom do
+      allow_nil? false
+      public? true
+      constraints one_of: [:new, :done]
+    end
+
+    attribute :odd, :atom do
+      allow_nil? false
+      public? true
+      source :"Odd-Name"
+      constraints one_of: [:x, :y]
+    end
+
+    attribute :seen_at, AshPostgres.Timestamptz, allow_nil?: false, public?: true
+
+    attribute :phase, AshStrangler.CheckCatalogTest.EnumStoredAsPgEnum,
+      allow_nil?: false,
+      public?: true
+
+    attribute :body, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.CheckCatalogTest.EdgeView do
+  @moduledoc "One mapping per column the edge twin needs read."
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a84"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckCatalogTest.EdgeDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "catalog_edge_view"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :body, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.CheckCatalogTest.Edge do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :body, from: :body, read_only?: true, because: "fixture"
+    end
+  end
+end
+
 defmodule AshStrangler.CheckCatalogTest do
   @moduledoc """
   `mix ash_strangler.check` holds a compiled twin to the catalog it was written
@@ -301,13 +407,15 @@ defmodule AshStrangler.CheckCatalogTest do
 
   @domain "AshStrangler.CheckCatalogTest.Domain"
   @shaky_domain "AshStrangler.CheckCatalogTest.ShakyDomain"
+  @edge_domain "AshStrangler.CheckCatalogTest.EdgeDomain"
 
   setup do
     previous = Application.get_env(:ash_strangler, :ash_domains)
 
     Application.put_env(:ash_strangler, :ash_domains, [
       AshStrangler.CheckCatalogTest.Domain,
-      AshStrangler.CheckCatalogTest.ShakyDomain
+      AshStrangler.CheckCatalogTest.ShakyDomain,
+      AshStrangler.CheckCatalogTest.EdgeDomain
     ])
 
     shell = Mix.shell()
@@ -596,6 +704,17 @@ defmodule AshStrangler.CheckCatalogTest do
     end
   end
 
+  describe "what a live catalog read can get wrong" do
+    test "--strict counts a column whose type has no Ash type" do
+      orders!(amount: "inet")
+
+      {result, output} = check(["--strict"])
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/warn.*twin column  amount/
+    end
+  end
+
   describe "column types" do
     test "reports a projection that yields a type the attribute does not store" do
       shaky!()
@@ -644,13 +763,33 @@ defmodule AshStrangler.CheckCatalogTest do
       refute output =~ ~r/(warn|FAIL).*column types  id/
     end
 
-    test "is a warning: it never fails the task and never counts as unmeasured" do
+    test "a measured disagreement is a warning, and --strict does not count it" do
+      shaky!(addr: "text")
+
+      {_result, output} = check(["--strict"], @shaky_domain)
+
+      assert output =~ ~r/warn.*column types  qty/
+      refute output =~ "could not be measured"
+    end
+
+    test "--strict counts a Postgres enum, which was not compared" do
       orders!()
 
       {result, output} = check(["--strict"])
 
-      assert result == :ok
-      assert output =~ ~r/warn.*column types/
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/warn.*column types  state/
+      assert output =~ "could not be measured"
+    end
+
+    test "--strict counts a type with no Ash type, which was not compared" do
+      shaky!()
+
+      {result, output} = check(["--strict"], @shaky_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/warn.*column types  addr/
+      assert output =~ "could not be measured"
     end
 
     test "reads the type without reading the rows" do
@@ -680,13 +819,38 @@ defmodule AshStrangler.CheckCatalogTest do
     end
   end
 
-  defp shaky! do
+  defp edge!(opts \\ []) do
+    stages = Keyword.get(opts, :stages, ~w(new done))
+    odd = Keyword.get(opts, :odd, ~w(x y))
+    seen_at = Keyword.get(opts, :seen_at, "timestamptz")
+
+    TestRepo.query!("CREATE TYPE public.catalog_edge_state AS ENUM (#{literals(stages)})", [])
+
+    TestRepo.query!(
+      """
+      CREATE TABLE legacy.catalog_edge (
+        id bigint PRIMARY KEY,
+        label citext NOT NULL CHECK (label IN ('a', 'b')),
+        stage public.catalog_edge_state NOT NULL,
+        "Odd-Name" text NOT NULL CHECK ("Odd-Name" IN (#{literals(odd)})),
+        seen_at #{seen_at} NOT NULL,
+        phase public.catalog_edge_state NOT NULL,
+        body text
+      )
+      """,
+      []
+    )
+  end
+
+  defp shaky!(opts \\ []) do
+    addr = Keyword.get(opts, :addr, "inet")
+
     TestRepo.query!(
       """
       CREATE TABLE legacy.catalog_shaky (
         id bigint PRIMARY KEY,
         qty integer,
-        addr inet,
+        addr #{addr},
         handle text,
         note text
       )
