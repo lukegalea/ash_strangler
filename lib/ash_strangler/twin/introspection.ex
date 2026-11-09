@@ -56,8 +56,31 @@ defmodule AshStrangler.Twin.Introspection do
 
   # --- reading -----------------------------------------------------------
 
+  # The schemas of the enums and domains the columns of `$1` use, through arrays
+  # and domains over domains.
+  @type_schemas """
+  WITH RECURSIVE used(oid) AS (
+    SELECT a.atttypid
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = ANY($1) AND a.attnum > 0 AND NOT a.attisdropped
+    UNION
+    SELECT CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.typelem END
+      FROM used u
+      JOIN pg_type t ON t.oid = u.oid
+     WHERE t.typtype = 'd' OR t.typcategory = 'A'
+  )
+  SELECT DISTINCT n.nspname
+    FROM used u
+    JOIN pg_type t ON t.oid = u.oid
+    JOIN pg_namespace n ON n.oid = t.typnamespace
+   WHERE t.typtype IN ('e', 'd') AND n.nspname <> 'pg_catalog'
+  """
+
   @doc """
-  The catalog of `schemas`, read through `run`.
+  The catalog of `schemas`, and of any schema holding an enum or domain their
+  columns use, read through `run`.
 
   `run` has to read under an empty `search_path`, as the generator does: see
   `AshStrangler.Snapshot.Catalog.read/2` for what depends on it.
@@ -68,16 +91,21 @@ defmodule AshStrangler.Twin.Introspection do
   """
   @spec read(run(), [String.t()]) :: {:ok, map()} | {:error, term()}
   def read(run, schemas) do
-    schemas = schemas |> Enum.uniq() |> Enum.sort()
-
-    query = fn sql ->
+    rows = fn sql, schemas ->
       case run.(sql, [schemas]) do
         {:ok, %{rows: rows}} -> rows
         {:error, error} -> throw({:introspection_failed, error})
       end
     end
 
-    {:ok, Catalog.read(query, schemas)}
+    # A table's enum or domain can live in another schema, and without it in the
+    # catalog the column reads as a type with no Ash type at all.
+    schemas =
+      (schemas ++ (rows.(@type_schemas, schemas) |> List.flatten()))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    {:ok, Catalog.read(&rows.(&1, schemas), schemas)}
   rescue
     error -> {:error, error}
   catch

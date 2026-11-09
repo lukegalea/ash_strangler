@@ -722,6 +722,16 @@ defmodule AshStrangler.CheckCatalogTest do
       assert %{rows: ^before} = TestRepo.query!("SHOW search_path", [])
     end
 
+    test "a label added to an enum that lives in another schema fails" do
+      edge!(stages: ~w(new done archived))
+
+      {result, output} = check([], @edge_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*twin column  stage/
+      assert output =~ ~s("archived")
+    end
+
     test "--strict counts a column whose type has no Ash type" do
       orders!(amount: "inet")
 
