@@ -17,6 +17,16 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **The Clarity "Strangler Mapping" tab shows the mapping, not a count:** it was a relation-level
+  Mermaid overview whose edges read "9 mapped, 3 read only". It is now Markdown, rendered by the new
+  `AshStrangler.Diagram.Report`. A resource gets its phase, write mode, view and legacy relations
+  (with the join), then one row per attribute: the legacy column, the SQL or combinator, the
+  direction a value travels and the mapping's own `because:`; the read-only attributes are named
+  with their reasons; unmapped, constant and extension attributes are rows too; and legacy columns
+  no mapping reads and `retired` columns are listed. A domain or an application gets an index of
+  which resources each legacy relation feeds and a one-row-per-resource summary naming its
+  read-only and unmapped attributes, then every resource's section. `Diagram.Mapping` and
+  `Diagram.Overview` are unchanged and still draw the README and `mix ash_strangler.gen.diagram`.
 - **`:read_from_new` carries the old application's writes and every column it reads:**
   - The reverse view now has one column per twin attribute, in the twin's declared order (it was
     sorted by name), named through `Twin.column!/2` and the printer's identifier rule, so a
