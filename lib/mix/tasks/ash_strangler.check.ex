@@ -1236,15 +1236,24 @@ defmodule Mix.Tasks.AshStrangler.Check do
     declared = Introspection.coarse(attribute.type, attribute.constraints)
     written = Introspection.coarse(wrote.type)
 
-    if declared == written do
-      []
-    else
-      [
-        {@fail, attribute.name,
-         "the twin declares #{inspect(declared)}; the column is " <>
-           "now #{inspect(written)}. A mapping that reads it casts and compares as the wrong " <>
-           "type. Regenerate: mix ash_strangler.gen.twin #{inspect(twin)}"}
-      ]
+    cond do
+      declared == written ->
+        []
+
+      not Introspection.comparable?(declared) ->
+        [
+          {:not_measured, attribute.name,
+           "the twin stores #{inspect(declared)}, a type gen.twin's table does not have, so " <>
+             "it was not compared with the column (#{inspect(written)})."}
+        ]
+
+      true ->
+        [
+          {@fail, attribute.name,
+           "the twin declares #{inspect(declared)}; the column is " <>
+             "now #{inspect(written)}. A mapping that reads it casts and compares as the wrong " <>
+             "type. Regenerate: mix ash_strangler.gen.twin #{inspect(twin)}"}
+        ]
     end
   end
 

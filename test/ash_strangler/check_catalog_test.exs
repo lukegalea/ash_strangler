@@ -742,6 +742,46 @@ defmodule AshStrangler.CheckCatalogTest do
       assert output =~ ~s("z")
     end
 
+    test "AshPostgres.Timestamptz over timestamptz is no type change" do
+      edge!()
+
+      {_result, output} = check([], @edge_domain)
+
+      refute output =~ ~r/twin column  seen_at/
+      refute output =~ ~r/column types  seen_at/
+    end
+
+    test "a timestamptz that became timestamp still fails" do
+      edge!(seen_at: "timestamp")
+
+      {result, output} = check([], @edge_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*twin column  seen_at/
+    end
+
+    test "a storage type outside the generator's table is not called a type change" do
+      edge!()
+
+      {_result, output} = check([], @edge_domain)
+
+      refute output =~ ~r/FAIL.*twin column  phase/
+      assert output =~ ~r/warn.*twin column  phase/
+      assert output =~ "catalog_edge_state"
+    end
+
+    test "--strict counts a storage type that was not compared" do
+      edge!()
+
+      {result, output} = check([], @edge_domain)
+      {strict_result, strict_output} = check(["--strict"], @edge_domain)
+
+      assert result == :ok
+      assert output =~ ~r/warn.*twin column  phase/
+      assert {:exit, {:shutdown, 1}} = strict_result
+      assert strict_output =~ "could not be measured"
+    end
+
     test "--strict counts a column whose type has no Ash type" do
       orders!(amount: "inet")
 

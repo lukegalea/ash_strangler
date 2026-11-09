@@ -107,6 +107,10 @@ defmodule AshStrangler.Snapshot.Types do
   @spec ash_type(String.t()) :: atom() | nil
   def ash_type(typname), do: @types[typname]
 
+  @doc "Every Ash type `ash_type/1` can give."
+  @spec ash_types() :: [atom()]
+  def ash_types, do: @types |> Map.values() |> Enum.uniq()
+
   @doc """
   The literal values of a `CHECK` constraint over `column`, when the constraint
   is exactly `column IN (...)` (or `column = 'only'`). `:error` otherwise.

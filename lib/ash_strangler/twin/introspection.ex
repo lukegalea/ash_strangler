@@ -282,7 +282,20 @@ defmodule AshStrangler.Twin.Introspection do
     type |> Ash.Type.get_type() |> Ash.Type.storage_type(constraints) |> family()
   end
 
-  defp family(storage) when storage in [:utc_datetime_usec, :utc_datetime], do: :utc_datetime
+  @doc """
+  True when `coarse` is a type the generator's table can produce.
+
+  One that is not (a custom `storage_type`, such as an `Ash.Type.Enum` stored as
+  the Postgres enum's own name) cannot be set against a column's type: differing
+  from it says nothing about whether the column changed.
+  """
+  @spec comparable?(atom() | {:array, atom()}) :: boolean()
+  def comparable?({:array, inner}), do: comparable?(inner)
+  def comparable?(coarse), do: Enum.any?(Types.ash_types(), &(coarse(&1) == coarse))
+
+  defp family(storage)
+       when storage in [:utc_datetime_usec, :utc_datetime, :timestamptz, :"timestamptz(6)"],
+       do: :utc_datetime
 
   defp family(storage) when storage in [:naive_datetime_usec, :naive_datetime],
     do: :naive_datetime
