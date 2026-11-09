@@ -44,7 +44,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   |---|---|
   | `allow_nil? false` on a mapped attribute | rows whose source expression is NULL |
   | an Ash `identity` | duplicate groups over the *normalised* legacy expression |
-  | a cast | the mapping projected over the twin, and the rows that will not cast |
+  | a cast | every mapping evaluated over every row of the twin: a stored value that will not cast fails the check, naming the attribute |
   | every `AshStrangler.Obligations` assertion | run verbatim, result reported |
   | twin freshness | the twin's columns against `information_schema.columns` |
   | twin columns | each column the twin declares against what `gen.twin` would write for it today: a widened `one_of` fails, a changed coarse type fails |
@@ -68,8 +68,16 @@ defmodule Mix.Tasks.AshStrangler.Check do
   sets are compared against `pg_index`, and a partial unique index does not count:
   it makes a column unique among the rows matching its predicate, which is not what
   an identity claims. Nor does an expression index: `UNIQUE (tenant_id, lower(email))`
-  is not a unique `tenant_id`. Only an index's key columns count, never its
-  `INCLUDE` columns.
+  is not a unique `tenant_id`. Nor does an invalid one, which is what a failed
+  `CREATE UNIQUE INDEX CONCURRENTLY` leaves behind. Only an index's key columns
+  count, never its `INCLUDE` columns.
+
+  The cast check evaluates each projection against each row. Postgres drops a
+  projected expression that nothing reads, so the query reads the whole projected
+  row; a value that cannot be cast then raises, and the retry that follows runs each
+  attribute alone and names every one that does. **A run that was green because the
+  casts were never evaluated can go red here.** That is the check doing what it
+  said it did.
 
   ## What the twin is held to
 
@@ -158,9 +166,13 @@ defmodule Mix.Tasks.AshStrangler.Check do
       could not be compared with the catalog;
     * no resources found, which includes a `--domain` that names no domain.
 
-  The count of such checks is printed before the task exits. `--no-data` is a
-  request not to measure and is not counted, and `--estate` already fails when an
-  obligation cannot be measured, so `--strict` changes nothing there.
+  The count of such checks is printed before the task exits. `--estate` already
+  fails when an obligation cannot be measured, so `--strict` changes nothing there.
+
+  `--strict` together with `--no-data` is refused at startup, before any check runs,
+  with a message and a non-zero exit: one says to fail on anything that was not
+  measured and the other says to measure nothing, so no answer to it is a
+  statement about the data.
 
       mix ash_strangler.check --domain MyApp.Accounts --strict
 
@@ -197,6 +209,13 @@ defmodule Mix.Tasks.AshStrangler.Check do
   @impl Mix.Task
   def run(args) do
     {opts, rest} = OptionParser.parse!(args, strict: @switches)
+
+    if opts[:strict] && opts[:data] == false do
+      Mix.raise(
+        "--strict and --no-data contradict each other: --strict fails on anything that was " <>
+          "not measured, and --no-data measures nothing. Drop one of them."
+      )
+    end
 
     if opts[:estate], do: estate_report(rest, opts), else: resource_report(opts)
   end
@@ -770,8 +789,12 @@ defmodule Mix.Tasks.AshStrangler.Check do
         "#{expression} AS #{attribute}"
       end)
 
+    # `count(projection.*)`, never `count(*)`: Postgres drops the projected
+    # expressions nothing reads from the plan, so over `count(*)` a cast that
+    # raises on a stored value is never evaluated and the check passes over rows
+    # it never looked at. The whole row is read, so every projection is built.
     """
-    SELECT count(*) FROM (
+    SELECT count(projection.*) FROM (
       SELECT #{selected}
       FROM #{View.from_clause(resource)}
     ) projection
@@ -1371,6 +1394,15 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # the join to `pg_attribute` drops, so `UNIQUE (tenant_id, lower(email))` would
   # otherwise read as a unique `tenant_id`.
   #
+  # `x.indisvalid` because a `CREATE UNIQUE INDEX CONCURRENTLY` that failed leaves
+  # its index behind, invalid: it is maintained by writes but enforces nothing for
+  # the rows already there, and it is not used to plan reads.
+  #
+  # The relation is read by schema and relation name, as the catalog reads in
+  # `Introspection` are. `$1::text::regclass` parses the string as an identifier,
+  # so it folds a mixed-case name and raises on a relation that has gone, which
+  # would put a `????` beside the freshness check's own FAIL.
+  #
   # `k.ord <= x.indnkeyatts` keeps the key columns and drops `INCLUDE` ones, which
   # are payload and constrain nothing. `indkey` is an `int2vector`, 0-based, so it
   # is unnested rather than sliced; `WITH ORDINALITY` numbers from 1, as
@@ -1380,8 +1412,11 @@ defmodule Mix.Tasks.AshStrangler.Check do
     FROM pg_index x
     CROSS JOIN LATERAL unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
     JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum
-   WHERE x.indrelid = $1::text::regclass
+    JOIN pg_class c ON c.oid = x.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = $1 AND c.relname = $2
      AND x.indisunique
+     AND x.indisvalid
      AND x.indpred IS NULL
      AND x.indexprs IS NULL
      AND k.ord <= x.indnkeyatts
@@ -1398,7 +1433,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
     if MapSet.size(declared) == 0 do
       emit(@ok, "twin identities", "none declared")
     else
-      case query(repo, @unique_indexes, [Twin.relation(twin)]) do
+      {schema, table} = relation_parts(twin)
+
+      case query(repo, @unique_indexes, [schema, table]) do
         {:ok, %{rows: rows}} ->
           enforced = MapSet.new(rows, fn [columns] -> MapSet.new(columns) end)
           compare_identities(declared, enforced, twin)

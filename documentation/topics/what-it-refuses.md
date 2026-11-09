@@ -1141,20 +1141,25 @@ proven, and `mix ash_strangler.check` is where they happen:
 |---|---|
 | `allow_nil? false` against the projection | whether any legacy row projects NULL is a fact about rows |
 | an identity, as duplicate groups over the *normalised* expression | likewise — and the normalisation is the attribute's type, not a parameter |
-| a cast | which values will not convert depends on what is stored |
+| a cast | which values will not convert depends on what is stored; every mapping is evaluated over every row, and each attribute holding a value that will not convert is named |
 | every obligation carrying an assertion | the value space had no declared bound, or a `fragment` blocked evaluation |
 | twin freshness, against `information_schema.columns` | a twin is a snapshot |
 | twin columns, against what `gen.twin` would write today | a label added to an enum or `CHECK` after the twin was written is a value `GetTotal` was proven without; a column whose type changed reads as the wrong type |
 | column types, the type each mapping yields against the type its attribute stores (a warning) | whether a cast is needed depends on the column, and the twin can be stale about it. A pass does not show that every row casts |
-| twin identities, against `pg_index` | only `pg_index` knows what is enforced |
+| twin identities, against `pg_index` | only `pg_index` knows what is enforced, and a partial, expression or invalid unique index enforces nothing an identity claims |
 | join fan-out | a `has_one` the database does not enforce as unique returns several rows |
 
 Two properties of that task are worth knowing. Its **exit code is non-zero when an
 assertion fails**, so the twin-staleness diff can gate CI; without that the typed
 layer inherits exactly the staleness problem it was built to remove. And a check
-that could not *run* — no database reachable — is reported as such and does not
-fail the task, because *"could not be measured"* and *"measured clean"* are
-different answers and collapsing them is how a green build comes to mean nothing.
+that could not *run* is reported as `????`, which does not fail the task by
+default, because *"could not be measured"* and *"measured clean"* are different
+answers and collapsing them is how a green build comes to mean nothing. Two things
+are the exception. A database that cannot be reached **does** fail the task, and so
+does a legacy relation this environment does not have, through the cast check.
+`--strict` goes the rest of the way and fails on every `????`. It cannot be combined
+with `--no-data`: one says fail on anything unmeasured and the other says measure
+nothing, so the task refuses the pair at startup.
 
 Run it before every phase change, without exception. It answers the question that
 has to come first: **is my target model even satisfiable by this data?**

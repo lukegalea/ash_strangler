@@ -675,6 +675,25 @@ defmodule AshStrangler.CheckTest do
       assert {:exit, {:shutdown, 1}} = strict
     end
 
+    test "is refused together with --no-data, before any check runs" do
+      error =
+        assert_raise Mix.Error, fn ->
+          Mix.Task.rerun("ash_strangler.check", ["--domain", @domain, "--strict", "--no-data"])
+        end
+
+      assert error.message =~ "--strict"
+      assert error.message =~ "--no-data"
+      assert drain() == ""
+    end
+
+    test "is refused together with --no-data for an estate report too" do
+      assert_raise Mix.Error, ~r/--strict.*--no-data|--no-data.*--strict/s, fn ->
+        Mix.Task.rerun("ash_strangler.check", ["--estate", "--strict", "--no-data"])
+      end
+
+      assert drain() == ""
+    end
+
     test "exits 0 when everything was measured clean" do
       {result, output} = check(["--strict"])
 

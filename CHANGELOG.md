@@ -39,7 +39,7 @@ Requires Elixir 1.20 or later.
   resolved or started), the two warnings that say nothing was measured (a required attribute no
   mapping accounts for; an identity key with no mapping), and no resource found, which includes a
   `--domain` that names no domain. Without it a gate could go green having measured nothing.
-  `--no-data` is a request not to measure and is not counted.
+  `--strict` together with `--no-data` is refused at startup (see Fixes).
 
 - **Union branch `filter`:** a `legacy` branch takes `filter expr(...)`, an expression over its
   twin's columns printed as the `WHERE` of the branch's select, so a relation that mixes kinds of
@@ -194,6 +194,27 @@ Requires Elixir 1.20 or later.
 - **Docs:** "regenerating is safe" now says what it covers. Re-running unchanged statements is safe;
   a change of shape (rename, retype, drop, reorder) is refused at migrate and needs a written
   `DROP VIEW` and `CREATE VIEW`.
+
+- **`mix ash_strangler.check` now evaluates its casts.** The cast query was
+  `SELECT count(*) FROM (SELECT <projections> ...) projection`, and Postgres removes projected
+  expressions nothing reads from the plan, so no cast was ever run: a row holding `'abc'` under
+  `(note)::int` counted as one row and passed. It now counts the whole projected row, so a stored
+  value that cannot be cast raises, and the per-attribute retry names each attribute that holds one.
+  `--no-data` still skips it. **A run that was green can turn red.** That is the check doing what it
+  always said it did. The pass line and the docs ("the rows that will not cast") are now true.
+- **`mix ash_strangler.check` no longer counts an invalid unique index as enforcing a twin
+  identity.** The `pg_index` read now requires `indisvalid`, so the index a failed
+  `CREATE UNIQUE INDEX CONCURRENTLY` leaves behind is reported as an identity Postgres does not
+  enforce.
+- **`mix ash_strangler.check` reads a twin's unique indexes by schema and relation name,** not
+  through `$1::text::regclass`. A mixed-case relation is found, and a relation that has been dropped
+  is a plain `FAIL` of the freshness check with no `????` beside it.
+- **`mix ash_strangler.check --strict --no-data` is refused.** One says to fail on anything that was
+  not measured and the other says to measure nothing. The task now raises at startup, before any
+  check runs, and exits non-zero. It used to exit 0. The moduledoc and the docs said so and now say
+  the opposite.
+- **`documentation/topics/what-it-refuses.md` agrees with the code on an unreachable database:** it
+  fails the task. The page said a check that could not run for want of a database did not.
 
 - **`mix ash_strangler.check` names an unreachable database as one.** A connection error in the
   cast check used to be retried per attribute and reported as `cast <attribute>` failing for every
