@@ -661,16 +661,30 @@ defmodule Mix.Tasks.AshStrangler.Check do
         if connection_error?(error) do
           unreachable(error)
         else
-          cast_checks_each(repo, resource, projections)
+          cast_checks_each(repo, resource, projections, Exception.message(error))
         end
     end
   end
 
-  defp cast_checks_each(repo, resource, projections) do
-    Enum.reduce_while(projections, @none, fn projection, total ->
+  # Every attribute passing alone leaves the projection as a whole unexplained, and
+  # the check still did not run, so that is reported rather than left as silence.
+  defp cast_checks_each(repo, resource, projections, whole_failure) do
+    projections
+    |> Enum.reduce_while(@none, fn projection, total ->
       {direction, result} = cast_check_one(repo, resource, projection)
       {direction, tally([total, result])}
     end)
+    |> case do
+      @none ->
+        emit(
+          @unrun,
+          "casts",
+          "the whole projection failed though each attribute projects alone: #{whole_failure}"
+        )
+
+      result ->
+        result
+    end
   end
 
   defp cast_check_one(repo, resource, {attribute, expression}) do

@@ -232,6 +232,158 @@ defmodule AshStrangler.CheckTest.UnmappedDomain do
   end
 end
 
+defmodule AshStrangler.CheckTest.UnmappedIdentity do
+  @moduledoc """
+  An identity whose only key is held by an extension store, so the duplicate check
+  has nothing to group by. The extension attribute is nullable, which keeps the
+  other warning about a required attribute out of it.
+
+  `VerifyIdentitiesBacked` reports this as a compile-time error, which this suite
+  sees as a warning when the file loads. No identity it accepts can reach the
+  branch this is here for, so the warning is the cost of testing that branch.
+  """
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a74"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.UnmappedIdentityDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "extended_users"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+    attribute :notes, :string, public?: true, default: ""
+  end
+
+  identities do
+    identity :unique_notes, [:notes]
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.Test.Legacy.Users do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :login, from: :login
+      extension([:notes])
+    end
+  end
+end
+
+defmodule AshStrangler.CheckTest.UnmappedIdentityDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckTest.UnmappedIdentity
+  end
+end
+
+defmodule AshStrangler.CheckTest.ScriptedRepo do
+  @moduledoc """
+  The stand-in for the answers a live server cannot be made to give on demand: a
+  repo that will not start, and a connection lost between two queries. `query/2`
+  answers with the function a test put in the application environment.
+  """
+
+  def config, do: []
+  def __adapter__, do: Ecto.Adapters.Postgres
+  def start_link(_opts), do: {:error, :refused}
+
+  def query(sql, _params), do: Application.fetch_env!(:ash_strangler, :check_test_answer).(sql)
+end
+
+defmodule AshStrangler.CheckTest.RoutedTwin do
+  @moduledoc "A twin whose repo each test chooses, including none at all."
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.RoutedDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "routed_items"
+    schema "legacy"
+
+    repo fn _resource, _type ->
+      Application.get_env(:ash_strangler, :check_test_repo, AshStrangler.TestRepo)
+    end
+
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+    attribute :name, :string, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+end
+
+defmodule AshStrangler.CheckTest.Routed do
+  @moduledoc false
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a75"
+
+  use Ash.Resource,
+    domain: AshStrangler.CheckTest.RoutedDomain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "routed_items"
+    schema "strangler"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :name, :string, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.CheckTest.RoutedTwin do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+
+      map :name, from: :name
+      map :note, from: :note
+    end
+  end
+end
+
+defmodule AshStrangler.CheckTest.RoutedDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  resources do
+    resource AshStrangler.CheckTest.RoutedTwin
+    resource AshStrangler.CheckTest.Routed
+  end
+end
+
 defmodule AshStrangler.CheckTest do
   @moduledoc """
   `mix ash_strangler.check` is asserted against a real PostgreSQL server rather
@@ -561,6 +713,115 @@ defmodule AshStrangler.CheckTest do
       assert length(Regex.scan(~r/database could not be reached/, output)) == 1
       assert output =~ ~r/1 assertion\(s\) failed/
     end
+  end
+
+  describe "--strict at the sites a live server cannot be made to reach" do
+    setup do
+      Application.put_env(:ash_strangler, :ash_domains, [AshStrangler.CheckTest.RoutedDomain])
+
+      on_exit(fn ->
+        Application.delete_env(:ash_strangler, :check_test_repo)
+        Application.delete_env(:ash_strangler, :check_test_answer)
+      end)
+    end
+
+    @routed ["--domain", "AshStrangler.CheckTest.RoutedDomain"]
+
+    test "fails an identity with no mapping to group by" do
+      Application.put_env(:ash_strangler, :ash_domains, [
+        AshStrangler.CheckTest.UnmappedIdentityDomain
+      ])
+
+      args = ["--domain", "AshStrangler.CheckTest.UnmappedIdentityDomain"]
+
+      {default, output} = check(args)
+      {strict, _output} = check(args ++ ["--strict"])
+
+      assert output =~ "a key has no mapping to group by, so nothing was measured"
+      assert default == :ok
+      assert {:exit, {:shutdown, 1}} = strict
+    end
+
+    test "fails when no repo could be resolved" do
+      Application.put_env(:ash_strangler, :check_test_repo, nil)
+
+      {default, output} = check(@routed)
+      {strict, _output} = check(@routed ++ ["--strict"])
+
+      assert output =~ "No repo could be resolved"
+      assert default == :ok
+      assert {:exit, {:shutdown, 1}} = strict
+    end
+
+    test "fails when the repo could not be started" do
+      Application.put_env(:ash_strangler, :check_test_repo, AshStrangler.CheckTest.ScriptedRepo)
+
+      {default, output} = check(@routed)
+      {strict, _output} = check(@routed ++ ["--strict"])
+
+      assert output =~ "could not be started"
+      assert default == :ok
+      assert {:exit, {:shutdown, 1}} = strict
+    end
+
+    test "a legacy relation this environment does not have fails through the cast check" do
+      {result, output} = check(@routed)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*  cast  name/
+      assert output =~ ~r/FAIL.*  twin freshness/
+      assert output =~ ~r/\?\?\?\?.*  allow_nil\? false  id/
+    end
+
+    test "a connection lost during the per-attribute retry is the database, not the attribute" do
+      answer_as_a_running_repo(fn sql ->
+        if whole_projection?(sql), do: rejected(), else: connection_lost()
+      end)
+
+      {result, output} = check(@routed)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert length(Regex.scan(~r/database could not be reached/, output)) == 1
+      refute output =~ ~r/cast  (id|name|note)/
+    end
+
+    test "a projection that fails whole while every attribute passes alone was not measured" do
+      answer_as_a_running_repo(fn sql ->
+        cond do
+          whole_projection?(sql) -> rejected()
+          sql =~ "projection" -> {:ok, %{rows: [[0]], columns: ["count"]}}
+          true -> rejected()
+        end
+      end)
+
+      {default, output} = check(@routed)
+      {strict, strict_output} = check(@routed ++ ["--strict"])
+
+      assert default == :ok
+      assert output =~ ~r/\?\?\?\?.*  casts/
+      assert {:exit, {:shutdown, 1}} = strict
+
+      unrun = length(Regex.scan(~r/\?\?\?\?/, strict_output))
+      assert strict_output =~ "#{unrun} check(s) could not be measured"
+    end
+  end
+
+  # `Process.whereis/1` is how the task knows a repo is already running, so this
+  # process stands in for it and the task goes straight to the queries.
+  defp answer_as_a_running_repo(answer) do
+    Application.put_env(:ash_strangler, :check_test_repo, AshStrangler.CheckTest.ScriptedRepo)
+    Application.put_env(:ash_strangler, :check_test_answer, answer)
+    Process.register(self(), AshStrangler.CheckTest.ScriptedRepo)
+  end
+
+  defp whole_projection?(sql), do: sql =~ "AS name" and sql =~ "AS note"
+
+  defp rejected do
+    {:error, %Postgrex.Error{message: "rejected by the database"}}
+  end
+
+  defp connection_lost do
+    {:error, %DBConnection.ConnectionError{message: "connection closed"}}
   end
 
   # --- running the task --------------------------------------------------
