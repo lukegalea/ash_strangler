@@ -64,7 +64,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
   while duplicates continue to be accepted by the write path. So the twin's unique
   sets are compared against `pg_index`, and a partial unique index does not count:
   it makes a column unique among the rows matching its predicate, which is not what
-  an identity claims.
+  an identity claims. Nor does an expression index: `UNIQUE (tenant_id, lower(email))`
+  is not a unique `tenant_id`. Only an index's key columns count, never its
+  `INCLUDE` columns.
 
   ## The estate obligation report
 
@@ -813,13 +815,25 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # `indpred IS NULL` because a partial unique index does not make the column
   # unique -- it makes it unique among the rows matching the predicate -- and an
   # Ash identity claims the unconditional thing.
+  #
+  # `indexprs IS NULL` for the same reason: an expression key has attnum 0, which
+  # the join to `pg_attribute` drops, so `UNIQUE (tenant_id, lower(email))` would
+  # otherwise read as a unique `tenant_id`.
+  #
+  # `k.ord <= x.indnkeyatts` keeps the key columns and drops `INCLUDE` ones, which
+  # are payload and constrain nothing. `indkey` is an `int2vector`, 0-based, so it
+  # is unnested rather than sliced; `WITH ORDINALITY` numbers from 1, as
+  # `indnkeyatts` counts.
   @unique_indexes """
   SELECT array_agg(a.attname ORDER BY a.attname)
     FROM pg_index x
-    JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = ANY(x.indkey)
+    CROSS JOIN LATERAL unnest(x.indkey) WITH ORDINALITY AS k(attnum, ord)
+    JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum
    WHERE x.indrelid = $1::text::regclass
      AND x.indisunique
      AND x.indpred IS NULL
+     AND x.indexprs IS NULL
+     AND k.ord <= x.indnkeyatts
    GROUP BY x.indexrelid
   """
 

@@ -672,6 +672,58 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # `Ash.Type.DateTime` is left out of `@pg_types` because `pg_type!/1` also decides
+  # whether a mapping needs a cast, and an entry would change the SQL generated for
+  # a `:datetime` twin column. A typed NULL is compared against nothing.
+  @known_pg_types Map.put(@pg_types, Ash.Type.DateTime, "timestamptz")
+
+  @doc """
+  The PostgreSQL type name for an Ash type, only when the explicit table above
+  names it (or an array of a type it names), or it is `:datetime`.
+
+  A new type is looked up through what it is a subtype of, and Ash's
+  `:utc_datetime` and `:utc_datetime_usec` are new types over `:datetime`.
+
+  `pg_type!/1` falls back to the Ecto storage type for everything else, and that
+  fallback is not always a Postgres type: an enum's is `string`, a term's is
+  `binary`. Rendering `NULL::string` would make a view that used to create fail
+  to create. Callers that must not emit an unknown name use this and render
+  nothing for `:error`.
+
+      iex> AshStrangler.Sql.Printer.known_pg_type(:uuid)
+      {:ok, "uuid"}
+
+      iex> AshStrangler.Sql.Printer.known_pg_type({:array, :ci_string})
+      {:ok, "citext[]"}
+
+      iex> AshStrangler.Sql.Printer.known_pg_type(:utc_datetime_usec)
+      {:ok, "timestamptz"}
+
+      iex> AshStrangler.Sql.Printer.known_pg_type(:term)
+      :error
+  """
+  @spec known_pg_type(term()) :: {:ok, String.t()} | :error
+  def known_pg_type({:array, inner}) do
+    with {:ok, name} <- known_pg_type(inner), do: {:ok, name <> "[]"}
+  end
+
+  def known_pg_type(type) do
+    with {:ok, resolved} <- resolve_type(type) do
+      resolved = unwrap_new_type(resolved)
+
+      case Map.fetch(@known_pg_types, resolved) do
+        {:ok, name} -> {:ok, name}
+        :error -> :error
+      end
+    end
+  end
+
+  defp unwrap_new_type(type) do
+    if Ash.Type.NewType.new_type?(type),
+      do: type |> Ash.Type.NewType.subtype_of() |> unwrap_new_type(),
+      else: type
+  end
+
   defp from_storage_type(resolved) do
     case Ash.Type.storage_type(resolved, []) do
       nil -> to_string(resolved)

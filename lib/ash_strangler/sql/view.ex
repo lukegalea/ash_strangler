@@ -156,8 +156,10 @@ defmodule AshStrangler.Sql.View do
     # column order is otherwise attribute-declaration order, and keeping the two
     # kinds apart makes a diff against a previously generated view read as what
     # changed (columns added to the extension) rather than as noise.
+    types = Map.new(attributes, &{&1.name, &1.type})
+
     extension_columns =
-      Enum.map(extension_lenses, fn lens -> {forward_sql(lens, frame), lens.attribute} end)
+      Enum.map(extension_lenses, fn lens -> {forward_sql(lens, frame, types), lens.attribute} end)
 
     excluded = MapSet.union(extension_attrs, MapSet.new(List.wrap(tenant_attr)))
 
@@ -167,7 +169,7 @@ defmodule AshStrangler.Sql.View do
       |> Enum.reduce({[], []}, fn attribute, {columns, missing} ->
         case Map.fetch(lenses, attribute.name) do
           {:ok, lens} ->
-            {[{forward_sql(lens, frame), attribute.name} | columns], missing}
+            {[{forward_sql(lens, frame, types), attribute.name} | columns], missing}
 
           :error ->
             {columns, [attribute.name | missing]}
@@ -199,7 +201,7 @@ defmodule AshStrangler.Sql.View do
     tenant_column =
       case Lens.tenant_lens(resource_or_dsl) do
         nil -> []
-        lens -> [{forward_sql(lens, frame), lens.attribute}]
+        lens -> [{forward_sql(lens, frame, types), lens.attribute}]
       end
 
     ([key_column | legacy_id_column] ++ Enum.reverse(rest)) ++ tenant_column ++ extension_columns
@@ -207,8 +209,22 @@ defmodule AshStrangler.Sql.View do
 
   # An `unmapped ..., as: :null` lens has no forward expression at all, which is
   # exactly what it means.
-  defp forward_sql(%Lens{forward: nil}, _frame), do: "NULL"
-  defp forward_sql(%Lens{forward: forward}, frame), do: Printer.to_sql(forward, ref: frame)
+  #
+  # The NULL is cast to the attribute's Postgres type. A bare `NULL` in a view's
+  # SELECT list is `text` since PostgreSQL 10, so a `uuid` attribute would become
+  # a `text` column and `created_by_id = other.id` would fail with
+  # `operator does not exist: text = uuid`. A type the printer's table does not
+  # name (an enum, a term) keeps the bare `NULL`: its Ecto storage type is not
+  # always a Postgres type, and `text` is what it was before.
+  defp forward_sql(%Lens{forward: nil, attribute: attribute}, _frame, types) do
+    case Printer.known_pg_type(Map.get(types, attribute)) do
+      {:ok, pg_type} -> "NULL::#{pg_type}"
+      :error -> "NULL"
+    end
+  end
+
+  defp forward_sql(%Lens{forward: forward}, frame, _types),
+    do: Printer.to_sql(forward, ref: frame)
 
   @doc false
   # The frame the forward direction is read in. Qualified only when a join makes a

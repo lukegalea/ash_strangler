@@ -29,10 +29,16 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
 
   ## Regenerating is safe
 
-  Every generated statement is idempotent (`CREATE OR REPLACE`,
-  `CREATE INDEX IF NOT EXISTS`), so after changing a mapping you regenerate and
-  run the new migration rather than hand-editing the old one. A hand-edited
-  migration is invisible to this task and will be contradicted by the next one.
+  Re-running statements that have not changed is safe: they are `CREATE OR
+  REPLACE` and `CREATE INDEX IF NOT EXISTS`, so regenerating after a mapping
+  change leaves the unchanged parts as they were. A hand-edited migration is
+  invisible to this task and will be contradicted by the next one.
+
+  A change of *shape* is not safe to run that way. `CREATE OR REPLACE VIEW` may
+  only add columns at the end; renaming, retyping, dropping or reordering a view
+  column is refused by PostgreSQL when the migration runs, and needs a written
+  `DROP VIEW` and `CREATE VIEW`. See "Changing a view's shape, in any phase" in
+  the [phases guide](phases.md).
 
   ## Options
 

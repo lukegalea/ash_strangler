@@ -160,9 +160,11 @@ defmodule AshStrangler.Migration do
 
       Covers: #{Enum.map_join(resources, ", ", &inspect/1)}
 
-      Regenerate rather than hand-editing. Every statement is idempotent
-      (`CREATE OR REPLACE`, `IF NOT EXISTS`), so re-running this after a mapping
-      change is safe.
+      Regenerate rather than hand-editing. Re-running statements that have not
+      changed is safe (`CREATE OR REPLACE`, `IF NOT EXISTS`). A change of shape --
+      renaming, retyping, dropping or reordering a view column -- is refused when
+      the migration runs and needs a written `DROP VIEW` and `CREATE VIEW`; see
+      documentation/topics/phases.md, "Changing a view's shape, in any phase".
       \"\"\"
 
       use Ecto.Migration

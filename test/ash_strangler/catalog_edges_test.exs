@@ -119,6 +119,37 @@ defmodule AshStrangler.CatalogEdgesTest do
     end
   end
 
+  # `mix ash_strangler.gen.twin` writes its identities from this catalog, so what
+  # the catalog calls a unique set is what the generated twin declares.
+  describe "unique sets read only an index's key columns" do
+    test "an expression key is printed as the expression, and INCLUDE columns are left out" do
+      catalog =
+        introspect([
+          "CREATE TABLE s.t (id int, a text, b text, c text)",
+          "CREATE UNIQUE INDEX plain_include ON s.t (a) INCLUDE (b)",
+          "CREATE UNIQUE INDEX mixed ON s.t (c, lower(b))"
+        ])
+
+      unique = Map.new(catalog["relations"]["s.t"]["unique"], &{&1["name"], &1["columns"]})
+
+      assert unique["plain_include"] == ["a"]
+      assert unique["mixed"] == ["c", "lower(b)"]
+    end
+
+    test "a primary key and a unique constraint with INCLUDE columns list only the key" do
+      catalog =
+        introspect([
+          "CREATE TABLE s.t (id int, a text, b text, " <>
+            "PRIMARY KEY (id) INCLUDE (a), UNIQUE (a) INCLUDE (b))"
+        ])
+
+      relation = catalog["relations"]["s.t"]
+
+      assert %{"columns" => ["id"]} = relation["primary_key"]
+      assert [%{"columns" => ["a"]}] = relation["unique"]
+    end
+  end
+
   describe "the strangle's own objects" do
     test "are skipped on both sides of a diff" do
       relation = fn triggers ->

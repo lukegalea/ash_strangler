@@ -232,7 +232,7 @@ SELECT
   (coalesce(first_name, '') || (' ' || coalesce(last_name, ''))) AS full_name,
   (deleted_at AT TIME ZONE 'UTC') AS archived_at,
   ('00000000-0000-0000-0000-0000000000fe')::uuid AS organization_id,
-  NULL AS created_by_id
+  NULL::uuid AS created_by_id
 FROM legacy.users;
 ```
 
@@ -626,9 +626,12 @@ ash_postgres.gen.resources --include-views` writes `migrate? false` beside a
 comment saying migrations for views are handled manually. This package automates
 the manual part.
 
-Every generated statement is idempotent — `CREATE OR REPLACE`,
-`CREATE INDEX IF NOT EXISTS` — so the workflow after changing a mapping is to
-regenerate and run the new migration, never to hand-edit the old one.
+Re-running a generated statement that has not changed is safe — `CREATE OR
+REPLACE`, `CREATE INDEX IF NOT EXISTS` — so the workflow after changing a mapping
+is to regenerate and run the new migration, never to hand-edit the old one. A
+change to the view's shape (a rename, retype, drop or reorder) is the exception:
+PostgreSQL refuses it when the migration runs, and it needs a written `DROP VIEW`
+and `CREATE VIEW`. See [Changing a view's shape](phases.md#changing-a-view-s-shape-in-any-phase).
 
 ## Next
 
