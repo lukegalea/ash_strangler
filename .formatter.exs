@@ -87,6 +87,8 @@ spark_locals_without_parens = [
   residue: 1,
   residue: 2,
   resources: 1,
+  retired: 1,
+  retired: 2,
   schema: 1,
   secrets: 1,
   security_definer: 1,

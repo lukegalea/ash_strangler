@@ -76,7 +76,13 @@ defmodule AshStrangler.Migration do
           # writers going through the reverse view, which fire NO Ash notifier.
           # The claim that Ash's own events cover writes past cutover is true
           # only if every writer goes through Ash.
+          #
+          # The old application's writes go through `Sql.ReverseTriggers`, which
+          # is empty where a plain auto-updatable view already carries them. They
+          # come right after the view they are attached to, so `down` (reversed)
+          # drops them first.
           Sql.ReverseView.build(resource) ++
+            Sql.ReverseTriggers.build(resource) ++
             Sql.Ledger.build(resource) ++ Observation.Store.statements()
 
         phase ->

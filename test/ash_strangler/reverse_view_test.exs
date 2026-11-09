@@ -93,10 +93,8 @@ defmodule AshStrangler.ReverseViewTest do
 
       [%{up: up, down: down}] = AshStrangler.Sql.ReverseView.build(resource)
 
-      # Columns follow DSL declaration order, with the legacy key first.
-      # The legacy key first, then one column per reversible mapping, ordered by
-      # legacy column name so regenerating the migration is a no-op rather than a
-      # diff.
+      # Columns follow the TWIN's declared order, because a legacy `SELECT *` and a
+      # positional `INSERT` depend on it: here id, name, deleted_at, status.
       #
       # Every expression here is `AshStrangler.Lens.writes/1` -- the SAME structure
       # the `INSTEAD OF` trigger assigns from, rendered through a different
@@ -107,8 +105,8 @@ defmodule AshStrangler.ReverseViewTest do
              CREATE OR REPLACE VIEW reverse_legacy.widgets AS
              SELECT
                legacy_id AS id,
-               (archived_at AT TIME ZONE 'UTC') AS deleted_at,
                label AS name,
+               (archived_at AT TIME ZONE 'UTC') AS deleted_at,
                (CASE state_code WHEN 0 THEN 'active' WHEN 1 THEN 'retired' END) AS status
              FROM "strangler"."widgets";
              """
@@ -173,6 +171,12 @@ defmodule AshStrangler.ReverseViewTest do
 
       assert names == [
                :strangler_widgets_reverse_view,
+               :strangler_widgets_reverse_insert_function,
+               :strangler_widgets_reverse_insert_trigger,
+               :strangler_widgets_reverse_update_function,
+               :strangler_widgets_reverse_update_trigger,
+               :strangler_widgets_reverse_delete_function,
+               :strangler_widgets_reverse_delete_trigger,
                :strangler_observations_table,
                :strangler_observations_event_index,
                :strangler_observations_baseline_index,

@@ -54,6 +54,20 @@ defmodule AshStrangler.LedgerReadFromNewTest do
 
         map :login, from: :login
         map :legacy_id, from: :id
+
+        retired(
+          [
+            :email,
+            :first_name,
+            :last_name,
+            :state,
+            :deleted_at,
+            :salt,
+            :crypted_password,
+            :created_at
+          ],
+          because: "Nothing here reads them; the test is about the ledger."
+        )
       end
     end
   end

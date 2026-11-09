@@ -877,6 +877,45 @@ original columns across unchanged as well (map them, even if nothing modern read
 them), confirm nothing still reads them and map them explicitly, or stop the old
 application first.
 
+### A twin column no mapping writes
+
+The reverse view produces a column by running a mapping backwards, so a twin column
+that **no mapping writes** has nothing to be produced from. Without this check the
+column silently vanished: the old application's `SELECT *` narrowed and
+`SELECT that_column` errored, starting the moment the cutover ran. The same
+verifier refuses the phase, naming the columns:
+
+```
+Phase :read_from_new makes the legacy name a view over the new table, and
+no mapping writes these columns of MyApp.Legacy.Gadgets:
+
+  :legacy_flag
+
+The view cannot produce them. `SELECT *` would silently lose them from the
+old application's results and `SELECT <column>` would fail, starting the
+moment the cutover ran.
+
+Either carry them across, by mapping each one (even if nothing modern reads
+it):
+
+    map :attribute, from: :legacy_flag
+
+or, if the old application no longer reads them, say so:
+
+    retired [:legacy_flag], because: "Nothing reads these any more."
+
+A retired column is rendered as NULL cast to its PostgreSQL type, in its own
+position, so the shape of `SELECT *` is kept. It is a written decision, never
+a silent one.
+```
+
+`retired [...], because: "..."` is the one explicit way out. A retired column is
+`NULL` cast to its PostgreSQL type in the twin's own column position, and a legacy
+write that assigns it is refused by the `INSTEAD OF` triggers. It is also refused
+when it contradicts the mapping: retired and written, retired and not on the twin,
+or an empty `because:`. A secret column is not an attribute of the twin, so it is
+neither checked nor produced here, which is the estate carry rule's position too.
+
 ---
 
 ## An identity the database does not enforce
