@@ -148,15 +148,31 @@ defmodule AshStrangler.Sql.ReverseView do
   # The quoted column the legacy relation calls a twin attribute.
   def legacy_column(twin, attribute), do: twin |> Twin.column!(attribute) |> identifier()
 
+  # PostgreSQL's reserved key words. An owned attribute called `order` is an ordinary
+  # column to Ash and a syntax error here if it is printed bare.
+  @reserved_words ~w(
+    all analyse analyze and any array as asc asymmetric authorization binary both case
+    cast check collate collation column concurrently constraint create cross
+    current_catalog current_date current_role current_schema current_time
+    current_timestamp current_user default deferrable desc distinct do else end except
+    false fetch for foreign freeze from full grant group having ilike in initially
+    inner intersect into is isnull join lateral leading left like limit localtime
+    localtimestamp natural not notnull null offset on only or order outer overlaps
+    placing primary references returning right select session_user similar some
+    symmetric system_user table tablesample then to trailing true union unique user
+    using variadic verbose when where window with
+  )
+
   @doc false
   # A legacy column is whatever the legacy schema named it, and PostgreSQL folds an
   # unquoted identifier to lowercase. The same rule `Printer` applies to the
   # columns it prints, copied rather than reached into: lowercase names stay bare,
-  # anything else is quoted.
+  # anything else is quoted. Reserved words are quoted too, since these names are
+  # also printed where a bare reserved word does not parse.
   def identifier(name) do
     column = to_string(name)
 
-    if column =~ ~r/^[a-z_][a-z0-9_$]*$/,
+    if column =~ ~r/^[a-z_][a-z0-9_$]*$/ and column not in @reserved_words,
       do: column,
       else: ~s("#{String.replace(column, ~s("), ~s(""))}")
   end

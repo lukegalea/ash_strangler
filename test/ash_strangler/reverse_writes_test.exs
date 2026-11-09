@@ -537,6 +537,63 @@ defmodule AshStrangler.ReverseWritesTest do
     end
   end
 
+  describe "an owned column named by a reserved word" do
+    test "is quoted in the view and in every trigger" do
+      install!(gadget_resource(title_source: :order))
+
+      assert %{rows: [["Alpha"]]} =
+               TestRepo.query!(
+                 ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", "Name") VALUES (7, 'Alpha') RETURNING "Name"|,
+                 []
+               )
+
+      TestRepo.query!(~s|UPDATE rw_legacy.gadgets SET "Name" = 'Beta' WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [["Beta"]]} =
+               TestRepo.query!(~s|SELECT "order" FROM strangler.rw_gadgets|, [])
+
+      assert %{rows: [["Beta"]]} = TestRepo.query!(~s|SELECT "Name" FROM rw_legacy.gadgets|, [])
+    end
+  end
+
+  describe "an owned table whose name fills PostgreSQL's 63-byte limit" do
+    test "keeps three distinct functions and triggers, so every write is carried" do
+      table = String.duplicate("g", 50)
+
+      TestRepo.query!(
+        ~s|CREATE TABLE strangler.#{table} (LIKE strangler.rw_gadgets INCLUDING ALL)|,
+        []
+      )
+
+      install!(gadget_resource(table: table))
+
+      TestRepo.query!(
+        ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", status) VALUES (7, 'active')|,
+        []
+      )
+
+      TestRepo.query!(~s|UPDATE rw_legacy.gadgets SET "Name" = 'Beta' WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [["Beta"]]} = TestRepo.query!("SELECT ttl FROM strangler.#{table}", [])
+
+      assert %{num_rows: 1} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM strangler.#{table}", [])
+
+      for operation <- ["INSERT", "UPDATE", "DELETE"] do
+        assert %{rows: [[1]]} =
+                 TestRepo.query!(
+                   """
+                   SELECT count(*) FROM information_schema.triggers
+                   WHERE event_object_table = 'gadgets' AND event_manipulation = $1
+                   """,
+                   [operation]
+                 )
+      end
+    end
+  end
+
   describe "a legacy column more than one mapping reads" do
     test "needs the trigger: a plain view would carry the write to only one of them" do
       resource = thing_resource(note_copy?: true)

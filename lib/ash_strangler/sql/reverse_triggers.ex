@@ -304,10 +304,25 @@ defmodule AshStrangler.Sql.ReverseTriggers do
 
   # --- statements -------------------------------------------------------------
 
-  defp function_name(ctx, operation),
-    do: ~s("#{ctx.schema}"."strangler_#{ctx.table}_reverse_#{operation}")
+  defp function_name(ctx, operation), do: ~s("#{ctx.schema}"."#{object_name(ctx, operation)}")
 
-  defp trigger_name(ctx, operation), do: ~s("strangler_#{ctx.table}_reverse_#{operation}")
+  defp trigger_name(ctx, operation), do: ~s("#{object_name(ctx, operation)}")
+
+  # PostgreSQL truncates an identifier to 63 bytes without complaint, and the
+  # operation is the end of this name: for a long table the three functions, and the
+  # three triggers, would be one object, each `CREATE OR REPLACE` replacing the last.
+  defp object_name(ctx, operation) do
+    name = "strangler_#{ctx.table}_reverse_#{operation}"
+
+    if byte_size(name) <= 63 do
+      name
+    else
+      hash =
+        :sha256 |> :crypto.hash(ctx.table) |> Base.encode16(case: :lower) |> binary_part(0, 8)
+
+      "strangler_#{String.slice(ctx.table, 0, 25)}_#{hash}_reverse_#{operation}"
+    end
+  end
 
   defp function_statement(ctx, operation) do
     %{
