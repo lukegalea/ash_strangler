@@ -838,7 +838,7 @@ defmodule AshStrangler.Obligations do
   defp relation(%{twin: twin}), do: AshStrangler.Twin.relation(twin)
 
   defp column(%{twin: twin}, attribute) do
-    AshStrangler.Twin.column!(twin, attribute)
+    AshStrangler.Sql.Printer.column(twin, attribute)
   rescue
     _ -> to_string(attribute)
   end

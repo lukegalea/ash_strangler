@@ -56,7 +56,7 @@ defmodule AshStrangler.Ingester do
          relation: relation,
          schema: schema,
          table: table,
-         key_column: Atom.to_string(key.from),
+         key_column: AshStrangler.Twin.column!(Info.twin(resource), key.from),
          id_derivation: id_derivation
        }}
     else
@@ -218,7 +218,7 @@ defmodule AshStrangler.Ingester do
 
       defp fetch_key(event) do
         case event.primary_key do
-          %{"#{ctx.key_column}" => legacy_key} -> {:ok, legacy_key}
+          %{#{inspect(ctx.key_column)} => legacy_key} -> {:ok, legacy_key}
           other -> {:error, {:unknown_primary_key, other}}
         end
       end
