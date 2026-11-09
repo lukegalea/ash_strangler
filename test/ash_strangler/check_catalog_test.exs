@@ -705,6 +705,23 @@ defmodule AshStrangler.CheckCatalogTest do
   end
 
   describe "what a live catalog read can get wrong" do
+    test "a CHECK over citext reads as the generator reads it, so an unchanged twin passes" do
+      edge!()
+
+      {_result, output} = check([], @edge_domain)
+
+      refute output =~ ~r/twin column  label/
+    end
+
+    test "the catalog read leaves the connection's search_path as it found it" do
+      edge!()
+      %{rows: before} = TestRepo.query!("SHOW search_path", [])
+
+      {_result, _output} = check([], @edge_domain)
+
+      assert %{rows: ^before} = TestRepo.query!("SHOW search_path", [])
+    end
+
     test "--strict counts a column whose type has no Ash type" do
       orders!(amount: "inet")
 

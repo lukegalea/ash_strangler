@@ -59,6 +59,9 @@ defmodule AshStrangler.Twin.Introspection do
   @doc """
   The catalog of `schemas`, read through `run`.
 
+  `run` has to read under an empty `search_path`, as the generator does: see
+  `AshStrangler.Snapshot.Catalog.read/2` for what depends on it.
+
   `{:error, exception}` when a statement fails, rather than a raise, so the
   caller can tell a database that could not be read from a relation that is not
   there.

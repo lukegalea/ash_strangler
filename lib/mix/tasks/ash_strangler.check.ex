@@ -1045,10 +1045,25 @@ defmodule Mix.Tasks.AshStrangler.Check do
     Enum.map(twins, &measure_twin(repo, &1, resources, catalog))
   end
 
+  # Under the empty `search_path` the generator reads with, because what the
+  # generator decides depends on it: `pg_get_constraintdef` prints a `CHECK` over
+  # a type outside the path differently, and only one printing parses as a value
+  # set. Rolled back, so the path is restored however the connection got here (a
+  # test's sandbox releases a savepoint rather than ending a transaction).
   defp read_catalog(repo, twins) do
     schemas = twins |> Enum.map(&(&1 |> relation_parts() |> elem(0))) |> Enum.uniq()
 
-    Introspection.read(&run_query(repo, &1, &2), schemas)
+    repo.transaction(fn ->
+      repo.rollback(
+        with {:ok, _result} <-
+               run_query(repo, "SELECT set_config('search_path', '', true)", []) do
+          Introspection.read(&run_query(repo, &1, &2), schemas)
+        end
+      )
+    end)
+    |> elem(1)
+  rescue
+    error -> {:error, error}
   end
 
   defp measure_twin(repo, twin, resources, catalog) do

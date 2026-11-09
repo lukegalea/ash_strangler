@@ -251,10 +251,10 @@ defmodule AshStrangler.Snapshot.Catalog do
   `introspect/2` is this over a `Postgrex` connection inside a read-only
   transaction with an empty `search_path`. A caller that cannot open that
   transaction (`mix ash_strangler.check` reads inside the repo's own connection,
-  which may be a test's sandbox) passes its own `query`. A type is identified in
-  the catalog by `schema.name` from `pg_type`, never by how it prints, so the
-  `search_path` of the connection changes nothing but the text of a column's
-  `"type"`, which nothing decides on.
+  which may be a test's sandbox) passes its own `query`, and has to set the empty
+  `search_path` itself. A `CHECK` definition prints a type or operator outside the
+  path with its schema, and the value-set parse only reads one of those printings,
+  so the same column types differently under a different `search_path`.
   """
   @spec read((String.t() -> [list()]), [String.t()]) :: map()
   def read(query, schemas) do
