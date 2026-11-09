@@ -124,6 +124,21 @@ defmodule AshStrangler.Extension do
   @type t :: %__MODULE__{}
 end
 
+defmodule AshStrangler.Retired do
+  @moduledoc """
+  Legacy columns the old application no longer reads, declared so the
+  `:read_from_new` reverse view may answer NULL for them.
+
+      retired [:legacy_flag, :sort_hint], because: "Nothing reads these since 2025."
+
+  A declaration about the **twin's** columns, not the resource's attributes: it
+  is the way out of `AshStrangler.Verifiers.VerifyReverseMappable`'s refusal of a
+  twin column no mapping writes.
+  """
+  defstruct [:columns, :because, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+end
+
 defmodule AshStrangler.Tenant do
   @moduledoc """
   The tenant attribute, derived from legacy data.
@@ -212,6 +227,7 @@ defmodule AshStrangler.Source do
     mappings: [],
     extensions: [],
     tenants: [],
+    retirements: [],
     keys: [],
     # Set by ResolveMappingTarget when a `use AshStrangler.Mapping` fragment
     # supplied this source entity. Persisted on the merged entity because

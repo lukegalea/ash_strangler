@@ -33,7 +33,7 @@ in a place a reviewer reads, rather than living in someone's head and a runbook.
 |---|---|---|---|---|
 | **Source of truth** | legacy tables | legacy tables | the new table | the new table |
 | **Compatibility view** | over legacy, named for the modern shape | same | over the new table, named for the **legacy** shape | none |
-| **`INSTEAD OF` triggers** | none | only for the columns nothing weaker can carry | on the legacy-named view, usually required | none |
+| **`INSTEAD OF` triggers** | none | only for the columns nothing weaker can carry | on the legacy-named view, generated wherever a plain view cannot carry the old application's write | none |
 | **Upserts (`upsert?: true`)** | no write path | available unless some column forced a trigger | available | available |
 | **New app** | reads | reads and writes | owns the data | owns the data |
 | **Old app** | unchanged | unchanged | **still unchanged** | switched off |
@@ -68,7 +68,7 @@ answer is exactly this:
 |---|---|
 | `:read_from_legacy` | the compatibility view; the key expression index (for `{:uuid_v5, …}` keys); the notify function and trigger if `notify? true` |
 | `:dual_write` | all of the above, plus `INSTEAD OF` insert/update/delete function-and-trigger pairs **when some column needs them** |
-| `:read_from_new` | the reverse view |
+| `:read_from_new` | the reverse view; the `INSTEAD OF` insert/update/delete pairs that carry the old application's writes into the owned table, **unless** a plain auto-updatable view already carries them; the ledger trigger on the owned table if `ledger? true` |
 | `:decommissioned` | nothing |
 
 Every generated statement is idempotent (`CREATE OR REPLACE`,
@@ -267,16 +267,107 @@ column of the stored table. One declaration, two frames, nothing to keep in step
 CREATE OR REPLACE VIEW legacy.users AS
 SELECT
   legacy_id AS id,
-  (archived_at AT TIME ZONE 'UTC') AS deleted_at,
-  (email)::text AS email,
   login AS login,
-  (CASE state_code WHEN 0 THEN 'active' WHEN 4 THEN 'deleted' WHEN 1 THEN 'passive' WHEN 2 THEN 'pending' WHEN 3 THEN 'suspended' END) AS state
+  (email)::text AS email,
+  (CASE state_code WHEN 0 THEN 'active' WHEN 4 THEN 'deleted' WHEN 1 THEN 'passive' WHEN 2 THEN 'pending' WHEN 3 THEN 'suspended' END) AS state,
+  (archived_at AT TIME ZONE 'UTC') AS deleted_at,
+  NULL::text AS salt
 FROM "strangler"."users";
 ```
 
 Read the `state` column against the forward one in `:read_from_legacy` above:
 they are the same `decode` table, inverted, from one declaration. And read
 `deleted_at` against `archived_at`: the same `zone:`, applied the other way.
+
+**Every column of the twin is produced, in the twin's order.** The view has one
+column for each attribute the twin declares, named by the legacy column (a
+`"GadgetId"`, or a key renamed with `source:`, is spelled as the legacy schema
+spells it), in the order the twin declares them, because a legacy `SELECT *` and a
+positional `INSERT` depend on it. The owned table's side uses the owned attribute's
+own column name, so a `source:` on the new attribute is honoured too.
+
+A column is the key, a column a mapping writes back, or a column you have
+**retired**. There is no fourth outcome: a twin column no mapping writes cannot be
+reconstructed, and left alone it would silently vanish (`SELECT *` narrows,
+`SELECT that_column` errors). `AshStrangler.Verifiers.VerifyReverseMappable` refuses
+the phase for it, naming the columns. Either map each one, or say the old
+application no longer reads them:
+
+```elixir
+retired [:salt], because: "The old application stopped reading it when it moved to SSO."
+```
+
+A retired column is rendered as `NULL` cast to its PostgreSQL type (the `salt`
+line above), so the shape of `SELECT *` is kept. It is a written decision, never a
+silent NULL, and a legacy write that assigns a value to it is refused rather than
+dropped. A secret column is not an attribute of the twin and is not produced; like
+the estate's carry rule, it is the twin's to carry, so the step that retires the
+old table has to keep it. The estate (`AshStrangler.Estate`) separately asks for a
+disposition (`dead`) for a retired column no resource maps.
+
+### The old application's writes
+
+At this phase the old application is "still unchanged", and an application that
+reads also writes. `INSERT INTO users ...` against the reverse view is refused by
+PostgreSQL (`decode`s, casts and `zone:`s are not updatable columns) and the owned
+table's key is a function of the legacy key that nothing would compute. So the
+generator emits `INSTEAD OF INSERT`, `UPDATE` and `DELETE` triggers on the
+legacy-named view (`AshStrangler.Sql.ReverseTriggers`), built from the same
+lenses.
+
+Where `AshStrangler.Sql.Triggers` renders each lens's *write* expression over
+`NEW`, these render each lens's **forward** expression, the one the compatibility
+view and the backfill project, with a twin attribute spelled `NEW.<legacy column>`.
+A row the old application writes is therefore stored as a backfill would have
+stored it. The owned key is computed with the very expression the forward view uses
+and the legacy key is stored as `legacy_id`. An attribute with no legacy source (an
+`unmapped` or a `constant`) is not assigned: the owned table's defaults apply on an
+`INSERT` and its stored value survives an `UPDATE`. An `UPDATE` assigns only the
+columns whose legacy source the statement changed, so a stored value the legacy shape
+cannot express survives an update of some other column.
+
+A trigger cannot tell a column the statement left out from one it set to `NULL`, so
+an `INSERT` that leaves out a mapped column stores `NULL` for it: the legacy table's
+`DEFAULT` is gone with the table, and the owned column's default is not consulted.
+If the old application relies on a column default, put it on the view in the cutover
+migration (`ALTER VIEW users ALTER COLUMN status SET DEFAULT 'pending'`), and
+PostgreSQL fills it in before the trigger runs.
+
+**They are emitted only when a plain view cannot carry the write**, because a
+trigger costs the old application `ON CONFLICT` and `WITH CHECK OPTION`. The rule
+is PostgreSQL's:
+
+- a view column is updatable only if it is a *simple reference* to a base column, so
+  any `decode`, cast, `zone:` or `collapse` column needs the trigger; and
+- the owned key is *derived* from the legacy key, which a plain view would never
+  compute, so any derived key needs it too, as does a stored `legacy_id`; and
+- a view column refers to one owned column, so a legacy column that more than one
+  attribute reads needs it, or the other attribute goes stale.
+
+The one shape that needs none of these is an `:identity` key on a resource with no
+`legacy_id` and plain renames of otherwise unshared columns: then the view is
+auto-updatable and nothing is emitted. `ReverseTriggers.needed?/1` is that decision.
+
+The three traps of the dual-write triggers are honoured. `RETURNING` reports the
+stored row, re-read through the view, so the old application sees its own key. A
+trigger never returns `NULL` for a row it wrote, which would surface as `INSERT 0 0`.
+A write that cannot be carried raises instead of reporting success: changing the
+key, assigning a retired column, a `decode`d value the table has no counterpart for,
+an `UPDATE` of a row that is gone.
+
+An `INSERT` that supplies no key is given one only if the owned `legacy_id` owns a
+sequence (`serial`, `bigserial` or `GENERATED ... AS IDENTITY`), which is what
+continues the legacy table's allocator after cutover; carrying that sequence's
+current value across is part of the cutover migration you write. Otherwise, and for
+an `:identity` key, which the host mints, it raises. It never stores a NULL key.
+
+A `DELETE` deletes the owned row, as the dual-write `INSTEAD OF DELETE` deletes the
+legacy row. Archival is honoured the way it is there: `AshArchival` archives with an
+`UPDATE` of the archive attribute, which `VerifyArchival` requires to be mapped, so
+the archive reads as the old application's `deleted_at` and a legacy `UPDATE` of
+`deleted_at` archives. A legacy `DELETE` is a request to delete and is not rewritten
+into an archive. The ledger trigger, which sits on the owned table, fires exactly
+once for each of these writes.
 
 Because it projects *backwards*, this view can only be built from mappings whose
 reverse exists. **`AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase
@@ -375,7 +466,8 @@ moved; the view is unchanged.
 
 This is the one-way door, and the compiler locks it.
 `AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase if any mapping
-is `invertible: :no` **or** `invertible: :semi`. Emitting the reverse view anyway
+is `invertible: :no` **or** `invertible: :semi`, or if any column of the twin is
+neither written by a mapping nor declared `retired`. Emitting the reverse view anyway
 would mean the old application reads `NULL` — or, worse for a `:semi` mapping, a
 plausible approximation — for those legacy columns, silently, starting at the
 exact moment the cutover made the new table the source of truth. That is the least
@@ -385,14 +477,18 @@ The fix is never to delete the verifier. The mapping is telling you the truth:
 that data was consumed one-way and the old application still wants it. Carry the
 original columns across unchanged as well (map them, even if nothing modern reads
 them), or confirm the old application no longer reads them and map them
-explicitly, or stop the old application first.
+explicitly, or stop the old application first. A twin column no mapping writes at
+all is the same refusal: map it, or declare it `retired` with the reason.
 
 Before you turn the word:
 
 - `AshStrangler.Backfill.pending_count/3` returns `0`.
 - `AshStrangler.Reconciler.diff/2` returns `agrees?: true`, and you have read the
   batches rather than the boolean.
-- The new table carries `legacy_id` for every row.
+- The new table carries `legacy_id` for every row, and `legacy_id` owns a sequence
+  (set to the legacy table's current value) if the old application inserts without
+  a key.
+- Every column of the twin is mapped or `retired`; the compiler checks.
 - `mix ash_strangler.check` is clean — including the twin-freshness diff, because
   a column the legacy application added since the twin was generated is a column
   the reverse view will not produce.
@@ -400,7 +496,9 @@ Before you turn the word:
 Then, in one deliberate migration you write yourself: drop the forward view,
 create the Ash-owned table (`mix ash.codegen`, now that `migrate?` is `true`),
 move the data, rename the legacy table aside rather than dropping it, and create
-the reverse view in its place. Keeping the old table under a different name is
+the reverse view in its place, with the `INSTEAD OF` triggers that
+`mix ash_strangler.gen.migration` emits after it, so the old application's writes
+land in the new table from the first statement. Keeping the old table under a different name is
 what makes the theoretical rollback — reversing the view definitions — worth
 anything at all in the hour after cutover.
 

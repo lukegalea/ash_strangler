@@ -17,6 +17,34 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **`:read_from_new` carries the old application's writes and every column it reads:**
+  - The reverse view now has one column per twin attribute, in the twin's declared order (it was
+    sorted by name), named through `Twin.column!/2` and the printer's identifier rule, so a
+    CamelCase column or a `key.from` with a `source:` rename is spelled as the legacy schema spells
+    it. References to the owned table use the owned attribute's own column name (`source:`).
+  - **New `AshStrangler.Sql.ReverseTriggers`:** `INSTEAD OF INSERT`, `UPDATE` and `DELETE` on the
+    legacy-named view, as the docs promised. Each lens's forward expression is rendered over
+    `NEW.<legacy column>`, so a legacy write stores what a backfill would have stored; the owned
+    key comes from the forward view's key expression and the legacy key is stored as `legacy_id`.
+    Attributes with no legacy source are not assigned. `RETURNING` reports the re-read row, and a
+    write that cannot be carried raises (a changed key, a retired column, a `decode`d value with no
+    counterpart, an `UPDATE` of a vanished row, an `INSERT` with no key and no sequence on
+    `legacy_id` to allocate one). An `UPDATE` assigns only the columns whose legacy source the
+    statement changed. A mapped column an `INSERT` leaves out is stored as `NULL`; a legacy
+    `DEFAULT` belongs on the view (`ALTER VIEW ... SET DEFAULT`). They are emitted only when a
+    plain auto-updatable view cannot carry the write: a derived key, a computed column or a legacy
+    column read by more than one attribute needs them; an `:identity` key with no `legacy_id`
+    and plain renames does not, and keeps `ON CONFLICT`.
+  - **New `retired [:column], because: "..."` in a `source`:** declares twin columns the old
+    application no longer reads. `VerifyReverseMappable` now refuses `:read_from_new` for any twin
+    column that no mapping writes and that is not retired, naming the columns and the options. A
+    retired column renders as `NULL` cast to its PostgreSQL type, in the twin's column position.
+    **Breaking for a resource at `:read_from_new`:** map or retire every twin column. An
+    `:identity` key on a resource with no `legacy_id` attribute is no longer refused by the
+    reverse view; it exposes the owned key. A reverse view an earlier version deployed has its
+    columns sorted by name, and `CREATE OR REPLACE VIEW` cannot reorder them, so drop it in the
+    same migration.
+
 - **`mix ash_strangler.check` compares a twin with the live catalog:** for each column a twin
   declares, the check re-derives what `mix ash_strangler.gen.twin` would write today and compares.
   A value set that grew (an enum label or `CHECK` value the twin's `one_of` lacks) fails, naming the

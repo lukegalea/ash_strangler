@@ -118,6 +118,19 @@ defmodule AshStrangler.Info do
   end
 
   @doc """
+  The twin attribute names the source declares `retired`, in declaration order.
+
+  Columns the old application no longer reads; see `AshStrangler.Retired`.
+  """
+  @spec retired(Spark.Dsl.t() | Ash.Resource.t()) :: [atom()]
+  def retired(resource) do
+    case source(resource) do
+      nil -> []
+      source -> Enum.flat_map(source.retirements, & &1.columns)
+    end
+  end
+
+  @doc """
   The resource's single `key`, or `nil`.
 
   Raises when there are several: a view has one primary key expression, and

@@ -501,6 +501,41 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
+  @retired %Spark.Dsl.Entity{
+    name: :retired,
+    describe: """
+    Twin columns the old application no longer reads, so that the reverse view
+    answers NULL for them in phase `:read_from_new`.
+
+    That phase makes the legacy name a view over the new table, and a view has to
+    produce every column the old application's `SELECT *` or positional `INSERT`
+    sees. A twin column that no mapping writes cannot be reconstructed, so
+    `AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase and names it.
+    Map the column, or declare it here: a retired column is rendered as `NULL`
+    cast to its PostgreSQL type, in the twin's own column position, so the shape
+    of the view is kept.
+
+    This is a written decision, never a silent NULL, which is why `because:` is
+    required. A legacy write that assigns a value to a retired column is refused
+    by the `INSTEAD OF` triggers rather than dropped.
+
+    Names twin attributes, and is read only in `:read_from_new`.
+    """,
+    examples: [
+      ~S|retired [:legacy_flag, :sort_hint], because: "The old application stopped reading these in 2025."|
+    ],
+    target: AshStrangler.Retired,
+    args: [:columns],
+    schema: [
+      columns: [type: {:list, :atom}, required: true, doc: "Twin attribute names."],
+      because: [
+        type: :string,
+        required: true,
+        doc: "Why the old application no longer reads them."
+      ]
+    ]
+  }
+
   @key %Spark.Dsl.Entity{
     name: :key,
     describe: """
@@ -732,6 +767,7 @@ defmodule AshStrangler.Dsl do
       mappings: @mapping_entities,
       extensions: [@extension],
       tenants: [@tenant],
+      retirements: [@retired],
       keys: [@key]
     ],
     schema: [

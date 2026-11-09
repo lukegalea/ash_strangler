@@ -753,7 +753,12 @@ flowchart TB
 ```
 
 The old application still runs `SELECT * FROM accounts` and has no idea
-`accounts` stopped being a table. **Cutover is a migration, not a coordinated deploy of two
+`accounts` stopped being a table. The view has every column of the twin, in the
+twin's order (a column the old application no longer reads is declared `retired`,
+with a reason, and renders as a typed `NULL`; one nothing accounts for is a compile
+error). Its writes still work: `INSTEAD OF INSERT`, `UPDATE` and `DELETE` triggers
+carry them into the new table, built from the same mapping and emitted only where a
+plain view cannot. **Cutover is a migration, not a coordinated deploy of two
 systems** — which is the most valuable thing here.
 
 → [The phase model in full](documentation/topics/phases.md)
