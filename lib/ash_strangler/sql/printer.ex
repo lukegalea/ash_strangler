@@ -672,9 +672,17 @@ defmodule AshStrangler.Sql.Printer do
     end
   end
 
+  # `Ash.Type.DateTime` is left out of `@pg_types` because `pg_type!/1` also decides
+  # whether a mapping needs a cast, and an entry would change the SQL generated for
+  # a `:datetime` twin column. A typed NULL is compared against nothing.
+  @known_pg_types Map.put(@pg_types, Ash.Type.DateTime, "timestamptz")
+
   @doc """
   The PostgreSQL type name for an Ash type, only when the explicit table above
-  names it (or an array of a type it names).
+  names it (or an array of a type it names), or it is `:datetime`.
+
+  A new type is looked up through what it is a subtype of, and Ash's
+  `:utc_datetime` and `:utc_datetime_usec` are new types over `:datetime`.
 
   `pg_type!/1` falls back to the Ecto storage type for everything else, and that
   fallback is not always a Postgres type: an enum's is `string`, a term's is
@@ -688,6 +696,9 @@ defmodule AshStrangler.Sql.Printer do
       iex> AshStrangler.Sql.Printer.known_pg_type({:array, :ci_string})
       {:ok, "citext[]"}
 
+      iex> AshStrangler.Sql.Printer.known_pg_type(:utc_datetime_usec)
+      {:ok, "timestamptz"}
+
       iex> AshStrangler.Sql.Printer.known_pg_type(:term)
       :error
   """
@@ -700,7 +711,7 @@ defmodule AshStrangler.Sql.Printer do
     with {:ok, resolved} <- resolve_type(type) do
       resolved = unwrap_new_type(resolved)
 
-      case Map.fetch(@pg_types, resolved) do
+      case Map.fetch(@known_pg_types, resolved) do
         {:ok, name} -> {:ok, name}
         :error -> :error
       end
