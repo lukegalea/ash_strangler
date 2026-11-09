@@ -840,7 +840,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
               {:cont, {matched + 1, total}}
 
             {finding, detail} ->
-              {:cont, {matched, tally([total, flag(finding, "column types  #{attribute}", detail)])}}
+              {:cont,
+               {matched, tally([total, flag(finding, "column types  #{attribute}", detail)])}}
           end
 
         {:ok, _other} ->
@@ -1177,7 +1178,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   defp compare_twin(twin, relation, catalog, resources) do
     secrets = Twin.secrets(twin)
-    wrote = relation |> Introspection.columns(catalog, secrets) |> Map.new(&{&1.column, &1})
+    wrote = relation |> Introspection.typed_columns(catalog, secrets) |> Map.new(&{&1.column, &1})
 
     findings =
       twin
@@ -1218,8 +1219,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
   # A type the generator cannot give an Ash type is not declared by it, so there
   # is nothing to compare: the twin declares one anyway, which is a hand edit worth
   # a line and not a failure.
-  defp type_findings(_twin, attribute, %{type: nil, name: name, note: note})
-       when not is_nil(name) do
+  defp type_findings(_twin, attribute, %{type: nil, note: note}) do
     [
       {:not_measured, attribute.name,
        note
@@ -1231,8 +1231,6 @@ defmodule Mix.Tasks.AshStrangler.Check do
        )}
     ]
   end
-
-  defp type_findings(_twin, _attribute, %{type: nil}), do: []
 
   defp type_findings(twin, attribute, wrote) do
     declared = Introspection.coarse(attribute.type, attribute.constraints)

@@ -732,6 +732,16 @@ defmodule AshStrangler.CheckCatalogTest do
       assert output =~ ~s("archived")
     end
 
+    test "a widened CHECK on a column no attribute name can be formed from fails" do
+      edge!(odd: ~w(x y z))
+
+      {result, output} = check([], @edge_domain)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert output =~ ~r/FAIL.*twin column  odd/
+      assert output =~ ~s("z")
+    end
+
     test "--strict counts a column whose type has no Ash type" do
       orders!(amount: "inet")
 

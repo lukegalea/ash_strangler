@@ -127,6 +127,28 @@ defmodule AshStrangler.Twin.Introspection do
   """
   @spec columns(map(), map(), [String.t()]) :: [column()]
   def columns(relation, catalog, secrets \\ []) do
+    relation
+    |> typed_columns(catalog, secrets)
+    |> Enum.map(&undeclare_unnameable(&1, secrets))
+  end
+
+  defp undeclare_unnameable(%{name: nil, column: column} = unnamed, secrets) do
+    if column in secrets,
+      do: unnamed,
+      else: %{unnamed | type: nil, one_of: nil, note: unnameable_note(column)}
+  end
+
+  defp undeclare_unnameable(named, _secrets), do: named
+
+  @doc """
+  `columns/3`, except that a column no attribute name can be formed from keeps its
+  type and value set.
+
+  The generator cannot declare such a column, but a hand-written twin can, through
+  `source:`, and what the column holds does not depend on what it is called.
+  """
+  @spec typed_columns(map(), map(), [String.t()]) :: [column()]
+  def typed_columns(relation, catalog, secrets \\ []) do
     primary_key = (relation["primary_key"] || %{})["columns"] || []
 
     Enum.map(relation["columns"], fn column ->
@@ -142,21 +164,16 @@ defmodule AshStrangler.Twin.Introspection do
         note: nil
       }
 
-      cond do
-        name in secrets ->
-          %{
-            base
-            | note: "`#{name}` is declared secret (`twin do secrets ... end`) and is not carried."
-          }
-
-        is_nil(base.name) ->
-          %{base | note: unnameable_note(name)}
-
-        true ->
-          case Types.for_column(column, relation, catalog) do
-            {:ok, typed} -> Map.merge(base, typed)
-            {:omit, note} -> %{base | note: note}
-          end
+      if name in secrets do
+        %{
+          base
+          | note: "`#{name}` is declared secret (`twin do secrets ... end`) and is not carried."
+        }
+      else
+        case Types.for_column(column, relation, catalog) do
+          {:ok, typed} -> Map.merge(base, typed)
+          {:omit, note} -> %{base | note: note}
+        end
       end
     end)
   end
