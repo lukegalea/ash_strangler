@@ -476,7 +476,16 @@ defmodule AshStrangler.Union.Sql do
           Enum.map_join(
             writable,
             ", ",
-            &"#{frame.({[], source_attr(b, &1.name)})} = CAST(NEW.#{q(&1.name)} AS #{legacy_type(b, &1.name)})"
+            fn c ->
+              column = frame.({[], source_attr(b, c.name)})
+
+              # Only a column this write changed is assigned. The trigger's NEW and OLD are both
+              # the view scan, so a column the statement left alone carries a value that may
+              # predate a concurrent commit to the legacy row; assigning it back would revert
+              # that commit.
+              "#{column} = CASE WHEN NEW.#{q(c.name)} IS DISTINCT FROM OLD.#{q(c.name)} " <>
+                "THEN CAST(NEW.#{q(c.name)} AS #{legacy_type(b, c.name)}) ELSE #{column} END"
+            end
           )
 
         "    UPDATE #{Twin.relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
@@ -493,7 +502,15 @@ defmodule AshStrangler.Union.Sql do
     key = q(Info.key(union))
     names = Enum.map_join(extension, ", ", &q/1)
     values = Enum.map_join(extension, ", ", &"NEW.#{q(&1)}")
-    sets = Enum.map_join(extension, ", ", &"#{q(&1)} = EXCLUDED.#{q(&1)}")
+    # Likewise only a changed extension column is overwritten, so two writers of different
+    # extension columns do not revert each other.
+    sets =
+      Enum.map_join(
+        extension,
+        ", ",
+        &"#{q(&1)} = CASE WHEN NEW.#{q(&1)} IS DISTINCT FROM OLD.#{q(&1)} THEN EXCLUDED.#{q(&1)} ELSE #{Info.extension_table(union)}.#{q(&1)} END"
+      )
+
     changed = Enum.map_join(extension, " OR ", &"NEW.#{q(&1)} IS DISTINCT FROM OLD.#{q(&1)}")
 
     "    IF #{changed} THEN\n" <>

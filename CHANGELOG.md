@@ -17,6 +17,12 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **A union `:dual_write` update assigns only the columns it changed:** the trigger's `NEW` and `OLD` are
+  both the view scan, so a column the statement left alone carried a value that could predate a
+  concurrent commit to the legacy row, and assigning it back reverted that commit. Each legacy column is
+  now `col = CASE WHEN NEW.x IS DISTINCT FROM OLD.x THEN <new> ELSE col END`, and the extension upsert
+  overwrites only the changed extension columns. Writing a column back to the value the scan showed is
+  indistinguishable from not writing it, as with a twin's `on_update: :changed_columns`.
 - **`:read_from_new` carries the old application's writes and every column it reads:**
   - The reverse view now has one column per twin attribute, in the twin's declared order (it was
     sorted by name), named through `Twin.column!/2` and the printer's identifier rule, so a
