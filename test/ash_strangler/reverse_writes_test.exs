@@ -341,6 +341,16 @@ defmodule AshStrangler.ReverseWritesTest do
                TestRepo.query!("SELECT region, state_code FROM strangler.rw_gadgets", [])
     end
 
+    test "RETURNING reports what was stored, not what the statement sent" do
+      upcase_title_on_owned!()
+
+      assert %{rows: [["ALPHA"]]} =
+               TestRepo.query!(
+                 ~s|INSERT INTO rw_legacy.gadgets ("GadgetId", status, "Name") VALUES (7, 'active', 'alpha') RETURNING "Name"|,
+                 []
+               )
+    end
+
     test "a mapped column the statement leaves out takes a default the view declares" do
       TestRepo.query!(
         ~s|ALTER VIEW rw_legacy.gadgets ALTER COLUMN "Name" SET DEFAULT 'unnamed'|,
@@ -436,6 +446,34 @@ defmodule AshStrangler.ReverseWritesTest do
                TestRepo.query!("SELECT region, state_code, ttl FROM strangler.rw_gadgets", [])
     end
 
+    test "RETURNING reports what was stored, not what the statement sent" do
+      upcase_title_on_owned!()
+
+      assert %{rows: [["BETA"]]} =
+               TestRepo.query!(
+                 ~s|UPDATE rw_legacy.gadgets SET "Name" = 'beta' WHERE "GadgetId" = 7 RETURNING "Name"|,
+                 []
+               )
+    end
+
+    test "an update the owned table did not take raises rather than reporting success" do
+      TestRepo.query!(
+        """
+        CREATE FUNCTION strangler.rw_skip() RETURNS trigger AS $$ BEGIN RETURN NULL; END $$ LANGUAGE plpgsql
+        """,
+        []
+      )
+
+      TestRepo.query!(
+        "CREATE TRIGGER rw_skip BEFORE UPDATE ON strangler.rw_gadgets FOR EACH ROW EXECUTE FUNCTION strangler.rw_skip()",
+        []
+      )
+
+      assert_raise Postgrex.Error, ~r/no longer exists/, fn ->
+        TestRepo.query!(~s|UPDATE rw_legacy.gadgets SET "Name" = 'x' WHERE "GadgetId" = 7|, [])
+      end
+    end
+
     test "archival reads and writes through deleted_at" do
       # What AshArchival does on destroy: stamp the archive attribute on the owned row.
       TestRepo.query!("UPDATE strangler.rw_gadgets SET archived_at = '2025-01-02 03:04:05Z'", [])
@@ -489,6 +527,25 @@ defmodule AshStrangler.ReverseWritesTest do
                )
 
       assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM strangler.rw_gadgets", [])
+    end
+
+    test "a row the owned table kept is not reported as deleted" do
+      TestRepo.query!(
+        """
+        CREATE FUNCTION strangler.rw_keep() RETURNS trigger AS $$ BEGIN RETURN NULL; END $$ LANGUAGE plpgsql
+        """,
+        []
+      )
+
+      TestRepo.query!(
+        "CREATE TRIGGER rw_keep BEFORE DELETE ON strangler.rw_gadgets FOR EACH ROW EXECUTE FUNCTION strangler.rw_keep()",
+        []
+      )
+
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [[1]]} = TestRepo.query!("SELECT count(*) FROM strangler.rw_gadgets", [])
     end
 
     test "a row that is not there is DELETE 0" do
@@ -672,6 +729,22 @@ defmodule AshStrangler.ReverseWritesTest do
   defp install!(resource) do
     for %{up: up} <- ReverseView.build(resource) ++ ReverseTriggers.build(resource),
         do: TestRepo.query!(up, [])
+  end
+
+  # A BEFORE trigger on the owned table, so the row stored differs from the one sent.
+  defp upcase_title_on_owned! do
+    TestRepo.query!(
+      """
+      CREATE FUNCTION strangler.rw_upcase() RETURNS trigger AS $$
+      BEGIN NEW.ttl := upper(NEW.ttl); RETURN NEW; END $$ LANGUAGE plpgsql
+      """,
+      []
+    )
+
+    TestRepo.query!(
+      "CREATE TRIGGER rw_upcase BEFORE INSERT OR UPDATE ON strangler.rw_gadgets FOR EACH ROW EXECUTE FUNCTION strangler.rw_upcase()",
+      []
+    )
   end
 
   # A row as it would sit after the backfill, written to the owned table directly.
