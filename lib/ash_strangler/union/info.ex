@@ -14,15 +14,26 @@ defmodule AshStrangler.Union.Info do
     * `:expression`: an expression over the twin's columns;
     * `:constant`: a literal;
     * `:null`: an unmapped column;
+    * `:extension`: a column stored in the union's extension table;
     * `:owned`: every column of the owned branch.
 
   `twin_derived?/1` is true for `:column` and `:expression`.
   """
 
-  alias AshStrangler.Union.{Column, Constant, Legacy, Owned, TenantKey, Unmapped}
+  alias AshStrangler.Union.{
+    Column,
+    Constant,
+    Extension,
+    Legacy,
+    NotWrittenBack,
+    Owned,
+    RefuseDelete,
+    TenantKey,
+    Unmapped
+  }
   alias AshStrangler.Union.Map, as: MapEntry
 
-  @type kind :: :column | :expression | :constant | :null | :owned
+  @type kind :: :column | :expression | :constant | :null | :extension | :owned
 
   @spec schema(module() | Spark.Dsl.t()) :: String.t()
   def schema(union), do: Spark.Dsl.Extension.get_opt(union, [:union], :schema, "public")
@@ -129,6 +140,34 @@ defmodule AshStrangler.Union.Info do
     end
   end
 
+  @doc "The columns a branch's `:dual_write` update does not write back."
+  @spec not_written_back(Legacy.t()) :: [atom()]
+  def not_written_back(%Legacy{write_rules: rules}),
+    do: for(%NotWrittenBack{attributes: attributes} <- rules, a <- attributes, do: a)
+
+  @doc "The columns a branch keeps in the extension table."
+  @spec extension_columns(Legacy.t()) :: [atom()]
+  def extension_columns(%Legacy{mappings: mappings}),
+    do: for(%Extension{attributes: attributes} <- mappings, a <- attributes, do: a)
+
+  @doc "The reason a branch refuses deletes at `:dual_write`, or `nil`."
+  @spec refuse_delete(Legacy.t()) :: String.t() | nil
+  def refuse_delete(%Legacy{write_rules: rules}),
+    do: Enum.find_value(rules, fn %RefuseDelete{because: b} -> b; _ -> nil end)
+
+  @doc "Whether the union renders its trigger functions `SECURITY DEFINER`."
+  @spec security_definer?(module() | Spark.Dsl.t()) :: boolean()
+  def security_definer?(union),
+    do: Spark.Dsl.Extension.get_opt(union, [:union], :security_definer, false)
+
+  @doc "The union's extension table, schema-qualified and quoted."
+  @spec extension_table(module() | Spark.Dsl.t()) :: String.t()
+  def extension_table(union), do: AshStrangler.Sql.Extension.relation_named(schema(union), "#{view(union)}")
+
+  @doc "Whether any live branch keeps columns in the extension table."
+  @spec extension?(module() | Spark.Dsl.t()) :: boolean()
+  def extension?(union), do: Enum.any?(live_branches(union), &(extension_columns(&1) != []))
+
   @doc "Whether a lens kind reads the branch's twin."
   @spec twin_derived?(kind() | :key) :: boolean()
   def twin_derived?(kind), do: kind in [:column, :expression, :key]
@@ -148,6 +187,9 @@ defmodule AshStrangler.Union.Info do
   defp put_kind(%TenantKey{attribute: attribute}, acc), do: Map.put(acc, attribute, :expression)
 
   defp put_kind(%Constant{attribute: attribute}, acc), do: Map.put(acc, attribute, :constant)
+
+  defp put_kind(%Extension{attributes: attributes}, acc),
+    do: Enum.reduce(attributes, acc, &Map.put(&2, &1, :extension))
 
   defp put_kind(%Unmapped{attributes: attributes}, acc),
     do: Enum.reduce(attributes, acc, &Map.put(&2, &1, :null))

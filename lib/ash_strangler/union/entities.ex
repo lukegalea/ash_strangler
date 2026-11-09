@@ -13,7 +13,7 @@ end
 
 defmodule AshStrangler.Union.Owned do
   @moduledoc "The owned branch: rows that exist only in the new system, in a table the union creates."
-  defstruct [:name, :table, :__spark_metadata__]
+  defstruct [:name, :table, :__spark_metadata__, write_rules: []]
   @type t :: %__MODULE__{}
 end
 
@@ -27,7 +27,8 @@ defmodule AshStrangler.Union.Legacy do
     :filter,
     :__spark_metadata__,
     keys: [],
-    mappings: []
+    mappings: [],
+    write_rules: []
   ]
 
   @type t :: %__MODULE__{}
@@ -62,4 +63,22 @@ defmodule AshStrangler.Union.TenantKey do
 
   @doc "The twin columns the key packs."
   def columns(%__MODULE__{from: from}), do: List.wrap(from)
+end
+
+defmodule AshStrangler.Union.NotWrittenBack do
+  @moduledoc "Columns a `:dual_write` update does not carry to the legacy table."
+  defstruct [:attributes, :because, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+end
+
+defmodule AshStrangler.Union.Extension do
+  @moduledoc "Columns a branch stores in the union's extension table instead of the legacy table."
+  defstruct [:attributes, :__spark_metadata__]
+  @type t :: %__MODULE__{}
+end
+
+defmodule AshStrangler.Union.RefuseDelete do
+  @moduledoc "A branch whose rows a `:dual_write` delete refuses to remove."
+  defstruct [:because, :__spark_metadata__]
+  @type t :: %__MODULE__{}
 end

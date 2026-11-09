@@ -222,4 +222,56 @@ defmodule AshStrangler.UnionVerifierTest do
                probe(valid(columns: columns, north: north, south: expr)).spark_dsl_config()
              )
   end
+
+  describe "write rules" do
+    test "not_written_back on an owned branch, on an unknown column, and in two writers" do
+      assert rejection(
+               valid(owned: ~S|owned :native do not_written_back [:notes], because: "x" end|)
+             ) =~ "owned branch takes no `not_written_back`"
+
+      assert rejection(
+               valid(south: inside(@south, ~S|not_written_back [:ghost], because: "x"|))
+             ) =~ "`not_written_back` names :ghost, which is not a declared column"
+
+      columns = @columns <> "column :alias, :string"
+      north = inside(@north, "unmapped [:alias], because: \"none\"")
+      shared = inside(@south, "map :alias, from: :name")
+
+      assert rejection(valid(columns: columns, north: north, south: shared)) =~
+               "are all mapped from :name"
+
+      assert :ok =
+               VerifyUnion.verify(
+                 probe(
+                   valid(
+                     columns: columns,
+                     north: north,
+                     south: inside(shared, ~S|not_written_back [:alias], because: "x"|)
+                   )
+                 ).spark_dsl_config()
+               )
+    end
+
+    test "an extension column is not also not_written_back, and refuse_delete is single" do
+      columns = @columns <> "column :tpl, :string"
+      north = inside(@north, "unmapped [:tpl], because: \"none\"")
+      south = inside(@south, "extension [:tpl]")
+
+      assert :ok =
+               VerifyUnion.verify(
+                 probe(valid(columns: columns, north: north, south: south)).spark_dsl_config()
+               )
+
+      assert rejection(
+               valid(
+                 columns: columns,
+                 north: north,
+                 south: inside(south, ~S|not_written_back [:tpl], because: "x"|)
+               )
+             ) =~ "stored in the extension table"
+
+      twice = inside(@south, ~S|refuse_delete because: "a"| <> "\nrefuse_delete because: \"b\"")
+      assert rejection(valid(south: twice)) =~ "at most one `refuse_delete`"
+    end
+  end
 end
