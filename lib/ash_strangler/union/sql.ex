@@ -219,7 +219,14 @@ defmodule AshStrangler.Union.Sql do
   end
 
   defp legacy_select(union, branch) do
-    frame = Printer.bare_frame(branch.twin)
+    extended? = Info.extension_columns(branch) != []
+
+    # A joined extension table has a key column of its own: qualify the twin's columns.
+    frame =
+      if extended?,
+        do: Printer.qualified_frame(branch.twin, "strangler_src"),
+        else: Printer.bare_frame(branch.twin)
+
     [key] = branch.keys
     key_sql = View.key_sql(key, Twin.relation(branch.twin), frame)
 
@@ -229,10 +236,10 @@ defmodule AshStrangler.Union.Sql do
       end)
 
     join =
-      if Info.extension_columns(branch) == [],
-        do: "",
-        else:
-          "\nLEFT JOIN #{Info.extension_table(union)} AS strangler_ext ON strangler_ext.#{q(Info.key(union))} = #{key_sql}"
+      if extended?,
+        do:
+          " AS strangler_src\nLEFT JOIN #{Info.extension_table(union)} AS strangler_ext ON strangler_ext.#{q(Info.key(union))} = #{key_sql}",
+        else: ""
 
     "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}#{tenant_parts(union, branch, frame)}\n" <>
       "FROM #{Twin.relation(branch.twin)}#{join}#{where(branch, frame)}"
