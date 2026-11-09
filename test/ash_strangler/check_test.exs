@@ -773,6 +773,18 @@ defmodule AshStrangler.CheckTest do
       assert output =~ ~r/\?\?\?\?.*  allow_nil\? false  id/
     end
 
+    test "a connection error on the whole projection is not retried per attribute" do
+      answer_as_a_running_repo(fn sql ->
+        if whole_projection?(sql), do: connection_lost(), else: rejected()
+      end)
+
+      {result, output} = check(@routed)
+
+      assert {:exit, {:shutdown, 1}} = result
+      assert length(Regex.scan(~r/database could not be reached/, output)) == 1
+      refute output =~ ~r/cast  (id|name|note)/
+    end
+
     test "a connection lost during the per-attribute retry is the database, not the attribute" do
       answer_as_a_running_repo(fn sql ->
         if whole_projection?(sql), do: rejected(), else: connection_lost()
