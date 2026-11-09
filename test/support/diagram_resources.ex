@@ -16,6 +16,7 @@ defmodule AshStrangler.DiagramTest.Domain do
   resources do
     resource AshStrangler.DiagramTest.Account
     resource AshStrangler.DiagramTest.Plain
+    resource AshStrangler.DiagramTest.Slim
   end
 end
 
@@ -201,6 +202,47 @@ defmodule AshStrangler.DiagramTest.Account do
       constant :tenant_id, expr(type("00000000-0000-0000-0000-0000000000fe", :uuid))
 
       unmapped([:created_by_id], as: :null, because: "No provenance for pre-migration rows.")
+    end
+  end
+end
+
+defmodule AshStrangler.DiagramTest.Slim do
+  @moduledoc """
+  A second resource over the same legacy table as `Account`, here for the report:
+  it declares `retired` columns, leaves another column unread, and is a different
+  phase, so an application with both has to say which is which.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.DiagramTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  postgres do
+    table "slim_accounts"
+    schema "drawn"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :login, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :dual_write
+
+    source AshStrangler.DiagramTest.Legacy.Accounts do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :login, from: :login
+
+      retired [:phone], because: "Nothing reads the phone number since the support rewrite."
     end
   end
 end
