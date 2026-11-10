@@ -96,13 +96,39 @@ defmodule AshStrangler.Sql.ReverseTriggers do
 
   ## `DELETE`
 
-  A `DELETE` through the view deletes the owned row, exactly as the dual-write
-  `INSTEAD OF DELETE` deletes the legacy row. Archival is honoured the way it is
-  there: `AshArchival` archives with an `UPDATE` of the archive attribute, the
-  attribute is mapped (`AshStrangler.Verifiers.VerifyArchival`), and that mapping
-  is a column of the reverse view, so an archive reads as the old application's
-  `deleted_at` and a legacy `UPDATE` of `deleted_at` archives. A legacy `DELETE`
-  is a request to delete, and is not rewritten into an archive.
+  What a legacy `DELETE` does depends on whether the resource archives.
+
+    * **A resource that uses `AshArchival` archives.** The old application asked for
+      the row to go, and in the Ash-owned table "go" means what it means to every
+      other caller of the resource: `AshArchival` turns a destroy into an `UPDATE` of
+      the archive attribute, so the `INSTEAD OF DELETE` stamps that attribute (the
+      same column, set to `now()`, where `AshArchival` sets `DateTime.utc_now/0`) and
+      keeps the row. A physical delete would destroy what the new application, its
+      audit trail and anything that un-archives it still need. `archive_column/1` is
+      the detection: `AshArchival.Resource` among the resource's extensions and at
+      least one destroy action not listed in `exclude_destroy_actions`.
+    * **A resource without archival deletes the owned row**, exactly as the
+      dual-write `INSTEAD OF DELETE` deletes the legacy row.
+
+  The archive attribute is mapped (`AshStrangler.Verifiers.VerifyArchival`), so it
+  is a column of the reverse view and the archive reads as the old application's
+  `deleted_at`. The view does **not** hide archived rows: it is the same projection
+  as the forward view, which does not hide them either, and a legacy `UPDATE` of
+  `deleted_at` (an un-delete) must still find the row. An application that
+  soft-deletes already filters on that column; one that physically deleted and never
+  looked at it will keep seeing the row. That is a documented limit.
+
+  `DELETE ... RETURNING` and the row count report one deleted row, as for a physical
+  delete: the function returns `OLD`. The archive touches only a row that is not
+  archived yet, so a second `DELETE` of an archived row is `DELETE 0` and does not
+  re-stamp it, as a `DELETE` of a row that is gone would be. A row the owned table
+  would not archive (a `BEFORE UPDATE` trigger that skips it) is also `DELETE 0`.
+  The ledger trigger on the owned table sees one `UPDATE`, which is what it records
+  for an archive, and nothing for a `DELETE`.
+
+  `AshArchival`'s `archive_related` cascade is an Ash action, not a column, and a
+  database trigger does not run it: a legacy `DELETE` archives the one row. Related
+  rows the resource would have archived are left as they are.
 
   ## An `UPDATE` assigns only what the statement changed
 
@@ -169,6 +195,45 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     end
   end
 
+  @doc """
+  The owned column a legacy `DELETE` stamps, as `{:ok, column}`, or `:error` when
+  the resource does not archive (see "`DELETE`" in the moduledoc).
+
+  A resource archives when `AshArchival.Resource` is among its extensions and at
+  least one destroy action is not in `exclude_destroy_actions`, which is when
+  `AshArchival` rewrites a destroy into an update of the archive attribute.
+  """
+  @spec archive_column(Ash.Resource.t()) :: {:ok, String.t()} | :error
+  def archive_column(resource) do
+    if archival?(resource) do
+      {:ok,
+       ReverseView.owned_column(resource, AshArchival.Resource.Info.archive_attribute!(resource))}
+    else
+      :error
+    end
+  end
+
+  defp archive_column_or_nil(resource) do
+    case archive_column(resource) do
+      {:ok, column} -> column
+      :error -> nil
+    end
+  end
+
+  # `AshArchival` is an optional dependency: a host without it never archives.
+  defp archival?(resource) do
+    if Code.ensure_loaded?(AshArchival.Resource) and
+         AshArchival.Resource in Spark.extensions(resource) do
+      excluded = AshArchival.Resource.Info.archive_exclude_destroy_actions!(resource)
+
+      resource
+      |> Ash.Resource.Info.actions()
+      |> Enum.any?(&(&1.type == :destroy and &1.name not in excluded))
+    else
+      false
+    end
+  end
+
   # A view column is a reference to one owned column. When two attributes read the
   # same legacy column, or a mapping reads the key's, a plain view would carry the
   # write to one of them and leave the other stale.
@@ -210,6 +275,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       view_key_column: ReverseView.legacy_column(twin, key.from),
       new_key: nw.(key.from),
       key_expression: View.key_expression(resource, key, fn {_path, from} -> nw.(from) end),
+      archive_column: archive_column_or_nil(resource),
       assignments: assignments(resource, twin, key, exposure),
       decode_guards: decode_guards(resource),
       retired: retired(resource, twin)
@@ -419,6 +485,31 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       SELECT * INTO NEW FROM #{ctx.view} WHERE #{ctx.view_key_column} = stored.#{ctx.stored_key_column};
 
       RETURN NEW;
+    END $strangler$ LANGUAGE plpgsql;
+    """
+  end
+
+  defp function_body(%{archive_column: archive_column} = ctx, :delete)
+       when not is_nil(archive_column) do
+    """
+    CREATE OR REPLACE FUNCTION #{function_name(ctx, :delete)}() RETURNS trigger AS $strangler$
+    BEGIN
+      -- The resource archives, so a destroy is an UPDATE of the archive attribute
+      -- (see "DELETE" in the moduledoc). Only a row that is not archived yet is
+      -- touched, so a second DELETE neither resurrects nor re-stamps it.
+      UPDATE #{ctx.owned} AS #{@target}
+      SET #{archive_column} = now()
+      WHERE #{ctx.stored_key_column} = OLD.#{ctx.view_key_column}
+        AND #{@target}.#{archive_column} IS NULL;
+
+      -- Nothing was archived by this statement: the row is gone, was archived
+      -- already, or the owned table declined the update. `DELETE 0` says so.
+      IF NOT FOUND THEN
+        RETURN NULL;
+      END IF;
+
+      -- OLD, not NULL: NULL would report zero rows for a row that was deleted.
+      RETURN OLD;
     END $strangler$ LANGUAGE plpgsql;
     """
   end

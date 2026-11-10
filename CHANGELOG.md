@@ -17,6 +17,16 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **A legacy `DELETE` at `:read_from_new` archives the row when the resource uses `AshArchival`:**
+  the reverse view's `INSTEAD OF DELETE` used to delete the owned row, which destroyed what the
+  new application and its audit trail still needed. For a resource with `AshArchival.Resource` and
+  a destroy action that archives, it now stamps the archive attribute (the column `AshArchival`'s
+  own destroy sets) with `now()` and keeps the row; `DELETE ... RETURNING` and the row count still
+  report one row. A second `DELETE` of an archived row is `DELETE 0` and does not re-stamp it. The
+  ledger records the archive once, as an update. A resource without archival still deletes the
+  owned row. The reverse view does not hide archived rows (the archive reads as the legacy
+  `deleted_at`, and an un-delete must find the row), and `archive_related` is not cascaded by the
+  trigger. New: `AshStrangler.Sql.ReverseTriggers.archive_column/1`.
 - **Regenerating a migration adds new owned columns and rebuilds changed views:** `CREATE TABLE IF
   NOT EXISTS` left an installed table untouched, so a column declared later never reached it and
   consumers hand-wrote `ALTER TABLE`. Every table the generator owns (a union's owned table, a

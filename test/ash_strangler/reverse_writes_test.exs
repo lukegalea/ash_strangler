@@ -555,6 +555,156 @@ defmodule AshStrangler.ReverseWritesTest do
     end
   end
 
+  describe "a legacy DELETE on a resource with archival" do
+    setup do
+      resource = gadget_resource(archival?: true, ledger?: true)
+      install!(resource)
+      for %{up: up} <- AshStrangler.Sql.Ledger.build(resource), do: TestRepo.query!(up, [])
+      insert_owned!(7, "Alpha", 0)
+      %{resource: resource}
+    end
+
+    defp ledger_operations do
+      TestRepo.query!(
+        "SELECT operation, count(*)::int FROM legacy_change_events WHERE source_table = 'rw_gadgets' GROUP BY operation ORDER BY operation",
+        []
+      )
+    end
+
+    defp owned_row do
+      %{rows: [[archived_at, title]]} =
+        TestRepo.query!(
+          "SELECT archived_at, ttl FROM strangler.rw_gadgets WHERE legacy_id = 7",
+          []
+        )
+
+      {archived_at, title}
+    end
+
+    test "archives the owned row instead of deleting it, and reports one row" do
+      assert %{num_rows: 1, rows: [[7, "active", "Alpha", nil, nil]]} =
+               TestRepo.query!(
+                 ~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7 RETURNING *|,
+                 []
+               )
+
+      assert {%DateTime{}, "Alpha"} = owned_row()
+    end
+
+    test "the archive is the one AshArchival's own destroy would make", %{resource: resource} do
+      assert {:ok, "archived_at"} = ReverseTriggers.archive_column(resource)
+      TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      # The same column AshArchival names, stamped with the clock like its set.
+      assert %{rows: [[true]]} =
+               TestRepo.query!(
+                 "SELECT archived_at BETWEEN now() - interval '1 minute' AND now() FROM strangler.rw_gadgets",
+                 []
+               )
+
+      # The old application reads the archive as its own `deleted_at`.
+      assert %{rows: [[%NaiveDateTime{}]]} =
+               TestRepo.query!("SELECT deleted_at FROM rw_legacy.gadgets", [])
+    end
+
+    test "a second DELETE of the archived row is DELETE 0 and does not re-stamp it" do
+      TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+      {first, _} = owned_row()
+
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert {^first, "Alpha"} = owned_row()
+    end
+
+    test "a row Ash already archived is left as it was" do
+      TestRepo.query!(
+        "UPDATE strangler.rw_gadgets SET archived_at = '2025-01-02 03:04:05Z'",
+        []
+      )
+
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert {~U[2025-01-02 03:04:05.000000Z], "Alpha"} = owned_row()
+    end
+
+    test "a row the owned table would not archive is not reported as deleted" do
+      TestRepo.query!(
+        """
+        CREATE FUNCTION strangler.rw_skip() RETURNS trigger AS $$ BEGIN RETURN NULL; END $$ LANGUAGE plpgsql
+        """,
+        []
+      )
+
+      TestRepo.query!(
+        "CREATE TRIGGER rw_skip BEFORE UPDATE ON strangler.rw_gadgets FOR EACH ROW EXECUTE FUNCTION strangler.rw_skip()",
+        []
+      )
+
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert {nil, "Alpha"} = owned_row()
+    end
+
+    test "a row that is not there is DELETE 0" do
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 99|, [])
+    end
+
+    test "the ledger records the archive once, as an update" do
+      TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      # The insert is the fixture's own; the DELETE added one update and no delete.
+      assert %{rows: [["insert", 1], ["update", 1]]} = ledger_operations()
+
+      # A second DELETE changes nothing, so the ledger hears nothing.
+      TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+      assert %{rows: [["insert", 1], ["update", 1]]} = ledger_operations()
+    end
+  end
+
+  describe "a legacy DELETE on a resource whose destroy actions all opt out of archival" do
+    test "is a physical delete" do
+      resource =
+        gadget_resource(
+          archival?: true,
+          archive: "archive do\n  exclude_destroy_actions [:destroy]\nend"
+        )
+
+      assert :error = ReverseTriggers.archive_column(resource)
+      install!(resource)
+      insert_owned!(7, "Alpha", 0)
+
+      assert %{num_rows: 1} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM strangler.rw_gadgets", [])
+    end
+  end
+
+  describe "a legacy DELETE on a resource without archival" do
+    test "still deletes the owned row, and the ledger records a delete" do
+      resource = gadget_resource(ledger?: true)
+      assert :error = ReverseTriggers.archive_column(resource)
+      install!(resource)
+      for %{up: up} <- AshStrangler.Sql.Ledger.build(resource), do: TestRepo.query!(up, [])
+      insert_owned!(7, "Alpha", 0)
+
+      assert %{num_rows: 1} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM strangler.rw_gadgets", [])
+
+      assert %{rows: [["delete", 1], ["insert", 1]]} =
+               TestRepo.query!(
+                 "SELECT operation, count(*)::int FROM legacy_change_events WHERE source_table = 'rw_gadgets' GROUP BY operation ORDER BY operation",
+                 []
+               )
+    end
+  end
+
   describe "a legacy UPDATE of one column" do
     test "leaves a stored value the legacy shape cannot express" do
       install!(gadget_resource())
@@ -797,6 +947,15 @@ defmodule AshStrangler.ReverseWritesTest do
       end
 
     ledger = if Keyword.get(opts, :ledger?, false), do: "notify? true\nledger? true", else: ""
+    archival? = Keyword.get(opts, :archival?, false)
+
+    extensions =
+      if archival?,
+        do: "AshStrangler.Resource, AshArchival.Resource",
+        else: "AshStrangler.Resource"
+
+    actions = if archival?, do: "actions do\n  defaults [:read, :destroy]\nend", else: ""
+    archive = Keyword.get(opts, :archive, "")
     table = Keyword.get(opts, :table, "rw_gadgets")
     title_source = Keyword.get(opts, :title_source, :ttl)
 
@@ -813,13 +972,17 @@ defmodule AshStrangler.ReverseWritesTest do
         domain: nil,
         validate_domain_inclusion?: false,
         data_layer: AshPostgres.DataLayer,
-        extensions: [AshStrangler.Resource]
+        extensions: [#{extensions}]
 
       postgres do
         table "#{table}"
         schema "strangler"
         repo AshStrangler.TestRepo
       end
+
+      #{actions}
+
+      #{archive}
 
       attributes do
         attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
