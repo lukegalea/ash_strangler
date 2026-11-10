@@ -9,6 +9,32 @@ defmodule AshStrangler.ReverseWritesTest.Legacy do
   resources do
     resource AshStrangler.ReverseWritesTest.Legacy.Gadgets
     resource AshStrangler.ReverseWritesTest.Legacy.Things
+    resource AshStrangler.ReverseWritesTest.Legacy.Trash
+  end
+end
+
+defmodule AshStrangler.ReverseWritesTest.Legacy.Trash do
+  @moduledoc "A twin whose every column is a plain rename, archive column included."
+  use Ash.Resource,
+    domain: AshStrangler.ReverseWritesTest.Legacy,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Twin]
+
+  postgres do
+    table "trash"
+    schema "rw_legacy"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false
+    attribute :title, :string
+    attribute :deleted_at, :utc_datetime_usec
+  end
+
+  actions do
+    defaults [:read]
   end
 end
 
@@ -108,6 +134,17 @@ defmodule AshStrangler.ReverseWritesTest do
         archived_at timestamptz,
         region text DEFAULT 'eu',
         "order" text
+      )
+      """,
+      []
+    )
+
+    TestRepo.query!(
+      """
+      CREATE TABLE strangler.rw_trash (
+        id uuid PRIMARY KEY,
+        title text,
+        archived_at timestamptz
       )
       """,
       []
@@ -665,6 +702,72 @@ defmodule AshStrangler.ReverseWritesTest do
     end
   end
 
+  describe "a legacy DELETE on a resource whose archive column is renamed" do
+    test "stamps the mixed-case, reserved-word owned column" do
+      TestRepo.query!("DROP TABLE strangler.rw_gadgets", [])
+
+      TestRepo.query!(
+        """
+        CREATE TABLE strangler.rw_gadgets (
+          id uuid PRIMARY KEY,
+          legacy_id bigint NOT NULL,
+          ttl text,
+          state_code integer,
+          "Order" timestamptz,
+          region text DEFAULT 'eu'
+        )
+        """,
+        []
+      )
+
+      resource =
+        gadget_resource(
+          archival?: true,
+          archive: "archive do\n  attribute :removed_on\nend",
+          archived_attribute:
+            ~s|attribute :removed_on, :utc_datetime_usec, public?: true, source: :"Order"|,
+          archived_name: :removed_on
+        )
+
+      assert {:ok, ~s|"Order"|} = ReverseTriggers.archive_column(resource)
+      install!(resource)
+      insert_owned!(7, "Alpha", 0)
+
+      assert %{num_rows: 1} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+
+      assert %{rows: [[%DateTime{}]]} =
+               TestRepo.query!(~s|SELECT "Order" FROM strangler.rw_gadgets|, [])
+
+      assert %{num_rows: 0} =
+               TestRepo.query!(~s|DELETE FROM rw_legacy.gadgets WHERE "GadgetId" = 7|, [])
+    end
+  end
+
+  describe "a legacy DELETE on an archival resource whose view would otherwise be a plain view" do
+    test "still archives, because the archive forces the trigger" do
+      resource = trash_resource()
+
+      assert ReverseTriggers.needed?(resource)
+      install!(resource)
+      id = Ash.UUID.generate()
+
+      TestRepo.query!("INSERT INTO strangler.rw_trash (id, title) VALUES ($1, 'x')", [
+        Ecto.UUID.dump!(id)
+      ])
+
+      assert %{num_rows: 1} =
+               TestRepo.query!("DELETE FROM rw_legacy.trash WHERE title = 'x'", [])
+
+      assert %{rows: [[%DateTime{}]]} =
+               TestRepo.query!("SELECT archived_at FROM strangler.rw_trash", [])
+    end
+
+    test "a plain view is kept when the resource does not archive" do
+      refute ReverseTriggers.needed?(trash_resource(archival?: false))
+    end
+  end
+
   describe "a legacy DELETE on a resource whose destroy actions all opt out of archival" do
     test "is a physical delete" do
       resource =
@@ -989,7 +1092,7 @@ defmodule AshStrangler.ReverseWritesTest do
         attribute :legacy_id, :integer, allow_nil?: false, public?: true
         attribute :title, :string, public?: true, source: :#{title_source}
         attribute :state_code, :integer, public?: true, constraints: [min: 0, max: 1]
-        attribute :archived_at, :utc_datetime_usec, public?: true
+        #{Keyword.get(opts, :archived_attribute, "attribute :archived_at, :utc_datetime_usec, public?: true")}
         attribute :region, :string, public?: true, default: "eu"
       end
 
@@ -1001,7 +1104,7 @@ defmodule AshStrangler.ReverseWritesTest do
           key :id, from: :id, strategy: {:uuid_v5, namespace: "#{@namespace}"}
 
           map :title, from: :display_name
-          map :archived_at, from: :deleted_at, zone: "UTC"
+          map #{inspect(Keyword.get(opts, :archived_name, :archived_at))}, from: :deleted_at, zone: "UTC"
           #{decode}
 
           unmapped [:legacy_id], as: :null, because: "Carried by the backfill, not projected."
@@ -1066,6 +1169,67 @@ defmodule AshStrangler.ReverseWritesTest do
           map :note, from: :note
           #{note_copy_map}
           #{unmapped}
+        end
+      end
+    end
+    """)
+  end
+
+  defp trash_resource(opts \\ []) do
+    key = {:trash_resource, opts}
+
+    case Process.get(key) do
+      nil ->
+        module = do_trash_resource(opts)
+        Process.put(key, module)
+        module
+
+      module ->
+        module
+    end
+  end
+
+  defp do_trash_resource(opts) do
+    name = Module.concat(__MODULE__, "Trash#{System.unique_integer([:positive])}")
+    archival? = Keyword.get(opts, :archival?, true)
+
+    extensions =
+      if archival?,
+        do: "AshStrangler.Resource, AshArchival.Resource",
+        else: "AshStrangler.Resource"
+
+    actions = if archival?, do: "actions do\n  defaults [:read, :destroy]\nend", else: ""
+
+    define!("""
+    defmodule #{name} do
+      use Ash.Resource,
+        domain: nil,
+        validate_domain_inclusion?: false,
+        data_layer: AshPostgres.DataLayer,
+        extensions: [#{extensions}]
+
+      postgres do
+        table "rw_trash"
+        schema "strangler"
+        repo AshStrangler.TestRepo
+      end
+
+      #{actions}
+
+      attributes do
+        attribute :id, :uuid, primary_key?: true, allow_nil?: false
+        attribute :title, :string, public?: true
+        attribute :archived_at, :utc_datetime_usec, public?: true
+      end
+
+      strangler do
+        phase :read_from_new
+
+        source AshStrangler.ReverseWritesTest.Legacy.Trash do
+          key :id, from: :id, strategy: :identity
+
+          map :title, from: :title
+          map :archived_at, from: :deleted_at
         end
       end
     end

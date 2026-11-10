@@ -373,6 +373,8 @@ either way. The archive touches only a row that is not archived yet, so a second
 `DELETE` of an archived row is `DELETE 0` and does not re-stamp it. The ledger trigger,
 which sits on the owned table, fires exactly once for each of these writes: an archive
 is recorded as the update it is, never as a delete.
+A resource that archives always gets these triggers, even where a plain view would carry
+every other write, because an auto-updatable view would delete the owned row.
 
 Two limits come with it. The reverse view does not hide archived rows, as the forward
 view does not: an application that soft-deletes already filters on `deleted_at`, and one

@@ -26,7 +26,9 @@ Requires Elixir 1.20 or later.
   ledger records the archive once, as an update. A resource without archival still deletes the
   owned row. The reverse view does not hide archived rows (the archive reads as the legacy
   `deleted_at`, and an un-delete must find the row), and `archive_related` is not cascaded by the
-  trigger. New: `AshStrangler.Sql.ReverseTriggers.archive_column/1`.
+  trigger. A resource that archives always gets the `INSTEAD OF` triggers, even where a plain
+  view would otherwise carry every write, because a plain view would delete the owned row. New:
+  `AshStrangler.Sql.ReverseTriggers.archive_column/1`.
 - **Regenerating a migration adds new owned columns and rebuilds changed views:** `CREATE TABLE IF
   NOT EXISTS` left an installed table untouched, so a column declared later never reached it and
   consumers hand-wrote `ALTER TABLE`. Every table the generator owns (a union's owned table, a

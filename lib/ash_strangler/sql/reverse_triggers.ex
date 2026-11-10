@@ -60,7 +60,9 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   no `legacy_id`, whose view exposes the owned key itself, with every other column a
   plain rename (`AshStrangler.Mechanism.classify/1` is `:plain`) of a legacy column
   nothing else reads. Then the view is auto-updatable, nothing is emitted, and
-  `ON CONFLICT` keeps working. `needed?/1` is that decision.
+  `ON CONFLICT` keeps working. `needed?/1` is that decision. A resource that archives
+  (see "`DELETE`" below) is never that shape: a plain view would delete the owned row
+  where the legacy `DELETE` must archive it, so it always gets the triggers.
 
   A `retired` column (`AshStrangler.Retired`) does not force the trigger by itself:
   it is a NULL constant, which only errors if something assigns to it. With the
@@ -73,8 +75,9 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   sees its own key and the values as it will read them.
 
   **Never `RETURN NULL` for a row that was written.** `INSERT 0 0` is the old
-  application's `StaleEntryError`. `RETURN NULL` appears in one place only, a
-  `DELETE` that found no row to delete, where `DELETE 0` is the truth.
+  application's `StaleEntryError`. `RETURN NULL` appears in the `DELETE` functions
+  only, when nothing was deleted (or, for an archive, archived), where `DELETE 0` is
+  the truth.
 
   **A write that cannot be carried raises.** Changing the key, assigning a retired
   column, a `decode`d value the table has no counterpart for, an `UPDATE` of a row
@@ -162,6 +165,12 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   """
   @spec needed?(Ash.Resource.t()) :: boolean()
   def needed?(resource) do
+    # A plain view would turn a legacy `DELETE` into a physical delete, which an
+    # archiving resource must not get (see "`DELETE`" in the moduledoc).
+    archive_column(resource) != :error or plain_view_cannot_carry_writes?(resource)
+  end
+
+  defp plain_view_cannot_carry_writes?(resource) do
     case ReverseView.key_exposure(resource) do
       {:legacy_id, _column} ->
         true
@@ -521,7 +530,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       DELETE FROM #{ctx.owned} WHERE #{ctx.stored_key_column} = OLD.#{ctx.view_key_column};
 
       -- A row that is already gone was not deleted by this statement, and
-      -- `DELETE 0` says so. This is the only place a generated trigger returns NULL.
+      -- `DELETE 0` says so. Only the DELETE functions return NULL.
       IF NOT FOUND THEN
         RETURN NULL;
       END IF;
