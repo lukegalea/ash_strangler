@@ -529,7 +529,14 @@ easier to design around than to discover.
 
 **`CREATE OR REPLACE VIEW` is append-only.** The replacement must produce the
 same columns, in the same order, with the same types; it may only *add* columns
-at the end. The expressions behind those columns can change completely. So
+at the end. The generated migration handles the column-list half of this for you:
+before each view it runs a statement that drops the view (plain `DROP VIEW`, no
+`CASCADE`) when the installed column names are not a prefix of the new ones, and the
+view's `INSTEAD OF` triggers that follow it are created again. A dependent view or
+function makes the migration fail instead of being dropped, and a grant on the view
+is lost with it. A column that changes *type* is not handled and still needs the
+written `DROP VIEW` below. `render_move/2` does not drop: it still refuses a changed
+column list. The expressions behind those columns can change completely. So
 changing a `decode` table, a `zone:`, or a `collapse` clause's guard is a cheap
 replace, while renaming an attribute, changing its type, dropping it, or
 reordering the attribute block is a `DROP VIEW` plus `CREATE VIEW` — a new OID,

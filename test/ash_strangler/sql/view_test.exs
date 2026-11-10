@@ -295,6 +295,8 @@ defmodule AshStrangler.Sql.ViewTest do
 
       assert names == [
                :strangler_strangler_schema,
+               # drops the view first only when its column list changed shape
+               :strangler_users_view_reshape,
                :strangler_users_view,
                :strangler_users_key_index,
                # the observation store: infrastructure every strangled resource
@@ -361,7 +363,9 @@ defmodule AshStrangler.Sql.ViewTest do
       # which rejects multiple commands with 42601. A statement carrying both a
       # CREATE FUNCTION and its CREATE TRIGGER fails at migrate time, so this
       # asserts the property rather than trusting it.
-      for statement <- AshStrangler.Migration.statements(UuidV5User) do
+      # A `DO` block is one command whatever its body holds.
+      for statement <- AshStrangler.Migration.statements(UuidV5User),
+          not String.starts_with?(statement.up, "DO $strangler$") do
         refute statement.up |> String.trim_trailing() |> String.trim_trailing(";") =~ ";",
                "#{statement.name} up carries more than one command:\n#{statement.up}"
       end

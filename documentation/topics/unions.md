@@ -146,7 +146,7 @@ Insert routing, jsonb write-back and writes of derived rows are not part of unio
 
 `AshStrangler.Migration.render_move/2` renders the migration for a union that is already installed:
 extension tables (`IF NOT EXISTS`), `CREATE OR REPLACE VIEW` and `CREATE OR REPLACE FUNCTION`, and
-no owned table and no trigger. It refuses a changed view column list (a rename, removal or
+`ADD COLUMN IF NOT EXISTS` for new extension columns, no owned table and no trigger. It refuses a changed view column list (a rename, removal or
 reorder); that needs the written `DROP VIEW` of `documentation/topics/phases.md`, "Changing a
 view's shape, in any phase". Appended columns pass.
 
@@ -174,7 +174,9 @@ A branch's phase is compiled into the trigger functions, so changing it is
   the first to finish and then fails with `unique_violation` (`23505`).
 - Regenerating the whole migration also replaces the view, which needs a lock on
   it and so waits for in-flight statements; apply only the function statements
-  when moving a branch between `:read_from_legacy` and `:dual_write`.
+  when moving a branch between `:read_from_legacy` and `:dual_write`. When the view's
+  column list changed shape the migration drops and re-creates the view and its
+  triggers, which blocks writers until it commits.
 
 ## What a host verifier can read
 

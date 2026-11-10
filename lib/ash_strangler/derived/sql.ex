@@ -32,8 +32,15 @@ defmodule AshStrangler.Derived.Sql do
     view = Info.view_name(derived)
     selects = Enum.map(Info.sources(derived), &select(derived, &1))
 
+    names = [Info.key(derived), "__source"] ++ Enum.map(Info.columns(derived), & &1.name)
+
     schema ++
       [
+        AshStrangler.Sql.Additive.reshape_view(
+          :"strangler_#{Info.view(derived)}_view",
+          view,
+          names
+        ),
         %{
           name: :"strangler_#{Info.view(derived)}_view",
           up:

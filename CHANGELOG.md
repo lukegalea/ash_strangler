@@ -17,6 +17,23 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **Regenerating a migration adds new owned columns and rebuilds changed views:** `CREATE TABLE IF
+  NOT EXISTS` left an installed table untouched, so a column declared later never reached it and
+  consumers hand-wrote `ALTER TABLE`. Every table the generator owns (a union's owned table, a
+  union's and a resource's extension table) is now followed by `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS` for each declared column. A `null?: false` column with no default is refused with a
+  clear message while the table holds rows (add it nullable, backfill, set `NOT NULL`); rolling
+  back never drops an added column. A view whose installed column names are not a prefix of the new
+  list (a column inserted mid-list, renamed, removed or reordered) used to fail with
+  `CREATE OR REPLACE VIEW`; a statement ahead of it now drops the view with a plain `DROP VIEW`
+  (no `CASCADE`, so a dependent object fails loudly) and the view and its `INSTEAD OF` triggers are
+  created again. An unchanged or appended view is replaced in place and keeps its grants. A column
+  whose type changed is still refused by PostgreSQL. `render_move/2` adds new extension columns
+  and still refuses a changed column list. New statements:
+  `<name>_add_columns`, `<name>_add_columns_guard` and `<view>_reshape`.
+- **`mix ash_strangler.gen.migration --only A,B`** renders the migration for the named resources,
+  unions or deriveds only; an unknown name is an error.
+
 - **A union `:dual_write` update assigns only the columns it changed:** the trigger's `NEW` and `OLD` are
   both the view scan, so a column the statement left alone carried a value that could predate a
   concurrent commit to the legacy row, and assigning it back reverted that commit. Each legacy column is

@@ -91,7 +91,7 @@ defmodule AshStrangler.Sql.Extension do
       |> Enum.flat_map(& &1.attributes)
       |> Enum.map(fn attribute ->
         attr = Map.fetch!(attributes, attribute)
-        ~s("#{attribute}" #{Printer.pg_type!(attr.type)})
+        {attribute, ~s("#{attribute}" #{Printer.pg_type!(attr.type)})}
       end)
 
     # A `{:extension, :column}` state adds its column implicitly, typed by the
@@ -104,10 +104,11 @@ defmodule AshStrangler.Sql.Extension do
       |> Enum.uniq()
       |> Enum.map(fn column ->
         attr = Map.fetch!(attributes, collapse_attribute(source, column))
-        ~s("#{column}" #{Printer.pg_type!(attr.type)})
+        {column, ~s("#{column}" #{Printer.pg_type!(attr.type)})}
       end)
 
-    columns = declared ++ implicit
+    named = declared ++ implicit
+    columns = Enum.map(named, &elem(&1, 1))
 
     up = """
     CREATE TABLE IF NOT EXISTS #{relation(resource_or_dsl)} (
@@ -115,12 +116,21 @@ defmodule AshStrangler.Sql.Extension do
     )
     """
 
+    # `CREATE TABLE IF NOT EXISTS` leaves an installed table alone, so every column is also added
+    # with `ADD COLUMN IF NOT EXISTS`: an extension attribute declared later reaches the table.
     [
       %{
         name: table_statement_name(resource_or_dsl),
         up: up,
         down: "DROP TABLE IF EXISTS #{relation(resource_or_dsl)};"
       }
+      | AshStrangler.Sql.Additive.add_columns(
+          table_statement_name(resource_or_dsl),
+          relation(resource_or_dsl),
+          Enum.map(named, fn {name, definition} ->
+            %{name: to_string(name), definition: definition, not_null_no_default?: false}
+          end)
+        )
     ]
   end
 

@@ -157,6 +157,77 @@ defmodule AshStrangler.ReverseViewTest do
     end
   end
 
+  describe "regenerating the reverse view" do
+    defp reverse_columns(relation) do
+      for [name] <-
+            TestRepo.query!(
+              """
+              SELECT attname FROM pg_attribute
+              WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+              """,
+              [relation]
+            ).rows,
+          do: name
+    end
+
+    defp reverse_triggers(relation) do
+      for [name] <-
+            TestRepo.query!(
+              "SELECT tgname FROM pg_trigger WHERE tgrelid = to_regclass($1) AND NOT tgisinternal ORDER BY 1",
+              [relation]
+            ).rows,
+          do: name
+    end
+
+    defp reverse_oid(relation),
+      do: TestRepo.query!("SELECT to_regclass($1)::oid::bigint", [relation]).rows |> hd() |> hd()
+
+    defp reverse_ups(resource),
+      do: for(%{up: up} <- AshStrangler.Migration.statements(resource), do: up)
+
+    test "a no-op keeps the view, a changed shape rebuilds it with its triggers, and down removes it" do
+      resource = reverse_resource()
+      Enum.each(reverse_ups(resource), &TestRepo.query!(&1, []))
+
+      columns = reverse_columns("reverse_legacy.widgets")
+      triggers = reverse_triggers("reverse_legacy.widgets")
+      assert columns == ["id", "name", "deleted_at", "status"]
+      assert length(triggers) == 3
+      before = reverse_oid("reverse_legacy.widgets")
+
+      Enum.each(reverse_ups(resource), &TestRepo.query!(&1, []))
+      assert reverse_oid("reverse_legacy.widgets") == before
+
+      # The installed view lacks a mid-list column, as an older twin declaration left it.
+      TestRepo.query!(
+        "CREATE TABLE reverse_legacy.widgets__stale AS SELECT id, name, status FROM reverse_legacy.widgets WITH NO DATA",
+        []
+      )
+
+      TestRepo.query!("DROP VIEW reverse_legacy.widgets", [])
+
+      TestRepo.query!(
+        "CREATE VIEW reverse_legacy.widgets AS SELECT id, name, status FROM reverse_legacy.widgets__stale",
+        []
+      )
+
+      stale = reverse_oid("reverse_legacy.widgets")
+
+      Enum.each(reverse_ups(resource), &TestRepo.query!(&1, []))
+
+      assert reverse_columns("reverse_legacy.widgets") == columns
+      assert reverse_triggers("reverse_legacy.widgets") == triggers
+      refute reverse_oid("reverse_legacy.widgets") == stale
+
+      resource
+      |> AshStrangler.Migration.statements()
+      |> Enum.reverse()
+      |> Enum.each(&TestRepo.query!(&1.down, []))
+
+      assert reverse_oid("reverse_legacy.widgets") == nil
+    end
+  end
+
   describe "notify triggers in :read_from_new" do
     test "are not emitted, because the relation is a view by then" do
       # Regression. `Sql.Notify` attaches an `AFTER ... FOR EACH ROW` trigger to
@@ -170,6 +241,7 @@ defmodule AshStrangler.ReverseViewTest do
       names = resource |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
       assert names == [
+               :strangler_widgets_reverse_view_reshape,
                :strangler_widgets_reverse_view,
                :strangler_widgets_reverse_insert_function,
                :strangler_widgets_reverse_insert_trigger,

@@ -239,7 +239,8 @@ defmodule AshStrangler.ReverseWritesTest do
     test "the migration lists them right after the view" do
       names = gadget_resource() |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
-      assert Enum.take(names, 3) == [
+      assert Enum.take(names, 4) == [
+               :strangler_rw_gadgets_reverse_view_reshape,
                :strangler_rw_gadgets_reverse_view,
                :strangler_rw_gadgets_reverse_insert_function,
                :strangler_rw_gadgets_reverse_insert_trigger
