@@ -68,7 +68,7 @@ answer is exactly this:
 |---|---|
 | `:read_from_legacy` | the compatibility view; the key expression index (for `{:uuid_v5, …}` keys); the notify function and trigger if `notify? true` |
 | `:dual_write` | all of the above, plus `INSTEAD OF` insert/update/delete function-and-trigger pairs **when some column needs them** |
-| `:read_from_new` | the reverse view; the `INSTEAD OF` insert/update/delete pairs that carry the old application's writes into the owned table, **unless** a plain auto-updatable view already carries them; the ledger trigger on the owned table if `ledger? true` |
+| `:read_from_new` | the reverse view; the `INSTEAD OF` insert/update/delete pairs that carry the old application's writes into the owned table, **unless** a plain auto-updatable view already carries them (a resource that archives still gets the `DELETE` pair); the ledger trigger on the owned table if `ledger? true` |
 | `:decommissioned` | nothing |
 
 Every generated statement is idempotent (`CREATE OR REPLACE`,
@@ -346,7 +346,8 @@ is PostgreSQL's:
 
 The one shape that needs none of these is an `:identity` key on a resource with no
 `legacy_id` and plain renames of otherwise unshared columns: then the view is
-auto-updatable and nothing is emitted. `ReverseTriggers.needed?/1` is that decision.
+auto-updatable and nothing is emitted, unless the resource archives, which adds the
+`INSTEAD OF DELETE` trigger alone (below). `ReverseTriggers.needed?/1` is that decision.
 
 The three traps of the dual-write triggers are honoured. `RETURNING` reports the
 stored row, re-read through the view, so the old application sees its own key. A
@@ -373,8 +374,10 @@ either way. The archive touches only a row that is not archived yet, so a second
 `DELETE` of an archived row is `DELETE 0` and does not re-stamp it. The ledger trigger,
 which sits on the owned table, fires exactly once for each of these writes: an archive
 is recorded as the update it is, never as a delete.
-A resource that archives always gets these triggers, even where a plain view would carry
-every other write, because an auto-updatable view would delete the owned row.
+A resource that archives always gets the `INSTEAD OF DELETE` trigger, because an
+auto-updatable view would delete the owned row. Where the view is otherwise plain, that
+is the only trigger emitted, so the `INSERT` and `UPDATE` stay automatic and `ON CONFLICT`
+keeps working.
 
 Two limits come with it. The reverse view does not hide archived rows, as the forward
 view does not: an application that soft-deletes already filters on `deleted_at`, and one

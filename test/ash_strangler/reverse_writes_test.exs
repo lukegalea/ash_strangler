@@ -763,6 +763,34 @@ defmodule AshStrangler.ReverseWritesTest do
                TestRepo.query!("SELECT archived_at FROM strangler.rw_trash", [])
     end
 
+    test "only the DELETE is intercepted, so ON CONFLICT and the plain INSERT and UPDATE survive" do
+      resource = trash_resource()
+
+      assert Enum.map(ReverseTriggers.build(resource), & &1.name) == [
+               :strangler_rw_trash_reverse_delete_function,
+               :strangler_rw_trash_reverse_delete_trigger
+             ]
+
+      install!(resource)
+      id = Ash.UUID.generate()
+
+      for title <- ["first", "second"] do
+        TestRepo.query!(
+          """
+          INSERT INTO rw_legacy.trash (id, title) VALUES ($1, $2)
+          ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title
+          """,
+          [Ecto.UUID.dump!(id), title]
+        )
+      end
+
+      assert %{rows: [["second"]]} = TestRepo.query!("SELECT title FROM strangler.rw_trash", [])
+      assert %{num_rows: 1} = TestRepo.query!("DELETE FROM rw_legacy.trash", [])
+
+      assert %{rows: [[%DateTime{}]]} =
+               TestRepo.query!("SELECT archived_at FROM strangler.rw_trash", [])
+    end
+
     test "a plain view is kept when the resource does not archive" do
       refute ReverseTriggers.needed?(trash_resource(archival?: false))
     end

@@ -62,7 +62,9 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   nothing else reads. Then the view is auto-updatable, nothing is emitted, and
   `ON CONFLICT` keeps working. `needed?/1` is that decision. A resource that archives
   (see "`DELETE`" below) is never that shape: a plain view would delete the owned row
-  where the legacy `DELETE` must archive it, so it always gets the triggers.
+  where the legacy `DELETE` must archive it. When the view is otherwise plain, such a
+  resource gets the `DELETE` trigger alone: PostgreSQL decides updatability per
+  command, so the `INSERT` and `UPDATE` stay automatic and `ON CONFLICT` keeps working.
 
   A `retired` column (`AshStrangler.Retired`) does not force the trigger by itself:
   it is a NULL constant, which only errors if something assigns to it. With the
@@ -183,9 +185,20 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     end
   end
 
+  # An archiving resource whose view is otherwise plain gets the `DELETE` trigger
+  # alone. PostgreSQL decides a view's updatability per command, so the `INSERT` and
+  # `UPDATE` stay automatic and `INSERT ... ON CONFLICT` keeps working, which any
+  # `INSTEAD OF INSERT` or `UPDATE` trigger on the view would reject.
+  defp operations(resource) do
+    if plain_view_cannot_carry_writes?(resource),
+      do: [:insert, :update, :delete],
+      else: [:delete]
+  end
+
   @doc """
   The `INSTEAD OF` insert/update/delete statements for `resource`, or `[]` outside
-  `:read_from_new` and where a plain view carries every write.
+  `:read_from_new` and where a plain view carries every write. A plain view of a
+  resource that archives gets the `DELETE` statements alone.
 
   `%{name:, up:, down:}`, function then trigger for each operation.
   """
@@ -196,7 +209,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
          true <- needed?(resource) do
       ctx = context(resource)
 
-      Enum.flat_map([:insert, :update, :delete], fn operation ->
+      Enum.flat_map(operations(resource), fn operation ->
         [function_statement(ctx, operation), trigger_statement(ctx, operation)]
       end)
     else
