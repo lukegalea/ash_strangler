@@ -12,6 +12,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
       mix ash_strangler.gen.migration
       mix ash_strangler.gen.migration --name add_user_compatibility_view
       mix ash_strangler.gen.migration --dry-run
+      mix ash_strangler.gen.migration --only MyApp.Visits,MyApp.Accounts.User
 
   ## Why this is not `mix ash.codegen`
 
@@ -34,11 +35,26 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
   change leaves the unchanged parts as they were. A hand-edited migration is
   invisible to this task and will be contradicted by the next one.
 
-  A change of *shape* is not safe to run that way. `CREATE OR REPLACE VIEW` may
-  only add columns at the end; renaming, retyping, dropping or reordering a view
-  column is refused by PostgreSQL when the migration runs, and needs a written
-  `DROP VIEW` and `CREATE VIEW`. See "Changing a view's shape, in any phase" in
-  the [phases guide](phases.md).
+  Regenerating after a **column was added** is additive too:
+
+    * Every table the generator owns (a union's owned table, a union's or a
+      resource's extension table) is followed by `ALTER TABLE ... ADD COLUMN IF
+      NOT EXISTS` for each declared column, so a column declared after the table
+      was created reaches it. A column declared `null?: false`, which has no
+      default, cannot be added to a table that already holds rows: a guard
+      statement refuses that with a message saying to add it nullable, backfill
+      it and set `NOT NULL`. Rolling back never drops an added column, as it
+      never drops rows.
+    * A view whose column names are the installed ones plus new ones at the end
+      is replaced in place, as before. A view whose columns changed shape (one
+      inserted mid-list, renamed, removed or reordered) is dropped with a plain
+      `DROP VIEW` and created again, and the `INSTEAD OF` triggers that follow
+      it in the migration are re-created. There is no `CASCADE`: a view or
+      function that depends on it makes the migration fail instead of being
+      dropped. A grant on a dropped view is lost with it; re-grant after
+      migrating. A column whose *type* changed is still refused by PostgreSQL.
+
+  See "Changing a view's shape, in any phase" in the [phases guide](phases.md).
 
   ## Options
 
@@ -46,11 +62,14 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
     * `--repo` — the repo whose `priv/` directory receives the file. Defaults to
       the first configured `ecto_repos` entry.
     * `--dry-run` — print the migration instead of writing it.
+    * `--only` — comma-separated module names; render only those resources,
+      unions or deriveds, for a reviewable migration of one mapping. An unknown
+      name is an error.
   """
 
   use Mix.Task
 
-  @switches [name: :string, repo: :string, dry_run: :boolean]
+  @switches [name: :string, repo: :string, dry_run: :boolean, only: :string]
 
   @impl Mix.Task
   def run(argv) do
@@ -58,7 +77,14 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
 
     Mix.Task.run("compile")
 
-    resources = AshStrangler.Migration.resources()
+    resources =
+      case opts[:only] do
+        nil ->
+          AshStrangler.Migration.resources()
+
+        only ->
+          AshStrangler.Migration.only(AshStrangler.Migration.resources(), String.split(only, ","))
+      end
 
     if resources == [] do
       Mix.shell().info("No strangler-mapped resources found. Nothing to generate.")

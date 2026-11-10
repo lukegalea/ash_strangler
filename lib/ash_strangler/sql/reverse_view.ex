@@ -118,6 +118,33 @@ defmodule AshStrangler.Sql.ReverseView do
     ]
   end
 
+  @doc """
+  The statement that drops the reverse view ahead of `build/1` when the twin's
+  column list changed in a way `CREATE OR REPLACE VIEW` refuses (see
+  `AshStrangler.Sql.Additive.reshape_view/3`). `[]` outside `:read_from_new`.
+  """
+  def reshape(resource) do
+    with true <- Info.strangled?(resource),
+         :read_from_new <- Info.strangler_phase!(resource) do
+      names = for {_expr, name} <- reverse_columns!(resource), do: unquote_identifier(name)
+
+      [
+        AshStrangler.Sql.Additive.reshape_view(
+          :"strangler_#{AshPostgres.DataLayer.Info.table(resource)}_reverse_view",
+          Info.relation(resource),
+          names
+        )
+      ]
+    else
+      _ -> []
+    end
+  end
+
+  defp unquote_identifier(~s(") <> _ = quoted),
+    do: quoted |> String.slice(1..-2//1) |> String.replace(~s(""), ~s("))
+
+  defp unquote_identifier(bare), do: bare
+
   @doc false
   # The owned table, schema-qualified and quoted.
   def owned_relation(resource) do

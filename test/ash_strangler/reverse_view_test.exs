@@ -170,6 +170,7 @@ defmodule AshStrangler.ReverseViewTest do
       names = resource |> AshStrangler.Migration.statements() |> Enum.map(& &1.name)
 
       assert names == [
+               :strangler_widgets_reverse_view_reshape,
                :strangler_widgets_reverse_view,
                :strangler_widgets_reverse_insert_function,
                :strangler_widgets_reverse_insert_trigger,

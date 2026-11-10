@@ -281,7 +281,12 @@ incomplete backfill produces missing rows, not an error.
     view DDL then fails against it. But `migrate? false` also stops the resource
     producing a snapshot, and `custom_statements` are only read from snapshots — so
     there is no configuration in which codegen can carry this. Never hand-edit a
-    generated migration; edit the mapping and regenerate.
+    generated migration; edit the mapping and regenerate. Regenerating is
+    additive: a column declared later is added to each owned table with `ADD
+    COLUMN IF NOT EXISTS` (a `null?: false` column with no default is refused
+    while the table holds rows), and a view whose column list changed shape is
+    dropped without `CASCADE` and re-created with its triggers. Use `--only
+    Mod.A,Mod.B` to render one mapping's migration.
 
 15. **Never compute a modern id by querying for it.** Use
     `AshStrangler.KeyDerivation.derive/3` (or `uuid_v5/2` + `name/2`), which is a

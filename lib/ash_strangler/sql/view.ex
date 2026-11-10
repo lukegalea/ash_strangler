@@ -108,6 +108,12 @@ defmodule AshStrangler.Sql.View do
 
     %{
       view: view_statement(table, schema, resource_or_dsl, columns),
+      reshape:
+        AshStrangler.Sql.Additive.reshape_view(
+          :"strangler_#{table}_view",
+          ~s("#{schema}"."#{table}"),
+          Enum.map(columns, fn {_expr, attribute} -> attribute end)
+        ),
       key_index: key_index_statement(table, resource_or_dsl, key)
     }
   end

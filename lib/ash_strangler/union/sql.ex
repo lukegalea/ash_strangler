@@ -22,7 +22,7 @@ defmodule AshStrangler.Union.Sql do
   `AshStrangler.Error.BranchWriteRefused`.
   """
 
-  alias AshStrangler.Sql.{Extension, Printer, View}
+  alias AshStrangler.Sql.{Additive, Extension, Printer, View}
   alias AshStrangler.Twin
   alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
   alias AshStrangler.Union.Extension, as: ExtensionEntry
@@ -43,9 +43,11 @@ defmodule AshStrangler.Union.Sql do
 
     schema ++
       [owned_table(union)] ++
+      owned_columns(union) ++
       extension_table(union) ++
+      extension_columns(union) ++
       Enum.flat_map(Info.live_branches(union), &key_index(union, &1)) ++
-      [view_statement(union)] ++
+      [reshape(union), view_statement(union)] ++
       Enum.flat_map([:insert, :update, :delete], &[function(union, &1), trigger(union, &1)])
   end
 
@@ -60,6 +62,7 @@ defmodule AshStrangler.Union.Sql do
         ]
   def move_statements(union) do
     extension_table(union) ++
+      extension_columns(union) ++
       [view_guard(union), view_statement(union)] ++
       Enum.map([:insert, :update, :delete], &function(union, &1))
   end
@@ -69,11 +72,7 @@ defmodule AshStrangler.Union.Sql do
   defp view_guard(union) do
     view = Info.view_name(union)
 
-    names =
-      [Info.key(union), "__branch"] ++
-        Enum.map(Info.columns(union), & &1.name) ++ Info.tenant_part_columns(union)
-
-    expected = Enum.map_join(names, ", ", &Printer.literal(to_string(&1)))
+    expected = Enum.map_join(view_columns(union), ", ", &Printer.literal(to_string(&1)))
 
     message =
       "the column list of #{view} changed: renaming, removing or reordering a view column needs a written " <>
@@ -102,7 +101,61 @@ defmodule AshStrangler.Union.Sql do
     }
   end
 
+  # The view's column names, in view order.
+  defp view_columns(union),
+    do:
+      [Info.key(union), "__branch"] ++
+        Enum.map(Info.columns(union), & &1.name) ++ Info.tenant_part_columns(union)
+
+  defp reshape(union),
+    do:
+      Additive.reshape_view(
+        :"strangler_#{Info.view(union)}_view",
+        Info.view_name(union),
+        view_columns(union)
+      )
+
   # --- tables, indexes, view ----------------------------------------------------
+
+  # `ADD COLUMN IF NOT EXISTS` for every declared column, so a column declared after the table was
+  # created reaches it.
+  defp owned_columns(union) do
+    Additive.add_columns(
+      :"strangler_#{Info.view(union)}_owned_table",
+      Info.owned_table(union),
+      Enum.map(Info.columns(union), fn c ->
+        %{
+          name: to_string(c.name),
+          definition: "#{q(c.name)} #{pg(c)}#{if c.null?, do: "", else: " NOT NULL"}",
+          not_null_no_default?: not c.null?
+        }
+      end)
+    )
+  end
+
+  defp extension_columns(union) do
+    if Info.extension?(union) do
+      Additive.add_columns(
+        :"strangler_#{Info.view(union)}_extension_table",
+        Info.extension_table(union),
+        union
+        |> Info.live_branches()
+        |> Enum.flat_map(&Info.extension_columns/1)
+        |> Enum.uniq()
+        |> Enum.map(fn name ->
+          column = Enum.find(Info.columns(union), &(&1.name == name))
+
+          %{
+            name: to_string(name),
+            definition: Extension.column_definition(name, column.type),
+            not_null_no_default?: false
+          }
+        end)
+      )
+    else
+      []
+    end
+  end
 
   defp owned_table(union) do
     table = Info.owned_table(union)

@@ -629,10 +629,15 @@ the manual part.
 
 Re-running a generated statement that has not changed is safe — `CREATE OR
 REPLACE`, `CREATE INDEX IF NOT EXISTS` — so the workflow after changing a mapping
-is to regenerate and run the new migration, never to hand-edit the old one. A
-change to the view's shape (a rename, retype, drop or reorder) is the exception:
-PostgreSQL refuses it when the migration runs, and it needs a written `DROP VIEW`
-and `CREATE VIEW`. See [Changing a view's shape](phases.md#changing-a-view-s-shape-in-any-phase).
+is to regenerate and run the new migration, never to hand-edit the old one.
+Regenerating after declaring a column is additive: each owned table (a union's
+owned table, an extension table) is followed by `ADD COLUMN IF NOT EXISTS`, and a
+view whose column list changed shape (a column inserted mid-list, a rename, a drop
+or a reorder) is dropped without `CASCADE` and created again, with its triggers.
+A dependent view or function makes the migration fail rather than be dropped. A
+column whose *type* changed is still refused by PostgreSQL and needs a written
+`DROP VIEW` and `CREATE VIEW`. See
+[Changing a view's shape](phases.md#changing-a-view-s-shape-in-any-phase).
 
 ## Next
 

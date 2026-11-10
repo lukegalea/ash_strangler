@@ -81,12 +81,13 @@ defmodule AshStrangler.Migration do
           # is empty where a plain auto-updatable view already carries them. They
           # come right after the view they are attached to, so `down` (reversed)
           # drops them first.
-          Sql.ReverseView.build(resource) ++
+          Sql.ReverseView.reshape(resource) ++
+            Sql.ReverseView.build(resource) ++
             Sql.ReverseTriggers.build(resource) ++
             Sql.Ledger.build(resource) ++ Observation.Store.statements()
 
         phase ->
-          %{view: view, key_index: key_index} = Sql.View.build(resource)
+          %{view: view, reshape: reshape, key_index: key_index} = Sql.View.build(resource)
           triggers = if phase == :dual_write, do: Sql.Triggers.build(resource), else: []
 
           # The schema comes first, because everything after it is declared
@@ -107,7 +108,7 @@ defmodule AshStrangler.Migration do
           # "One trigger, not two".
           (Enum.reject([Sql.View.schema_statement(resource)], &is_nil/1) ++
              List.flatten(Sql.Extension.build(resource)) ++
-             Enum.reject([view, key_index], &is_nil/1)) ++
+             Enum.reject([reshape, view, key_index], &is_nil/1)) ++
             triggers ++
             Sql.Ledger.build(resource) ++
             Sql.Notify.build(resource) ++
@@ -131,6 +132,27 @@ defmodule AshStrangler.Migration do
     |> Enum.concat(Application.get_env(:ash_strangler, :unions, []))
     |> Enum.concat(Application.get_env(:ash_strangler, :deriveds, []))
     |> Enum.uniq()
+  end
+
+  @doc """
+  The members of `resources` named in `names`, a list of module names (`"MyApp.Visits"` or
+  `"Elixir.MyApp.Visits"`), in the order of `resources`. Raises `ArgumentError` naming every
+  entry that is not one of `resources`, so a typo cannot silently render nothing.
+  """
+  @spec only([module()], [String.t()]) :: [module()]
+  def only(resources, names) do
+    wanted = Enum.map(names, &String.replace_prefix(String.trim(&1), "Elixir.", ""))
+    known = Map.new(resources, &{inspect(&1), &1})
+
+    case Enum.reject(wanted, &Map.has_key?(known, &1)) do
+      [] ->
+        Enum.filter(resources, &(inspect(&1) in wanted))
+
+      unknown ->
+        raise ArgumentError,
+              "not a strangler-mapped resource, union or derived: #{Enum.join(unknown, ", ")}. " <>
+                "Known: #{known |> Map.keys() |> Enum.sort() |> Enum.join(", ")}"
+    end
   end
 
   defp watched?(resource),
@@ -167,10 +189,12 @@ defmodule AshStrangler.Migration do
       Covers: #{Enum.map_join(resources, ", ", &inspect/1)}
 
       Regenerate rather than hand-editing. Re-running statements that have not
-      changed is safe (`CREATE OR REPLACE`, `IF NOT EXISTS`). A change of shape --
-      renaming, retyping, dropping or reordering a view column -- is refused when
-      the migration runs and needs a written `DROP VIEW` and `CREATE VIEW`; see
-      documentation/topics/phases.md, "Changing a view's shape, in any phase".
+      changed is safe (`CREATE OR REPLACE`, `IF NOT EXISTS`), and so is regenerating
+      after a column was declared: owned tables gain it with `ADD COLUMN IF NOT
+      EXISTS`, and a view whose column list changed shape is dropped (never
+      `CASCADE`) and created again with its triggers. A column whose type changed
+      is still refused by PostgreSQL; see documentation/topics/phases.md,
+      "Changing a view's shape, in any phase".
       \"\"\"
 
       use Ecto.Migration
