@@ -162,6 +162,48 @@ private ones, because a `SELECT` list has no notion of privacy.
 
 ---
 
+## A `source:` on the resource's own attribute
+
+**`VerifyOwnSourceNames`**
+
+The generated view names every column after its attribute: `... AS heading`. Ash reads
+and writes that view by the attribute's `source:` when it has one, so a resource that
+says `attribute :heading, :string, source: :heading_col` compiles, installs its view,
+and fails the first query it runs:
+
+```
+ERROR 42703 (undefined_column) column i0.heading_col does not exist
+
+    query: SELECT i0."id", i0."heading_col" FROM "srcown"."items_view" AS i0
+```
+
+That is the failure this check moves to compile time. It covers every column the view
+emits: the key, the mapped and `unmapped` attributes, the extension attributes and the
+tenant.
+
+```
+An attribute of MyApp.Item carries a `source:`, which the strangler view cannot honour:
+
+  * :heading has `source: :heading_col`
+
+In phase :read_from_legacy this resource reads and writes a view, and the view names every
+column after its attribute (`... AS heading`). Ash would ask for the column
+by `source:` instead, so the first query fails at runtime with
+`column ... does not exist`.
+```
+
+There are two ways out. Rename the attribute to the name the view should carry, or put
+the legacy column's name on the **twin**, which does support `source:` (it is how a
+legacy column such as `effectiveDate` is spelled), and map the resource's attribute
+`from:` it.
+
+The refusal ends where the view does. From `:read_from_new` the resource owns a real
+table, `source:` names that table's columns, and the reverse view spells them that way,
+so it is accepted there and in `:decommissioned`. An attribute whose `source:` is its own
+name is not a rename and is accepted.
+
+---
+
 ## Building the view on a resource Ash would try to create
 
 **`VerifyNotMigrated`**

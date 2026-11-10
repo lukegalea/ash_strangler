@@ -248,7 +248,9 @@ measures them against the legacy database and writes JSON in the
 `ash_strangler.obligations/1` format. `--no-data` skips the queries. The task
 exits 1 when an obligation fails or can't be measured, or when the estate has a
 problem. That is `--strict`'s behaviour already, so `--strict` changes nothing
-here.
+here, with one exception: `--strict` together with `--no-data` is refused at
+startup, with `--estate` as without it, because one says to fail on anything that
+was not measured and the other says to measure nothing.
 
 | Key | Meaning |
 |---|---|

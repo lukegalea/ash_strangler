@@ -269,7 +269,7 @@ defmodule AshStrangler.Sql.View do
   # must still read — through `COALESCE`, as its declared default.
   def from_clause(resource_or_dsl) do
     twin = Info.twin(resource_or_dsl)
-    relation = Twin.relation(twin)
+    relation = Twin.sql_relation(twin)
 
     base =
       case Info.joins(resource_or_dsl) do
@@ -278,7 +278,7 @@ defmodule AshStrangler.Sql.View do
 
         joins ->
           Enum.reduce(joins, "#{relation} AS #{Twin.table!(twin)}", fn join, acc ->
-            "#{acc}\n  LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
+            "#{acc}\n  LEFT JOIN #{join.sql_relation} AS #{join.alias} ON #{join.on}"
           end)
       end
 
@@ -354,8 +354,8 @@ defmodule AshStrangler.Sql.View do
   defp key_index_statement(table, resource_or_dsl, %Key{strategy: strategy} = key)
        when is_tuple(strategy) and elem(strategy, 0) in [:uuid_v5, :uuid_v8] do
     name = "strangler_#{table}_key_idx"
-    relation = Info.relation(resource_or_dsl)
     twin = Info.twin(resource_or_dsl)
+    relation = Twin.sql_relation(twin)
 
     # Built from `key_expression/3` rather than restated. The index only serves a
     # lookup if its expression matches the view's *exactly* -- a difference as
@@ -367,20 +367,19 @@ defmodule AshStrangler.Sql.View do
       (#{key_expression(resource_or_dsl, key, Printer.bare_frame(twin))});
     """
 
-    down = "DROP INDEX IF EXISTS #{qualify_index(relation, name)};"
+    down = "DROP INDEX IF EXISTS #{qualify_index(twin, name)};"
 
     %{name: :"strangler_#{table}_key_index", up: up, down: down}
   end
 
-  # Schema-qualifies the index by borrowing the schema prefix off the source
-  # relation: down statements must schema-qualify themselves too, same as up. A
-  # relation with no schema prefix leaves the index unqualified, relying on
-  # search_path for the drop -- exactly as much as a twin with no `schema` already
-  # does.
-  defp qualify_index(relation, name) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, _table] -> "#{schema}.#{name}"
-      [_table] -> name
+  # Schema-qualifies the index with the twin's schema: down statements must
+  # schema-qualify themselves too, same as up. A twin with no schema leaves the
+  # index unqualified, relying on search_path for the drop -- exactly as much as a
+  # twin with no `schema` already does.
+  defp qualify_index(twin, name) do
+    case AshPostgres.DataLayer.Info.schema(twin) do
+      nil -> name
+      schema -> "#{Printer.identifier(schema)}.#{name}"
     end
   end
 end

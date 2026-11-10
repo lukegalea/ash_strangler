@@ -374,6 +374,7 @@ defmodule AshStrangler.JoinTest do
 
       assert Enum.find(joins, &(&1.alias == "address")) == %{
                relation: "joined_legacy.addresses",
+               sql_relation: "joined_legacy.addresses",
                alias: "address",
                on: "address.account_id = accounts.id",
                relationship: Ash.Resource.Info.relationship(Legacy.Accounts, :address)

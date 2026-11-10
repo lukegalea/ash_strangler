@@ -426,7 +426,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
         # filter, where it is visible as one.
         "\n  joins      " <>
           Enum.map_join(joins, @continued, fn join ->
-            "LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
+            "LEFT JOIN #{join.sql_relation} AS #{join.alias} ON #{join.on}"
           end)
     end
   end
@@ -1015,8 +1015,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   defp measure_fan_out(repo, resource) do
     relation = Info.relation(resource)
+    from = Twin.sql_relation(Info.twin(resource))
 
-    with {:ok, %{rows: [[base]]}} <- query(repo, "SELECT count(*) FROM #{relation}"),
+    with {:ok, %{rows: [[base]]}} <- query(repo, "SELECT count(*) FROM #{from}"),
          {:ok, %{rows: [[joined]]}} <-
            query(repo, "SELECT count(*) FROM #{View.from_clause(resource)}") do
       compare_fan_out(relation, base, joined)

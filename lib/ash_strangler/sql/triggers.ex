@@ -65,7 +65,7 @@ defmodule AshStrangler.Sql.Triggers do
   and `OLD.` side is the view's own column, named for the resource attribute.
   """
 
-  alias AshStrangler.{Info, Lens, Sql}
+  alias AshStrangler.{Info, Lens, Sql, Twin}
   alias AshStrangler.Sql.Printer
 
   # Captured at compile time because a guard cannot call a remote function. There is
@@ -123,7 +123,7 @@ defmodule AshStrangler.Sql.Triggers do
       table: table,
       schema: schema,
       view: view,
-      relation: Info.relation(resource_or_dsl),
+      relation: Twin.sql_relation(twin),
       legacy_key: legacy_key,
       key: key,
       on_update: Info.on_update(resource_or_dsl),
@@ -589,9 +589,27 @@ defmodule AshStrangler.Sql.Triggers do
   end
 
   defp function_name(ctx, operation),
-    do: ~s("#{ctx.schema}"."strangler_#{ctx.table}_#{operation}")
+    do: ~s("#{ctx.schema}"."#{object_name(ctx, operation)}")
 
-  defp trigger_name(ctx, operation), do: ~s("strangler_#{ctx.table}_#{operation}")
+  defp trigger_name(ctx, operation), do: ~s("#{object_name(ctx, operation)}")
+
+  # PostgreSQL truncates an identifier to 63 bytes without complaint, and the
+  # operation is the end of this name: for a long table the three functions, and the
+  # three triggers, would be one object, each `CREATE OR REPLACE` replacing the last.
+  # A name that overflows is a table prefix and a hash of the whole table name, the
+  # rule `AshStrangler.Sql.ReverseTriggers` applies. A name that fits is unchanged.
+  defp object_name(ctx, operation) do
+    name = "strangler_#{ctx.table}_#{operation}"
+
+    if byte_size(name) <= 63 do
+      name
+    else
+      hash =
+        :sha256 |> :crypto.hash(ctx.table) |> Base.encode16(case: :lower) |> binary_part(0, 8)
+
+      "strangler_#{String.slice(ctx.table, 0, 25)}_#{hash}_#{operation}"
+    end
+  end
 
   # `because:` is user-supplied prose and routinely contains apostrophes -- the
   # DSL's own documentation example is "'de la Cruz' splits wrong". Rendered by the

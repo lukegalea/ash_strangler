@@ -326,12 +326,13 @@ and the legacy key is stored as `legacy_id`. An attribute with no legacy source 
 columns whose legacy source the statement changed, so a stored value the legacy shape
 cannot express survives an update of some other column.
 
-A trigger cannot tell a column the statement left out from one it set to `NULL`, so
-an `INSERT` that leaves out a mapped column stores `NULL` for it: the legacy table's
-`DEFAULT` is gone with the table, and the owned column's default is not consulted.
-If the old application relies on a column default, put it on the view in the cutover
-migration (`ALTER VIEW users ALTER COLUMN status SET DEFAULT 'pending'`), and
-PostgreSQL fills it in before the trigger runs.
+**A documented limit:** a trigger cannot tell a column the statement left out from one
+it set to `NULL`, so an `INSERT` that leaves out a mapped column stores `NULL` for it
+rather than the legacy default: the legacy table's `DEFAULT` is gone with the table,
+and the owned column's default is not consulted. If the old application relies on a
+column default, put it on the view in the cutover migration
+(`ALTER VIEW users ALTER COLUMN status SET DEFAULT 'pending'`), and PostgreSQL fills it
+in before the trigger runs.
 
 **They are emitted only when a plain view cannot carry the write**, because a
 trigger costs the old application `ON CONFLICT` and `WITH CHECK OPTION`. The rule
