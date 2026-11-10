@@ -1015,8 +1015,9 @@ defmodule Mix.Tasks.AshStrangler.Check do
 
   defp measure_fan_out(repo, resource) do
     relation = Info.relation(resource)
+    from = Twin.sql_relation(Info.twin(resource))
 
-    with {:ok, %{rows: [[base]]}} <- query(repo, "SELECT count(*) FROM #{relation}"),
+    with {:ok, %{rows: [[base]]}} <- query(repo, "SELECT count(*) FROM #{from}"),
          {:ok, %{rows: [[joined]]}} <-
            query(repo, "SELECT count(*) FROM #{View.from_clause(resource)}") do
       compare_fan_out(relation, base, joined)

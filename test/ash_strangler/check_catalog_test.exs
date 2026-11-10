@@ -1102,19 +1102,31 @@ defmodule AshStrangler.CheckCatalogTest do
       assert output =~ "declares unique set(s) Postgres does not enforce"
     end
 
-    # Only the catalog reads are asked about: the task's other queries spell the
-    # relation unquoted, as every statement `Twin.relation/1` feeds does.
-    test "a relation whose name is mixed-case is read by name" do
+    # Every statement the task runs names the relation: the catalog reads by
+    # schema and name, and the null, cast and column-type queries select from the
+    # view's `FROM` clause. A mixed-case name has to be quoted in all of them, so
+    # the whole report is asserted, not only the twin lines.
+    test "a relation whose name is mixed-case is measured end to end" do
       TestRepo.query!(
         ~s|CREATE TABLE legacy."Mixed_Items" (id bigint PRIMARY KEY, name text)|,
         []
       )
 
-      {_result, output} = check([], @mixed_domain)
+      TestRepo.query!(~s|INSERT INTO legacy."Mixed_Items" VALUES (1, 'one')|, [])
 
-      assert output =~ ~r/ok.*twin freshness/
-      refute output =~ ~r/\?\?\?\?.*twin identities/
+      {result, output} = check([], @mixed_domain)
+
+      refute match?({:exit, _}, result)
+      refute output =~ "FAIL"
+      refute output =~ "????"
+      refute output =~ "does not exist"
+
+      assert output =~ ~r/ok.*allow_nil\? false  id\n\s+no legacy row projects NULL/
+      assert output =~ ~r/ok.*casts\n\s+every mapping projects over all 2 column\(s\)/
+      assert output =~ ~r/ok.*column types\n\s+2 projection\(s\) yield the type/
+      assert output =~ ~r/ok.*twin freshness\n\s+2 column\(s\), all present/
       assert output =~ ~r/ok.*twin identities\n\s+1 set\(s\), each backed by a unique index/
+      assert output =~ ~r/ok.*twin columns\n\s+2 column\(s\) match/
     end
 
     test "a mixed-case relation that was dropped is a plain FAIL, with nothing unmeasured beside it" do

@@ -255,6 +255,26 @@ defmodule AshStrangler.Twin do
     end
   end
 
+  @doc """
+  The twin's relation as SQL spells it: each part through the printer's identifier
+  rule, so `legacy."Mixed_Items"`.
+
+  `relation/1` is the relation's logical name -- what a report prints and what a
+  derived key hashes -- and stays as it is. Every statement that *names* the
+  relation (a `FROM`, an `INSERT INTO`, a `CREATE INDEX ... ON`) spells it here,
+  because PostgreSQL folds an unquoted `Mixed_Items` to `mixed_items`. A lowercase
+  name stays bare, so the SQL for the common case is unchanged.
+  """
+  @spec sql_relation(Ash.Resource.t()) :: String.t()
+  def sql_relation(twin) do
+    table = twin |> table!() |> AshStrangler.Sql.Printer.identifier()
+
+    case AshPostgres.DataLayer.Info.schema(twin) do
+      nil -> table
+      schema -> "#{AshStrangler.Sql.Printer.identifier(schema)}.#{table}"
+    end
+  end
+
   @doc "The twin's bare table name, which is also the default alias for it."
   @spec table!(Ash.Resource.t()) :: String.t()
   def table!(twin) do
@@ -327,7 +347,7 @@ defmodule AshStrangler.Twin do
 
   Returns `{:ok, [join]}` where each join is
   `%{relation:, alias:, on:, relationship:}` in the order they must appear in the
-  `FROM` clause, or `{:error, message}` when a step of the path is not a
+  `FROM` clause (`relation:` and the columns in `on:` are spelled for SQL), or `{:error, message}` when a step of the path is not a
   relationship on the twin.
 
   Only `belongs_to` and `has_one` are resolvable. A `has_many` or `many_to_many`
@@ -364,11 +384,11 @@ defmodule AshStrangler.Twin do
           step_alias = to_string(step)
 
           join = %{
-            relation: relation(destination),
+            relation: sql_relation(destination),
             alias: step_alias,
             on:
-              "#{step_alias}.#{column!(destination, relationship.destination_attribute)} = " <>
-                "#{alias}.#{column!(current, relationship.source_attribute)}",
+              "#{step_alias}.#{AshStrangler.Sql.Printer.column(destination, relationship.destination_attribute)} = " <>
+                "#{alias}.#{AshStrangler.Sql.Printer.column(current, relationship.source_attribute)}",
             relationship: relationship
           }
 

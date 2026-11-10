@@ -15,6 +15,40 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Requires Elixir 1.20 or later.
 
+### Bug fixes
+
+- **A `source:` on a strangled resource's own attribute is refused at compile time**
+  (`VerifyOwnSourceNames`). The view names each column after the attribute while Ash reads and
+  writes it by `source:`, so the first query failed at runtime with `column ... does not exist`.
+  The error names each attribute and offers two ways out: rename the attribute, or put the legacy
+  name on the twin, which does support `source:`. It applies while a view stands in for the table;
+  from `:read_from_new` the resource owns its table and `source:` is accepted. A resource that
+  carried one needs it removed.
+- **A mixed-case legacy relation is quoted wherever the view, the triggers and `mix
+  ash_strangler.check` name it.** `legacy."Mixed_Items"` was printed `legacy.Mixed_Items`, which
+  PostgreSQL folds to `mixed_items`: the view, the key index and its drop, the `INSTEAD OF`
+  triggers, a joined relation and the check task's null, cast, column-type and fan-out queries all
+  failed. `Twin.sql_relation/1` spells the relation through the printer's identifier rule, and a
+  lowercase name stays bare, so the SQL for every existing relation is unchanged. `Twin.relation/1`
+  is still the logical name that a report prints and a derived key hashes. A join's `on:` columns
+  go through the same rule. Other modules that name a relation in SQL (the backfill, the
+  reconciler, the reverse view, unions and derived views) still print it unquoted.
+- **The trigger and function names of a long view no longer collapse into one.** PostgreSQL cuts an
+  identifier to 63 bytes. `strangler_<table>_insert`, `_update` and `_delete` overflow from a table
+  name of 47 bytes, and from 53 the cut removes the operation altogether: the three were one object,
+  each `CREATE OR REPLACE` replaced the last, and a write the view could not carry by itself was
+  refused. A name that overflows is now a table prefix and a hash of the table, the rule
+  `:read_from_new`'s triggers already followed. A name that fits is unchanged. A view table of 47 to
+  52 bytes had three working but truncated names; regenerating renames them, so drop the old
+  truncated triggers and functions (`\df+ strangler_*`) when you apply it.
+
+### Documentation
+
+- `estates.md` says `--strict` with `--no-data` is refused for `--estate` too.
+- `phases.md` calls out that a legacy `INSERT` at `:read_from_new` which leaves out a mapped column
+  stores `NULL` rather than the legacy default, a documented limit, with the workaround (a default
+  on the view in the cutover migration).
+
 ### Features
 
 - **A legacy `DELETE` at `:read_from_new` archives the row when the resource uses `AshArchival`:**
