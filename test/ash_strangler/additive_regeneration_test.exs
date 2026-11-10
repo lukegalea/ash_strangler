@@ -12,7 +12,8 @@ defmodule AshStrangler.AdditiveRegenerationTest do
 
   use AshStrangler.DataCase, async: false
 
-  alias AshStrangler.Test.ExtendedUser
+  alias AshStrangler.Test.ClinicDerived.Staff
+  alias AshStrangler.Test.{DualWriteUser, ExtendedUser, LegacyUser}
 
   defp q!(sql, params \\ []), do: TestRepo.query!(sql, params, mode: :savepoint).rows
 
@@ -206,6 +207,149 @@ defmodule AshStrangler.AdditiveRegenerationTest do
 
       assert_raise ArgumentError, ~r/Nope/, fn ->
         AshStrangler.Migration.only([v1, v2], ["Nope"])
+      end
+    end
+  end
+
+  describe "every view kind, against the database" do
+    # One row per generator that hands `reshape_view/3` a name list: the resource view (read from
+    # legacy, dual write with triggers, with an extension table) and the derived view.
+    @kinds [
+      {"a read_from_legacy resource view", LegacyUser, "strangler.users"},
+      {"a dual_write resource view with INSTEAD OF triggers", DualWriteUser,
+       "strangler.dual_users"},
+      {"a dual_write resource view over an extension table", ExtendedUser,
+       "strangler.extended_users"},
+      {"a derived view", Staff, "clinic_derived.staff"}
+    ]
+
+    defp view_columns(relation),
+      do:
+        for(
+          [name] <-
+            q!(
+              """
+              SELECT attname FROM pg_attribute
+              WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped
+              ORDER BY attnum
+              """,
+              [relation]
+            ),
+          do: name
+        )
+
+    defp trigger_names(relation),
+      do:
+        for(
+          [name] <-
+            q!(
+              "SELECT tgname FROM pg_trigger WHERE tgrelid = to_regclass($1) AND NOT tgisinternal ORDER BY 1",
+              [relation]
+            ),
+          do: name
+        )
+
+    # Replaces the installed view with one that lacks `omit`, as an older declaration would have
+    # left it: the installed names are then not a prefix of the new list. Its triggers go with it.
+    defp install_stale_shape!(relation, omit) do
+      [schema, view] = String.split(relation, ".")
+      kept = relation |> view_columns() |> List.delete(omit)
+      list = Enum.map_join(kept, ", ", &~s("#{&1}"))
+
+      # Typed like the real view, so the stand-in is a view over a table that shares nothing with it.
+      q!("CREATE TABLE #{schema}.#{view}__stale AS SELECT #{list} FROM #{relation} WITH NO DATA")
+      q!("DROP VIEW #{relation}")
+      q!("CREATE VIEW #{relation} AS SELECT #{list} FROM #{schema}.#{view}__stale")
+    end
+
+    for {label, module, relation} <- @kinds do
+      test "#{label}: a no-op regeneration keeps the view, a missing mid-list column rebuilds it" do
+        module = unquote(module)
+        relation = unquote(relation)
+
+        Enum.each(ups(module), &q!/1)
+        columns = view_columns(relation)
+        triggers = trigger_names(relation)
+        before = oid(relation)
+
+        # The name list handed to the reshape matches the real view: nothing is dropped.
+        Enum.each(ups(module), &q!/1)
+        assert oid(relation) == before
+        assert view_columns(relation) == columns
+
+        # The installed view is missing a column in the middle of the list.
+        omit = Enum.at(columns, div(length(columns), 2))
+        install_stale_shape!(relation, omit)
+        refute omit in view_columns(relation)
+        stale = oid(relation)
+
+        Enum.each(ups(module), &q!/1)
+
+        assert view_columns(relation) == columns
+        assert trigger_names(relation) == triggers
+        refute oid(relation) == stale
+      end
+    end
+
+    test "a rebuilt dual_write view has its three INSTEAD OF triggers again" do
+      Enum.each(ups(DualWriteUser), &q!/1)
+      columns = view_columns("strangler.dual_users")
+      install_stale_shape!("strangler.dual_users", Enum.at(columns, 2))
+      Enum.each(ups(DualWriteUser), &q!/1)
+
+      names = trigger_names("strangler.dual_users")
+
+      for op <- ~w(insert update delete),
+          do:
+            assert(
+              Enum.any?(names, &String.contains?(&1, op)),
+              "no #{op} trigger in #{inspect(names)}"
+            )
+    end
+
+    test "an extension table that lacks a declared column gains it" do
+      Enum.each(ups(ExtendedUser), &q!/1)
+      table = "strangler.extended_users_extension"
+      assert "notes" in table_columns(table)
+
+      # The view reads the column, so it goes first, as the older install never had either.
+      q!("DROP VIEW strangler.extended_users")
+      q!("ALTER TABLE #{table} DROP COLUMN notes")
+      refute "notes" in table_columns(table)
+
+      Enum.each(ups(ExtendedUser), &q!/1)
+
+      assert "notes" in table_columns(table)
+      assert "risk_score" in table_columns(table)
+      assert "notes" in view_columns("strangler.extended_users")
+    end
+
+    defp table_columns(table),
+      do:
+        for(
+          [name] <-
+            q!(
+              """
+              SELECT attname FROM pg_attribute
+              WHERE attrelid = to_regclass($1) AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+              """,
+              [table]
+            ),
+          do: name
+        )
+
+    test "the down statements run in reverse order and leave no view behind" do
+      for {module, relation} <- [
+            {DualWriteUser, "strangler.dual_users"},
+            {ExtendedUser, "strangler.extended_users"},
+            {Staff, "clinic_derived.staff"}
+          ] do
+        statements = AshStrangler.Migration.statements(module)
+        Enum.each(statements, &q!(&1.up))
+        assert oid(relation)
+
+        statements |> Enum.reverse() |> Enum.each(&q!(&1.down))
+        assert oid(relation) == nil
       end
     end
   end
