@@ -68,7 +68,7 @@ answer is exactly this:
 |---|---|
 | `:read_from_legacy` | the compatibility view; the key expression index (for `{:uuid_v5, …}` keys); the notify function and trigger if `notify? true` |
 | `:dual_write` | all of the above, plus `INSTEAD OF` insert/update/delete function-and-trigger pairs **when some column needs them** |
-| `:read_from_new` | the reverse view; the `INSTEAD OF` insert/update/delete pairs that carry the old application's writes into the owned table, **unless** a plain auto-updatable view already carries them; the ledger trigger on the owned table if `ledger? true` |
+| `:read_from_new` | the reverse view; the `INSTEAD OF` insert/update/delete pairs that carry the old application's writes into the owned table, **unless** a plain auto-updatable view already carries them (a resource that archives still gets the `DELETE` pair); the ledger trigger on the owned table if `ledger? true` |
 | `:decommissioned` | nothing |
 
 Every generated statement is idempotent (`CREATE OR REPLACE`,
@@ -346,7 +346,8 @@ is PostgreSQL's:
 
 The one shape that needs none of these is an `:identity` key on a resource with no
 `legacy_id` and plain renames of otherwise unshared columns: then the view is
-auto-updatable and nothing is emitted. `ReverseTriggers.needed?/1` is that decision.
+auto-updatable and nothing is emitted, unless the resource archives, which adds the
+`INSTEAD OF DELETE` trigger alone (below). `ReverseTriggers.needed?/1` is that decision.
 
 The three traps of the dual-write triggers are honoured. `RETURNING` reports the
 stored row, re-read through the view, so the old application sees its own key. A
@@ -361,13 +362,28 @@ continues the legacy table's allocator after cutover; carrying that sequence's
 current value across is part of the cutover migration you write. Otherwise, and for
 an `:identity` key, which the host mints, it raises. It never stores a NULL key.
 
-A `DELETE` deletes the owned row, as the dual-write `INSTEAD OF DELETE` deletes the
-legacy row. Archival is honoured the way it is there: `AshArchival` archives with an
-`UPDATE` of the archive attribute, which `VerifyArchival` requires to be mapped, so
-the archive reads as the old application's `deleted_at` and a legacy `UPDATE` of
-`deleted_at` archives. A legacy `DELETE` is a request to delete and is not rewritten
-into an archive. The ledger trigger, which sits on the owned table, fires exactly
-once for each of these writes.
+A `DELETE` on a resource that uses `AshArchival` **archives** the owned row instead of
+deleting it. `AshArchival` turns a destroy into an `UPDATE` of the archive attribute, so
+the `INSTEAD OF DELETE` stamps that same column with `now()` and keeps the row; the
+archive attribute is mapped (`VerifyArchival` requires it), so the old application reads
+it as its own `deleted_at`, and a legacy `UPDATE` of `deleted_at` still un-archives. A
+resource without archival, or whose destroy actions all list themselves in
+`exclude_destroy_actions`, deletes the owned row, as the dual-write `INSTEAD OF DELETE`
+deletes the legacy row. `DELETE ... RETURNING` and the row count report one deleted row
+either way. The archive touches only a row that is not archived yet, so a second
+`DELETE` of an archived row is `DELETE 0` and does not re-stamp it. The ledger trigger,
+which sits on the owned table, fires exactly once for each of these writes: an archive
+is recorded as the update it is, never as a delete.
+A resource that archives always gets the `INSTEAD OF DELETE` trigger, because an
+auto-updatable view would delete the owned row. Where the view is otherwise plain, that
+is the only trigger emitted, so the `INSERT` and `UPDATE` stay automatic and `ON CONFLICT`
+keeps working.
+
+Two limits come with it. The reverse view does not hide archived rows, as the forward
+view does not: an application that soft-deletes already filters on `deleted_at`, and one
+that physically deleted and never read that column will keep seeing the row. And
+`AshArchival`'s `archive_related` cascade is an Ash action that a trigger does not run,
+so a legacy `DELETE` archives the one row.
 
 Because it projects *backwards*, this view can only be built from mappings whose
 reverse exists. **`AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase

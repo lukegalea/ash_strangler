@@ -64,7 +64,9 @@ defmodule AshStrangler.Sql.ReverseView do
   This module is the read half. The write half, the `INSTEAD OF` triggers that
   carry the old application's `INSERT`, `UPDATE` and `DELETE` into the owned table,
   is `AshStrangler.Sql.ReverseTriggers`, emitted wherever a plain auto-updatable
-  view cannot carry the write.
+  view cannot carry the write. A `DELETE` archives the owned row when the resource
+  uses `AshArchival`, so the archive attribute is a column of this view (it reads as
+  the legacy archive column) and the view does not hide archived rows.
 
   ## What this does NOT emit, deliberately
 
