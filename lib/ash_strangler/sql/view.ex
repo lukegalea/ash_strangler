@@ -278,7 +278,7 @@ defmodule AshStrangler.Sql.View do
 
         joins ->
           Enum.reduce(joins, "#{relation} AS #{Twin.table!(twin)}", fn join, acc ->
-            "#{acc}\n  LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
+            "#{acc}\n  LEFT JOIN #{join.sql_relation} AS #{join.alias} ON #{join.on}"
           end)
       end
 

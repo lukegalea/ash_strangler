@@ -346,9 +346,11 @@ defmodule AshStrangler.Twin do
   Resolves a relationship path into the joins needed to reach it.
 
   Returns `{:ok, [join]}` where each join is
-  `%{relation:, alias:, on:, relationship:}` in the order they must appear in the
-  `FROM` clause (`relation:` and the columns in `on:` are spelled for SQL), or `{:error, message}` when a step of the path is not a
-  relationship on the twin.
+  `%{relation:, sql_relation:, alias:, on:, relationship:}` in the order they must
+  appear in the `FROM` clause, or `{:error, message}` when a step of the path is not a
+  relationship on the twin. `relation:` is the logical name (`relation/1`, what lineage
+  and a report name the relation by); `sql_relation:` and the columns in `on:` are
+  spelled for SQL.
 
   Only `belongs_to` and `has_one` are resolvable. A `has_many` or `many_to_many`
   would multiply rows — one legacy account with three addresses becoming three
@@ -358,7 +360,15 @@ defmodule AshStrangler.Twin do
   """
   @spec joins_for(Ash.Resource.t(), [atom()]) ::
           {:ok,
-           [%{relation: String.t(), alias: String.t(), on: String.t(), relationship: term()}]}
+           [
+             %{
+               relation: String.t(),
+               sql_relation: String.t(),
+               alias: String.t(),
+               on: String.t(),
+               relationship: term()
+             }
+           ]}
           | {:error, String.t()}
   def joins_for(twin, path) do
     path
@@ -384,7 +394,8 @@ defmodule AshStrangler.Twin do
           step_alias = to_string(step)
 
           join = %{
-            relation: sql_relation(destination),
+            relation: relation(destination),
+            sql_relation: sql_relation(destination),
             alias: step_alias,
             on:
               "#{step_alias}.#{AshStrangler.Sql.Printer.column(destination, relationship.destination_attribute)} = " <>

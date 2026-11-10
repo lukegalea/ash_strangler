@@ -253,6 +253,69 @@ defmodule AshStrangler.TriggerNamesTest do
     assert %{rows: [[0]]} = TestRepo.query!("SELECT count(*) FROM trgnames.items", [])
   end
 
+  test "two long tables that share their first 25 bytes keep their own names" do
+    id = System.unique_integer([:positive])
+    prefix = String.duplicate("g", 55)
+
+    modules =
+      for suffix <- ["a", "b"] do
+        name = "AshStrangler.TriggerNamesTest.Twin#{id}#{suffix}"
+
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          Code.eval_string("""
+          defmodule #{name} do
+            use Ash.Resource,
+              domain: nil,
+              validate_domain_inclusion?: false,
+              data_layer: AshPostgres.DataLayer,
+              extensions: [AshStrangler.Resource]
+
+            postgres do
+              table "#{prefix}#{suffix}"
+              schema "trgnames"
+              repo AshStrangler.TestRepo
+              migrate? false
+            end
+
+            attributes do
+              attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+              attribute :full_name, :string, public?: true
+            end
+
+            actions do
+              defaults [:read]
+            end
+
+            strangler do
+              phase :dual_write
+
+              source AshStrangler.TriggerNamesTest.Items do
+                writes :triggers
+                key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+                concat :full_name, from: [:first_name, :last_name], separator: " "
+              end
+            end
+          end
+          """)
+        end)
+
+        Module.concat([name])
+      end
+
+    names =
+      for module <- modules,
+          statement <- Migration.statements(module),
+          [function] <-
+            Regex.scan(~r/CREATE OR REPLACE FUNCTION (\S+)\(\)/, statement.up,
+              capture: :all_but_first
+            ) do
+        function
+      end
+
+    assert length(names) == 6
+    assert length(Enum.uniq(names)) == 6
+  end
+
   test "the down statements drop the objects they created" do
     for statement <- Enum.reverse(Migration.statements(Long)),
         do: TestRepo.query!(statement.down, [])

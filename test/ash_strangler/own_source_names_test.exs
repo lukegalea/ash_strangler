@@ -23,6 +23,11 @@ defmodule AshStrangler.OwnSourceNamesTest do
   @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
 
   defp define(attributes, mapping, phase \\ ":read_from_legacy") do
+    {module, _io} = compile(attributes, mapping, phase)
+    module.spark_dsl_config()
+  end
+
+  defp compile(attributes, mapping, phase) do
     name = "AshStrangler.OwnSourceNamesTest.Probe#{System.unique_integer([:positive])}"
 
     {result, io} =
@@ -66,8 +71,7 @@ defmodule AshStrangler.OwnSourceNamesTest do
       end)
 
     {{:module, module, _, _}, _binding} = result
-    _ = io
-    module.spark_dsl_config()
+    {module, io}
   end
 
   defp key_line, do: ~s|key :id, from: :id, strategy: {:uuid_v5, namespace: "#{@namespace}"}|
@@ -173,6 +177,40 @@ defmodule AshStrangler.OwnSourceNamesTest do
         )
 
       assert message =~ ":dual_write"
+    end
+  end
+
+  describe "wired into the extension" do
+    # The cases above call the verifier directly. This one compiles a resource and
+    # reads what the compiler said, so it fails if the verifier is not registered
+    # on `AshStrangler.Resource`.
+    test "compiling a resource that carries a source: reports it" do
+      {_module, io} =
+        compile(
+          """
+          uuid_primary_key :id
+          attribute :login, :string, public?: true, source: :login_name
+          """,
+          "#{key_line()}\nmap :login, from: :login",
+          ":read_from_legacy"
+        )
+
+      assert io =~ "cannot honour"
+      assert io =~ "login_name"
+    end
+
+    test "compiling one whose source: is its own name says nothing" do
+      {_module, io} =
+        compile(
+          """
+          uuid_primary_key :id
+          attribute :login, :string, public?: true, source: :login
+          """,
+          "#{key_line()}\nmap :login, from: :login",
+          ":read_from_legacy"
+        )
+
+      refute io =~ "cannot honour"
     end
   end
 

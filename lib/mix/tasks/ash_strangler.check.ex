@@ -426,7 +426,7 @@ defmodule Mix.Tasks.AshStrangler.Check do
         # filter, where it is visible as one.
         "\n  joins      " <>
           Enum.map_join(joins, @continued, fn join ->
-            "LEFT JOIN #{join.relation} AS #{join.alias} ON #{join.on}"
+            "LEFT JOIN #{join.sql_relation} AS #{join.alias} ON #{join.on}"
           end)
     end
   end

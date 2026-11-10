@@ -35,11 +35,11 @@ Requires Elixir 1.20 or later.
   reconciler, the reverse view, unions and derived views) still print it unquoted.
 - **The trigger and function names of a long view no longer collapse into one.** PostgreSQL cuts an
   identifier to 63 bytes. `strangler_<table>_insert`, `_update` and `_delete` overflow from a table
-  name of 47 bytes, and from 53 the cut removes the operation altogether: the three were one object,
+  name of 47 bytes, and from 52 the cut removes the operation altogether: the three were one object,
   each `CREATE OR REPLACE` replaced the last, and a write the view could not carry by itself was
   refused. A name that overflows is now a table prefix and a hash of the table, the rule
   `:read_from_new`'s triggers already followed. A name that fits is unchanged. A view table of 47 to
-  52 bytes had three working but truncated names; regenerating renames them, so drop the old
+  51 bytes had three working but truncated names; regenerating renames them, so drop the old
   truncated triggers and functions (`\df+ strangler_*`) when you apply it.
 
 ### Documentation

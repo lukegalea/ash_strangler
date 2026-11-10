@@ -225,6 +225,14 @@ defmodule AshStrangler.QuotedRelationTest do
   defp items,
     do: TestRepo.query!(~s|SELECT id, name FROM qrel."Mixed_Items" ORDER BY id|, []).rows
 
+  defp drain(collected \\ []) do
+    receive do
+      {:mix_shell, _kind, [message]} -> drain([message | collected])
+    after
+      0 -> collected |> Enum.reverse() |> Enum.join("\n")
+    end
+  end
+
   describe "the relation's SQL spelling" do
     test "a plain lowercase relation stays bare, a mixed-case one is quoted per part" do
       assert Twin.sql_relation(AshStrangler.Test.Legacy.Users) == "legacy.users"
@@ -266,6 +274,152 @@ defmodule AshStrangler.QuotedRelationTest do
                  "SELECT count(*) FROM pg_indexes WHERE indexname = 'strangler_read_items_key_idx'",
                  []
                )
+    end
+  end
+
+  describe "the logical name" do
+    # Lineage names a joined relation by `Twin.relation/1`, and the diagram finds
+    # the join by that name: a join that carried the SQL spelling would lose its
+    # `AS owner (LEFT JOIN)` label.
+    test "a join keeps it, beside its SQL spelling" do
+      assert [join] = AshStrangler.Info.joins(ReadItem)
+
+      assert join.relation == "qrel.Mixed_Owners"
+      assert join.sql_relation == ~s|qrel."Mixed_Owners"|
+    end
+
+    test "the diagram still labels the joined relation with its alias" do
+      diagram = AshStrangler.Diagram.Mapping.for_resources([ReadItem], [])
+
+      labels =
+        for %AshDiagram.Flowchart.Subgraph{label: label} <- diagram.entries, do: to_string(label)
+
+      assert Enum.any?(labels, &(&1 =~ "AS owner (LEFT JOIN)"))
+    end
+  end
+
+  describe "a mixed-case schema" do
+    # Compile-only: the statements are read, not run, so there is no schema to build.
+    test "is quoted in the relation, the key index and the drop of the index" do
+      id = System.unique_integer([:positive])
+
+      {_result, _io} =
+        ExUnit.CaptureIO.with_io(:stderr, fn ->
+          Code.eval_string("""
+          defmodule AshStrangler.QuotedRelationTest.CaseTwin#{id} do
+            use Ash.Resource,
+              domain: nil,
+              validate_domain_inclusion?: false,
+              data_layer: AshPostgres.DataLayer,
+              extensions: [AshStrangler.Twin]
+
+            postgres do
+              table "Mixed_Items"
+              schema "Qrel_Schema"
+              repo AshStrangler.TestRepo
+              migrate? false
+            end
+
+            attributes do
+              attribute :id, :integer, primary_key?: true, allow_nil?: false
+              attribute :name, :string
+            end
+
+            actions do
+              defaults [:read]
+            end
+          end
+
+          defmodule AshStrangler.QuotedRelationTest.CaseView#{id} do
+            use Ash.Resource,
+              domain: nil,
+              validate_domain_inclusion?: false,
+              data_layer: AshPostgres.DataLayer,
+              extensions: [AshStrangler.Resource]
+
+            postgres do
+              table "case_items"
+              schema "case_view"
+              repo AshStrangler.TestRepo
+              migrate? false
+            end
+
+            attributes do
+              attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+              attribute :name, :string, public?: true
+            end
+
+            actions do
+              defaults [:read]
+            end
+
+            strangler do
+              phase :read_from_legacy
+
+              source AshStrangler.QuotedRelationTest.CaseTwin#{id} do
+                key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+                map :name, from: :name
+              end
+            end
+          end
+          """)
+        end)
+
+      twin = Module.concat(AshStrangler.QuotedRelationTest, "CaseTwin#{id}")
+      view = Module.concat(AshStrangler.QuotedRelationTest, "CaseView#{id}")
+
+      assert Twin.sql_relation(twin) == ~s|"Qrel_Schema"."Mixed_Items"|
+
+      %{view: view_sql, key_index: index} = AshStrangler.Sql.View.build(view)
+
+      assert view_sql.up =~ ~s|FROM "Qrel_Schema"."Mixed_Items"|
+      assert index.up =~ ~s|ON "Qrel_Schema"."Mixed_Items"|
+      assert index.down == ~s|DROP INDEX IF EXISTS "Qrel_Schema".strangler_case_items_key_idx;|
+    end
+  end
+
+  describe "mix ash_strangler.check" do
+    setup do
+      previous = Application.get_env(:ash_strangler, :ash_domains)
+
+      Application.put_env(:ash_strangler, :ash_domains, [
+        AshStrangler.QuotedRelationTest.Domain,
+        AshStrangler.QuotedRelationTest.Legacy
+      ])
+
+      shell = Mix.shell()
+      Mix.shell(Mix.Shell.Process)
+
+      on_exit(fn ->
+        Application.put_env(:ash_strangler, :ash_domains, previous)
+        Mix.shell(shell)
+      end)
+
+      :ok
+    end
+
+    test "measures the join fan-out over the mixed-case relation" do
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Owners" (id, label) VALUES (7, 'Ada')|, [])
+
+      TestRepo.query!(
+        ~s|INSERT INTO qrel."Mixed_Items" (id, name, "Owner_Id") VALUES (1, 'one', 7), (2, 'two', NULL)|,
+        []
+      )
+
+      output =
+        try do
+          Mix.Task.rerun("ash_strangler.check", [
+            "--domain",
+            "AshStrangler.QuotedRelationTest.Domain"
+          ])
+
+          drain()
+        catch
+          :exit, _reason -> drain()
+        end
+
+      assert output =~ ~r/ok.*join fan-out\n\s+one row in, one row out/
+      refute output =~ "does not exist"
     end
   end
 
