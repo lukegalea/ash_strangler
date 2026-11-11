@@ -20,6 +20,7 @@ defmodule AshStrangler.QuotedRelationTest.Domain do
     resource AshStrangler.QuotedRelationTest.ReadItem
     resource AshStrangler.QuotedRelationTest.WriteItem
     resource AshStrangler.QuotedRelationTest.MixedView
+    resource AshStrangler.QuotedRelationTest.LedgerItem
     resource AshStrangler.QuotedRelationTest.Reversed
   end
 end
@@ -246,6 +247,45 @@ defmodule AshStrangler.QuotedRelationTest.Reversed do
   end
 end
 
+defmodule AshStrangler.QuotedRelationTest.LedgerItem do
+  @moduledoc "A ledger-enabled mapping over the mixed-case relation, for the observation baseline."
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: AshStrangler.QuotedRelationTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "ledger_items"
+    schema "qrel"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :name, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.QuotedRelationTest.Items do
+      notify? true
+      ledger? true
+      notify_channel "ash_strangler_quoted_relation_ledger"
+
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :name, from: :name
+    end
+  end
+end
+
 defmodule AshStrangler.QuotedRelationTest.MixedUnion do
   @moduledoc "A union over the mixed-case relation."
   use AshStrangler.Union
@@ -316,8 +356,11 @@ defmodule AshStrangler.QuotedRelationTest do
 
   alias AshStrangler.Migration
 
+  alias AshStrangler.Observation.Baseline
+
   alias AshStrangler.QuotedRelationTest.{
     Items,
+    LedgerItem,
     MixedDerived,
     MixedUnion,
     MixedView,
@@ -349,7 +392,7 @@ defmodule AshStrangler.QuotedRelationTest do
         []
       )
 
-      for resource <- [ReadItem, WriteItem, MixedView],
+      for resource <- [ReadItem, WriteItem, MixedView, LedgerItem],
           statement <- Migration.statements(resource) do
         TestRepo.query!(statement.up, [])
       end
@@ -670,4 +713,42 @@ defmodule AshStrangler.QuotedRelationTest do
       refute Enum.any?(items(), &(List.last(&1) == "renamed"))
     end
   end
+
+  describe "the observation baseline" do
+    # `Baseline.run/2` keyset-scans `SELECT * FROM <schema>.<table>`, with each part
+    # spelled through the printer's identifier rule. This is the test of that
+    # spelling: the scan must find `qrel."Mixed_Items"`, which an unquoted
+    # `qrel.Mixed_Items` does not name.
+    test "reads the mixed-case relation" do
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (61, 'baselined')|, [])
+
+      assert {:ok, %{count: 1, group: group}} =
+               Baseline.run(LedgerItem, repo: TestRepo, isolation: :caller)
+
+      assert [row] = baseline_rows(group)
+      assert row["operation"] == "insert"
+      assert decode(row["after"])["name"] == "baselined"
+
+      # The record id is the key the mapping derives: the row the baseline read
+      # is the row the compatibility view serves.
+      assert row["record_id"] == LedgerItem |> Ash.read!() |> Enum.map(& &1.id) |> hd()
+    end
+  end
+
+  defp baseline_rows(group) do
+    %Postgrex.Result{columns: columns, rows: rows} =
+      TestRepo.query!(
+        """
+        SELECT record_id, operation, after
+          FROM "strangler_observations"
+         WHERE resource = $1 AND baseline_group = $2 AND category = 'baseline'
+        """,
+        [to_string(LedgerItem), Ecto.UUID.dump!(group)]
+      )
+
+    Enum.map(rows, fn row -> columns |> Enum.zip(row) |> Map.new() end)
+  end
+
+  defp decode(json) when is_binary(json), do: Jason.decode!(json)
+  defp decode(other), do: other
 end

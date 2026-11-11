@@ -222,9 +222,12 @@ defmodule AshStrangler.Sql.Ledger do
 
         {~s("#{schema}"."#{table}"), schema, table}
       else
-        relation = Info.relation(resource_or_dsl)
-        {schema, table} = split_relation(relation)
-        {relation, schema, table}
+        # The `ON` clause and the drop guard name the relation, so the relation
+        # spells the way SQL does -- a mixed-case name quoted
+        # (`Twin.sql_relation/1`), not the logical name PostgreSQL would fold
+        # to lowercase. The function and trigger NAMES keep the logical parts.
+        {schema, table} = split_relation(Info.relation(resource_or_dsl))
+        {Twin.sql_relation(Info.twin(resource_or_dsl)), schema, table}
       end
 
     {schema, table} = {target_schema, target_table}
