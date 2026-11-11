@@ -19,6 +19,8 @@ defmodule AshStrangler.QuotedRelationTest.Domain do
   resources do
     resource AshStrangler.QuotedRelationTest.ReadItem
     resource AshStrangler.QuotedRelationTest.WriteItem
+    resource AshStrangler.QuotedRelationTest.MixedView
+    resource AshStrangler.QuotedRelationTest.Reversed
   end
 end
 
@@ -170,6 +172,135 @@ defmodule AshStrangler.QuotedRelationTest.WriteItem do
   end
 end
 
+defmodule AshStrangler.QuotedRelationTest.MixedView do
+  @moduledoc "A view whose own table name is mixed case, over the mixed-case legacy relation."
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: AshStrangler.QuotedRelationTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "Mixed_View"
+    schema "qrel"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :name, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_legacy
+
+    source AshStrangler.QuotedRelationTest.Items do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      coalesce :name, from: :name, default: "none"
+    end
+  end
+end
+
+defmodule AshStrangler.QuotedRelationTest.Reversed do
+  @moduledoc "The reverse view at :read_from_new, which takes the mixed-case relation's name."
+  @namespace "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"
+
+  use Ash.Resource,
+    domain: AshStrangler.QuotedRelationTest.Domain,
+    data_layer: AshPostgres.DataLayer,
+    extensions: [AshStrangler.Resource]
+
+  postgres do
+    table "reversed_items"
+    schema "qrel"
+    repo AshStrangler.TestRepo
+    migrate? false
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+    attribute :legacy_id, :integer, allow_nil?: false, public?: true
+    attribute :name, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  strangler do
+    phase :read_from_new
+
+    source AshStrangler.QuotedRelationTest.Items do
+      key :id, from: :id, strategy: {:uuid_v5, namespace: @namespace}
+      map :name, from: :name
+
+      unmapped [:legacy_id], as: :null, because: "Carried by the backfill, not projected."
+      retired [:owner_id], because: "Nothing reads the owner any more."
+    end
+  end
+end
+
+defmodule AshStrangler.QuotedRelationTest.MixedUnion do
+  @moduledoc "A union over the mixed-case relation."
+  use AshStrangler.Union
+
+  union do
+    schema "qrel"
+    view "mixed_union"
+
+    column :name, :string
+
+    legacy :items do
+      twin AshStrangler.QuotedRelationTest.Items
+      phase :dual_write
+      refused_because "the legacy system still owns deletes"
+      key :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+      map :name, from: :name
+    end
+
+    owned :native
+  end
+end
+
+defmodule AshStrangler.QuotedRelationTest.Keys do
+  @moduledoc false
+  use AshStrangler.KeyKinds
+
+  key_kinds do
+    estate 0x0C12
+    logical(:mixed_row, 0x010)
+  end
+end
+
+defmodule AshStrangler.QuotedRelationTest.MixedDerived do
+  @moduledoc "A derived view over the mixed-case relation."
+  use AshStrangler.Derived
+
+  derived do
+    schema "qrel"
+    view "mixed_derived"
+    twin AshStrangler.QuotedRelationTest.Items
+    registry(AshStrangler.QuotedRelationTest.Keys)
+    kind :mixed_row
+    from [:id]
+
+    column :item, :integer, null?: false
+    column :label, :string
+
+    slot :named do
+      filter expr(not is_nil(name))
+      map :item, from: :id
+      map :label, from: :name
+    end
+  end
+end
+
 defmodule AshStrangler.QuotedRelationTest do
   @moduledoc """
   A legacy relation whose name is mixed case is spelled through the printer's
@@ -184,7 +315,17 @@ defmodule AshStrangler.QuotedRelationTest do
   use AshStrangler.DataCase, async: false
 
   alias AshStrangler.Migration
-  alias AshStrangler.QuotedRelationTest.{Items, ReadItem, WriteItem}
+
+  alias AshStrangler.QuotedRelationTest.{
+    Items,
+    MixedDerived,
+    MixedUnion,
+    MixedView,
+    ReadItem,
+    Reversed,
+    WriteItem
+  }
+
   alias AshStrangler.Twin
 
   setup_all do
@@ -208,7 +349,8 @@ defmodule AshStrangler.QuotedRelationTest do
         []
       )
 
-      for resource <- [ReadItem, WriteItem], statement <- Migration.statements(resource) do
+      for resource <- [ReadItem, WriteItem, MixedView],
+          statement <- Migration.statements(resource) do
         TestRepo.query!(statement.up, [])
       end
     end)
@@ -295,6 +437,98 @@ defmodule AshStrangler.QuotedRelationTest do
         for %AshDiagram.Flowchart.Subgraph{label: label} <- diagram.entries, do: to_string(label)
 
       assert Enum.any?(labels, &(&1 =~ "AS owner (LEFT JOIN)"))
+    end
+  end
+
+  describe "every other module that names the relation in SQL" do
+    @quoted ~s|qrel."Mixed_Items"|
+
+    defp up(module), do: module |> Migration.statements() |> Enum.map_join("\n", & &1.up)
+
+    # The logical name still appears inside a key's hash input, which is meant to be stable;
+    # what must not appear is the unquoted spelling as a relation.
+    defp refute_unquoted(sql),
+      do: refute(sql =~ ~r/\b(FROM|ON|UPDATE|INTO|JOIN|VIEW|EXISTS) qrel\.Mixed_Items/)
+
+    test "the backfill plan, flag column and passes run against it" do
+      plan = AshStrangler.Backfill.plan(ReadItem)
+
+      # The plan carries the logical name; the backfill spells it as SQL does.
+      assert plan[:relation] == "qrel.Mixed_Items"
+
+      TestRepo.query!(
+        ~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (21, 'a'), (22, 'b')|,
+        []
+      )
+
+      AshStrangler.Backfill.add_flag_column!(TestRepo, plan[:relation])
+      assert AshStrangler.Backfill.pending_count(TestRepo, plan[:relation]) >= 2
+
+      assert {:ok, %{complete?: true}} = AshStrangler.Backfill.run(TestRepo, plan)
+      assert AshStrangler.Backfill.pending_count(TestRepo, plan[:relation]) == 0
+      AshStrangler.Backfill.drop_flag_column!(TestRepo, plan[:relation])
+    end
+
+    test "the reconciler counts and checksums a mixed-case legacy relation and view" do
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (31, 'c')|, [])
+
+      for resource <- [ReadItem, MixedView] do
+        assert %{agrees?: true} = AshStrangler.Reconciler.count_drift(resource)
+        assert %{agrees?: true} = AshStrangler.Reconciler.checksum_drift(resource)
+      end
+    end
+
+    test "derived views read from it" do
+      sql = up(MixedDerived)
+      assert sql =~ "FROM #{@quoted}"
+      refute_unquoted(sql)
+
+      for %{up: up} <- Migration.statements(MixedDerived),
+          do: TestRepo.query!(up, [], mode: :savepoint)
+
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (41, 'd')|, [])
+      assert [[41, "d"]] = TestRepo.query!("SELECT item, label FROM qrel.mixed_derived", []).rows
+    end
+
+    test "union views, key indexes and write-back name it quoted" do
+      sql = up(MixedUnion)
+      assert sql =~ "FROM #{@quoted}"
+      assert sql =~ "ON #{@quoted}"
+      assert sql =~ "UPDATE #{@quoted}"
+      assert sql =~ "DELETE FROM #{@quoted}"
+      refute_unquoted(sql)
+
+      for %{up: up} <- Migration.statements(MixedUnion),
+          do: TestRepo.query!(up, [], mode: :savepoint)
+
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (51, 'u')|, [])
+
+      assert [["items", "u"]] =
+               TestRepo.query!("SELECT __branch, name FROM qrel.mixed_union", []).rows
+    end
+
+    test "the reverse view and its triggers take the mixed-case relation's name" do
+      view = AshStrangler.Sql.ReverseView.build(Reversed) |> Enum.map_join("\n", & &1.up)
+      assert view =~ "CREATE OR REPLACE VIEW #{@quoted} AS"
+      refute_unquoted(view)
+
+      down = AshStrangler.Sql.ReverseView.build(Reversed) |> Enum.map_join("\n", & &1.down)
+      assert down =~ "DROP VIEW IF EXISTS #{@quoted};"
+
+      triggers = AshStrangler.Sql.ReverseTriggers.build(Reversed) |> Enum.map_join("\n", & &1.up)
+      assert triggers =~ "ON #{@quoted}"
+      assert triggers =~ "'qrel.\"Mixed_Items\"'"
+      refute_unquoted(triggers)
+    end
+
+    test "obligation assertions name it quoted, and run" do
+      assertions = AshStrangler.Obligations.assertions(MixedView)
+      assert [_ | _] = assertions
+
+      for %{assertion: sql} <- assertions do
+        assert sql =~ "FROM #{@quoted}"
+        TestRepo.query!(sql, [], mode: :savepoint)
+      end
     end
   end
 

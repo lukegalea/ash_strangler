@@ -69,11 +69,11 @@ defmodule AshStrangler.Derived.Sql do
     """
     WITH "e" AS (
       SELECT count(*) FILTER (WHERE "__e"."__v" IS NULL) AS "refused", count(*) AS "total"
-      FROM #{Twin.relation(twin)}
+      FROM #{Twin.sql_relation(twin)}
       CROSS JOIN LATERAL #{lateral(source, frame)}
       #{where(derived, source, frame, [])}
     ), "s" AS (
-      SELECT count(*) AS "n" FROM #{Twin.relation(twin)}
+      SELECT count(*) AS "n" FROM #{Twin.sql_relation(twin)}
       #{where(derived, source, frame, [scalar])}
     )
     SELECT ("e"."refused" + "s"."n")::bigint AS refused, ("e"."total" + "s"."n")::bigint AS total
@@ -89,7 +89,7 @@ defmodule AshStrangler.Derived.Sql do
     key = key_sql(derived, source, frame)
 
     "(SELECT DISTINCT ON (#{key}) #{head(derived, source, key)},\n  #{columns(derived, source, frame)}\n" <>
-      "FROM #{Twin.relation(twin)}\nCROSS JOIN LATERAL #{lateral(source, frame)}\n" <>
+      "FROM #{Twin.sql_relation(twin)}\nCROSS JOIN LATERAL #{lateral(source, frame)}\n" <>
       "#{where(derived, source, frame, [~s("__e"."__v" IS NOT NULL)])}\nORDER BY #{key}, \"__e\".\"__o\")"
   end
 
@@ -99,7 +99,7 @@ defmodule AshStrangler.Derived.Sql do
     key = key_sql(derived, source, frame)
 
     "SELECT #{head(derived, source, key)},\n  #{columns(derived, source, frame)}\n" <>
-      "FROM #{Twin.relation(twin)}\n#{where(derived, source, frame, [])}"
+      "FROM #{Twin.sql_relation(twin)}\n#{where(derived, source, frame, [])}"
   end
 
   defp head(derived, source, key),
