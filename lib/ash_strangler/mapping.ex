@@ -11,7 +11,7 @@ defmodule AshStrangler.Mapping do
   the wiring: the mapping lives in its own module as a `Spark.Dsl.Fragment`,
   and the resource attaches it with `fragments:`.
 
-      defmodule VendorpmKeystone.Legacy.ContractMapping do
+      defmodule MyApp.Legacy.ExternalMapping do
         use AshStrangler.Mapping, resource: MyApp.Contracts.Contract
 
         strangler do
@@ -27,7 +27,7 @@ defmodule AshStrangler.Mapping do
       defmodule MyApp.Contracts.Contract do
         use Ash.Resource,
           data_layer: AshPostgres.DataLayer,
-          fragments: [VendorpmKeystone.Legacy.ContractMapping]
+          fragments: [MyApp.Legacy.ExternalMapping]
       end
 
   The fragment carries the extension (`AshStrangler.Resource`) with it, so a
