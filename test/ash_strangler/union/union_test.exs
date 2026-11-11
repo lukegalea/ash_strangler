@@ -177,6 +177,91 @@ defmodule AshStrangler.UnionTest do
     end
   end
 
+  describe "a schema whose name contains a dot" do
+    # The key index's `down` used to split the spelled relation on its first
+    # dot to find the schema, so a quoted schema that itself contains a dot
+    # produced `DROP INDEX IF EXISTS "odd.strangler_visits_north_key_idx"`,
+    # which names nothing. The schema comes from the twin now.
+    test "the union's SQL executes, and the key index drops from the dotted schema" do
+      q!(~s|CREATE SCHEMA IF NOT EXISTS "odd.schema"|)
+
+      q!(
+        ~s|CREATE TABLE "odd.schema".north_visits (id integer PRIMARY KEY, patient_name text NOT NULL, seen_on date)|
+      )
+
+      module = "AshStrangler.UnionTest.Dotted#{System.unique_integer([:positive])}"
+
+      # The compile result also carries the twin and the Inspect implementation
+      # its resource derives; the union is the module the string named.
+      [union] =
+        Code.compile_string("""
+        defmodule #{module} do
+          use AshStrangler.Union
+
+          union do
+            schema "odd.schema"
+            view "visits"
+
+            column :patient, :string, null?: false
+
+            legacy :north do
+              twin #{module}.NorthVisits
+              phase :read_from_legacy
+              refused_because "north writes these rows until its cutover"
+              key :id, strategy: {:uuid_v5, namespace: "2f1e4c5a-9b3d-5e7f-8a6b-1c2d3e4f5a6b"}
+              map :patient, from: :patient_name
+            end
+
+            owned :native
+          end
+        end
+
+        defmodule #{module}.NorthVisits do
+          use Ash.Resource,
+            domain: AshStrangler.Test.Clinic.Legacy,
+            data_layer: AshPostgres.DataLayer,
+            extensions: [AshStrangler.Twin]
+
+          postgres do
+            table "north_visits"
+            schema "odd.schema"
+            repo AshStrangler.TestRepo
+            migrate? false
+          end
+
+          attributes do
+            attribute :id, :integer, primary_key?: true, allow_nil?: false, public?: true
+            attribute :patient_name, :string, allow_nil?: false, public?: true
+            attribute :seen_on, :date, public?: true
+          end
+
+          actions do
+            defaults [:read]
+          end
+        end
+        """)
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.filter(&(&1 == Module.concat([module])))
+
+      statements = AshStrangler.Migration.statements(union)
+      # DDL is transactional: everything here rolls back with the test.
+      for %{up: up} <- statements, do: q!(up)
+
+      assert [[1]] =
+               q!(
+                 "SELECT count(*) FROM pg_indexes WHERE schemaname = 'odd.schema' AND indexname = 'strangler_visits_north_key_idx'"
+               )
+
+      index = Enum.find(statements, &(&1.name == :strangler_visits_north_key_idx))
+      q!(index.down)
+
+      assert [[0]] =
+               q!(
+                 "SELECT count(*) FROM pg_indexes WHERE schemaname = 'odd.schema' AND indexname = 'strangler_visits_north_key_idx'"
+               )
+    end
+  end
+
   describe "lens kinds" do
     test "report where each column of each branch comes from" do
       assert Info.lens_kinds(@visits, :north) == %{
