@@ -14,6 +14,7 @@ defmodule AshStrangler.Union.Dsl do
     Column,
     Constant,
     Extension,
+    InsertThrough,
     Legacy,
     Map,
     NotWrittenBack,
@@ -167,14 +168,55 @@ defmodule AshStrangler.Union.Dsl do
     schema: [because: [type: :string, required: true]]
   }
 
+  @insert_through %Spark.Dsl.Entity{
+    name: :insert_through,
+    describe: """
+    At `:dual_write`, an insert naming this branch (`NEW."__branch" = '<branch>'`) lands in the
+    legacy table. The legacy table allocates its own key, so the trigger inserts the legacy row,
+    then returns the view row of that key, and `RETURNING` carries the key and every default.
+    The insert writes the branch's plain `map` columns (the columns a `:dual_write` update
+    writes, minus the ones read from a legacy column that forms the key), upserts `extension`
+    columns into the extension table, and refuses a supplied value for a column it cannot write
+    (an expression, a constant, an unmapped column, a `not_written_back` column, the key).
+    Without it, an insert naming the branch is refused and inserts land in the owned branch.
+    """,
+    examples: [
+      ~S|insert_through because: "the south system expects the rows it reads to exist", set: [processed: true, verified: false]|
+    ],
+    target: InsertThrough,
+    args: [{:optional, :columns, []}],
+    schema: [
+      columns: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        Narrows the view columns the insert writes. Default: every plain `map :x, from: :column`
+        column that is not in `not_written_back` and is not read from a legacy column that forms
+        the key. Each named column must be one the insert can write.
+        """
+      ],
+      set: [
+        type: :keyword_list,
+        default: [],
+        doc: "Legacy columns the insert sets to a constant (`set: [processed: true]`)."
+      ],
+      because: [
+        type: :string,
+        required: true,
+        doc: "Why inserts take this route."
+      ]
+    ]
+  }
+
   @legacy %Spark.Dsl.Entity{
     name: :legacy,
     describe: """
     A legacy branch: rows that live in a twin's relation. Its `phase` is its
     own. In `:read_from_legacy` a write that would land on the branch is refused
     with `refused_because`. In `:dual_write` an update or delete of one of its
-    rows is carried to the legacy table (renamed columns only). In
-    `:read_from_new` and `:decommissioned` the branch has left the view: its
+    rows is carried to the legacy table (renamed columns only), and an insert
+    naming it lands in the legacy table when it declares `insert_through`.
+    In `:read_from_new` and `:decommissioned` the branch has left the view: its
     rows now live in the owned table.
     """,
     examples: [
@@ -196,7 +238,7 @@ defmodule AshStrangler.Union.Dsl do
     entities: [
       keys: [@key],
       mappings: [@map, @constant, @tenant_of, @unmapped, @extension],
-      write_rules: [@not_written_back, @refuse_delete]
+      write_rules: [@not_written_back, @refuse_delete, @insert_through]
     ],
     schema: [
       name: [type: :atom, required: true],
@@ -223,7 +265,7 @@ defmodule AshStrangler.Union.Dsl do
     examples: [~S|owned :native|],
     target: Owned,
     args: [{:optional, :name, :owned}],
-    entities: [write_rules: [@not_written_back]],
+    entities: [write_rules: [@not_written_back, @insert_through]],
     schema: [
       name: [type: :atom, default: :owned],
       table: [type: :string, doc: "Defaults to `\"<view>_owned\"`, in the union's schema."]

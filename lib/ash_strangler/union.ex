@@ -49,9 +49,12 @@ defmodule AshStrangler.Union do
 
   ## Writes
 
-    * **Insert** always lands in the owned branch. The trigger returns the
-      stored row, so `RETURNING` is correct (the primary key and every default
-      included). An insert that names a legacy branch is refused.
+    * **Insert** lands in the owned branch. The trigger returns the stored
+      row, so `RETURNING` is correct (the primary key and every default
+      included). An insert that names a legacy branch is refused, unless that
+      branch is at `:dual_write` and declares `insert_through`: then it lands
+      in the legacy table, which allocates its own key, and `RETURNING`
+      carries the view row of that key, `__branch` naming the branch.
     * **Update and delete of an owned row** go to the owned table.
     * **Update and delete of a legacy row** follow that branch's phase.
       `:read_from_legacy`: refused with the branch's `refused_because`, as
@@ -68,9 +71,11 @@ defmodule AshStrangler.Union do
   A phase is compiled into the trigger functions, so moving a branch is a
   `CREATE OR REPLACE FUNCTION`, which is transactional DDL. A write that
   fires its trigger before the migration commits runs under the old phase and
-  one that fires after runs under the new one. Inserts never read a branch's
-  phase, so an insert racing a phase change always succeeds in the owned
-  branch. Two concurrent owned inserts do not interact. Two inserts of the
+  one that fires after runs under the new one. An insert naming a branch with
+  no `insert_through` never reads a branch's phase, so it always succeeds in
+  the owned branch; a route declared with `insert_through` is compiled into
+  the same function, so declaring or removing one is a function replace, not a
+  trigger change. Two concurrent owned inserts do not interact. Two inserts of the
   same supplied key conflict on the owned table's primary key (`23505`).
   `AshStrangler.Union.Info` has the declarations; the keys of different
   branches must not collide, which the verifier checks for equal namespaces.

@@ -26,6 +26,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     Constant,
     Extension,
     Info,
+    InsertThrough,
     NotWrittenBack,
     RefuseDelete,
     TenantKey,
@@ -75,6 +76,12 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
           "the owned branch takes no `not_written_back` (#{Enum.map_join(attributes, ", ", &inspect/1)}): " <>
             "its columns are all stored"
       ),
+      for(
+        %InsertThrough{because: because} <- owned_rules(dsl),
+        do:
+          "the owned branch takes no `insert_through` (because: #{inspect(because)}): " <>
+            "an insert naming no branch already lands in its own table"
+      ),
       if(:__branch in columns, do: ["`__branch` is reserved for the branch name"], else: []),
       if(
         Enum.any?(branches, &(&1.name == :owned)) and owned == 1 and
@@ -106,6 +113,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
         key_problems(branch, key) ++
           mapping_problems(branch, columns) ++
           write_rule_problems(branch, columns) ++
+          insert_through_problems(branch, columns, key) ++
           shared_source_problems(branch) ++ definer_problems(branch, definer?),
         &(at <> &1)
       ) ++
@@ -211,6 +219,179 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
       ),
       if(length(refusals) > 1, do: ["declare at most one `refuse_delete`"], else: [])
     ])
+  end
+
+  defp insert_through_problems(branch, columns, key) do
+    case Info.insert_through(branch) do
+      nil ->
+        []
+
+      it ->
+        key_sources = Enum.flat_map(branch.keys, &List.wrap(&1.from))
+        extension = Info.extension_columns(branch)
+        skipped = Info.not_written_back(branch)
+        set_columns = Keyword.keys(it.set)
+
+        List.flatten([
+          if(
+            branch.phase != :dual_write,
+            do: [
+              "`insert_through` needs the branch at `:dual_write`, and branch #{inspect(branch.name)} is at #{inspect(branch.phase)}"
+            ],
+            else: []
+          ),
+          if(String.trim(it.because) == "",
+            do: ["`insert_through` has an empty `because`"],
+            else: []
+          ),
+          dups(it.columns, "insert_through column"),
+          for(
+            a <- it.columns,
+            do:
+              insert_column_problem(
+                branch,
+                columns,
+                key,
+                a,
+                key_sources,
+                extension,
+                skipped,
+                set_columns
+              )
+          ),
+          for(
+            {column, value} <- it.set,
+            do: set_constant_problem(branch, column, value, key_sources)
+          )
+        ])
+    end
+  end
+
+  # A column of `insert_through`'s write list must be one the insert can write:
+  # the same set a `:dual_write` update writes, narrowed by the declaration.
+  defp insert_column_problem(
+         branch,
+         columns,
+         key,
+         a,
+         key_sources,
+         extension,
+         skipped,
+         set_columns
+       ) do
+    source = mapping_source(branch, a)
+
+    cond do
+      a == key ->
+        "`insert_through` names #{inspect(a)}, which is the key: the legacy table allocates the key itself"
+
+      a not in columns ->
+        "`insert_through` names #{inspect(a)}, which is not a declared column"
+
+      a in extension ->
+        "`insert_through` names #{inspect(a)}, which is stored in the extension table"
+
+      a in skipped ->
+        "`insert_through` names #{inspect(a)}, which is `not_written_back`"
+
+      source in key_sources ->
+        "`insert_through` names #{inspect(a)}, which is read from a legacy column that forms the row's key"
+
+      source in set_columns ->
+        "`insert_through` names #{inspect(a)}, which `set:` gives a constant on every insert"
+
+      is_nil(source) ->
+        "`insert_through` names #{inspect(a)}, which has no legacy column to write"
+
+      true ->
+        []
+    end
+  end
+
+  defp set_constant_problem(branch, column, value, key_sources) do
+    twin = branch.twin
+
+    cond do
+      column not in Twin.columns(twin) ->
+        "`insert_through` sets #{inspect(column)}, which #{inspect(twin)} does not have"
+
+      column in key_sources ->
+        "`insert_through` sets #{inspect(column)}, which forms the row's key: the legacy table allocates the key itself"
+
+      problem = constant_type_problem(twin, column, value) ->
+        problem
+
+      true ->
+        []
+    end
+  end
+
+  # The value a `set:` constant renders must fit the twin column's type, where
+  # the check is cheap: a literal's Elixir shape against the primitive the type
+  # resolves to. Types this does not resolve are left to PostgreSQL, which sees
+  # the literal's own type in the INSERT.
+  defp constant_type_problem(twin, column, value) do
+    declared = Twin.type!(twin, column)
+    kind = literal_kind(declared)
+
+    if kind && value != nil && not kind.(value) do
+      "`insert_through` sets #{inspect(column)} to #{inspect(value)}, which the twin types as #{inspect(declared)}"
+    else
+      nil
+    end
+  end
+
+  defp literal_kind({:array, inner}) do
+    case literal_kind(inner) do
+      nil -> &is_list/1
+      element -> fn value -> is_list(value) and Enum.all?(value, element) end
+    end
+  end
+
+  defp literal_kind(type) do
+    case Ash.Type.get_type(type) do
+      nil -> nil
+      resolved -> resolved |> unwrap_subtype() |> kind_of()
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp unwrap_subtype(type) do
+    if Ash.Type.NewType.new_type?(type),
+      do: type |> Ash.Type.NewType.subtype_of() |> unwrap_subtype(),
+      else: type
+  end
+
+  defp kind_of(Ash.Type.String), do: &is_binary/1
+  defp kind_of(Ash.Type.Integer), do: &is_integer/1
+  defp kind_of(Ash.Type.Boolean), do: &is_boolean/1
+  defp kind_of(Ash.Type.Date), do: &match?(%Date{}, &1)
+  defp kind_of(Ash.Type.Time), do: &match?(%Time{}, &1)
+  defp kind_of(Ash.Type.DateTime), do: &match?(%DateTime{}, &1)
+  defp kind_of(Ash.Type.NaiveDateTime), do: &match?(%NaiveDateTime{}, &1)
+  defp kind_of(Ash.Type.Decimal), do: &(is_struct(&1, Decimal) or is_integer(&1) or is_float(&1))
+  defp kind_of(Ash.Type.Atom), do: &(is_atom(&1) or is_binary(&1))
+  defp kind_of(Ash.Type.CiString), do: &is_binary/1
+  defp kind_of(Ash.Type.UUID), do: &is_binary/1
+  defp kind_of(_type), do: nil
+
+  # The legacy column behind a plain `map` mapping, or `nil`: an atom `from`,
+  # or an expression that is a bare reference.
+  defp mapping_source(branch, attribute) do
+    Enum.find_value(branch.mappings, fn
+      %MapEntry{attribute: ^attribute, from: from} when is_atom(from) ->
+        from
+
+      %MapEntry{attribute: ^attribute, from: from} ->
+        case Expr.simple_reference(from) do
+          {:ok, attribute} -> attribute
+          :error -> nil
+        end
+
+      _ ->
+        nil
+    end)
   end
 
   # With `security_definer` the trigger functions have an empty search_path: every relation is qualified.

@@ -24,6 +24,7 @@ defmodule AshStrangler.Union.Info do
     Column,
     Constant,
     Extension,
+    InsertThrough,
     Legacy,
     NotWrittenBack,
     Owned,
@@ -159,6 +160,11 @@ defmodule AshStrangler.Union.Info do
         %RefuseDelete{because: b} -> b
         _ -> nil
       end)
+
+  @doc "A branch's `insert_through` declaration, or `nil`."
+  @spec insert_through(Legacy.t()) :: InsertThrough.t() | nil
+  def insert_through(%Legacy{write_rules: rules}),
+    do: Enum.find(rules, &match?(%InsertThrough{}, &1))
 
   @doc "Whether the union renders its trigger functions `SECURITY DEFINER`."
   @spec security_definer?(module() | Spark.Dsl.t()) :: boolean()

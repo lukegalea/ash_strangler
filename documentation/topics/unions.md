@@ -102,11 +102,11 @@ use the legacy index" below.
 | Write | `:read_from_legacy` | `:dual_write` |
 |---|---|---|
 | insert | owned branch | owned branch |
-| insert naming a legacy branch | refused | refused |
+| insert naming a legacy branch | refused | into the legacy table when the branch declares `insert_through`; refused otherwise |
 | update or delete of an owned row | owned table | owned table |
 | update or delete of a legacy row | refused with `refused_because` | carried to the legacy table |
 
-Insert always lands in the owned branch, and the trigger returns the row it
+Insert lands in the owned branch by default, and the trigger returns the row it
 stored, so `RETURNING` carries the key and every default. In `:dual_write`, an
 update writes the columns the branch renames (`map :x, from: :column`) and
 refuses a changed column that has no legacy column behind it (an expression, a
@@ -120,9 +120,23 @@ one legacy column are refused at compile time on a `:dual_write` branch: map all
 but one with `from: expr(column)`. Updating a key is refused, and so is an
 insert whose supplied key is already in the view.
 
+An insert naming a legacy branch (`__branch = '<branch>'`) is refused, unless
+the branch is at `:dual_write` and declares `insert_through`. Naming the branch
+is the host's per-row choice; nothing else changes. The legacy table allocates
+its own key (whatever default its schema carries — the route writes no key
+column), the trigger inserts the legacy row with the branch's plain `map`
+columns and the `set:` constants, upserts `extension` columns into the extension
+table under the key the new row derives, and returns the view row of that key:
+`RETURNING` carries the key and every default, with `__branch` naming the legacy
+branch. A supplied value for a column the insert cannot write — an expression, a
+constant or an unmapped column, a `not_written_back` column, a column a `set:`
+constant claims, a column read from a legacy column that forms the key, or the
+key itself — is refused with the same `BranchWriteRefused` as any refusal,
+naming the column.
+
 ### Write-through rules of a `:dual_write` branch
 
-Four declarations on a `legacy` branch (and one on the union) say what a write does when the
+Five declarations on a `legacy` branch (and one on the union) say what a write does when the
 legacy table cannot take it as is:
 
 - `not_written_back [:a, :b], because: "..."`: the update drops these columns (no guard, no `SET`),
@@ -137,16 +151,23 @@ legacy table cannot take it as is:
   for them; the owned branch stores them in its own table as before.
 - `refuse_delete because: "..."`: at `:dual_write` a delete of the branch's rows raises the same
   `BranchWriteRefused` instead of deleting the legacy row, for a legacy side that archives.
+- `insert_through because: "..."`: at `:dual_write`, an insert naming the branch lands in the
+  legacy table (see Writes above). `insert_through [:a], because: "..."` narrows the written
+  columns to the named ones; `set: [processed: true, verified: false]` gives legacy columns a
+  constant on every insert (the columns are the twin's, and need not be view columns). Refused on
+  a branch that is not at `:dual_write`, on the owned branch, on a `set:` column the twin lacks
+  or types incompatibly, and on a named column the insert cannot write.
 - `security_definer true` on the union: the trigger functions are `SECURITY DEFINER SET search_path =
   pg_catalog`, so a role needs privileges on the view only. Every relation the triggers name is
   schema-qualified, so each twin must declare a schema, and `uuid_generate_v5` is qualified with
   `functions_schema` (default `"public"`).
 
-Insert routing, jsonb write-back and writes of derived rows are not part of unions.
+jsonb write-back and writes of derived rows are not part of unions.
 
 `AshStrangler.Migration.render_move/2` renders the migration for a union that is already installed:
 extension tables (`IF NOT EXISTS`), `CREATE OR REPLACE VIEW` and `CREATE OR REPLACE FUNCTION`, and
-`ADD COLUMN IF NOT EXISTS` for new extension columns, no owned table and no trigger. It refuses a changed view column list (a rename, removal or
+`ADD COLUMN IF NOT EXISTS` for new extension columns, no owned table and no trigger. Declaring or
+removing an `insert_through` is the same move: the function bodies change, no trigger does. It refuses a changed view column list (a rename, removal or
 reorder); that needs the written `DROP VIEW` of `documentation/topics/phases.md`, "Changing a
 view's shape, in any phase". Appended columns pass.
 
@@ -167,8 +188,11 @@ A branch's phase is compiled into the trigger functions, so changing it is
 - A write whose trigger fires before the change commits runs under the old
   phase and completes. One that fires after it runs under the new phase, even if
   its transaction began earlier.
-- An insert never reads a phase, so an insert racing a phase change succeeds in
-  the owned branch.
+- An insert naming a branch with no `insert_through` never reads a phase, so an
+  insert racing a phase change succeeds in the owned branch. A route declared
+  with `insert_through` is compiled into the insert function like a phase:
+  declaring or removing one is a `CREATE OR REPLACE FUNCTION`, transactional DDL
+  that does not block writers.
 - Two concurrent owned inserts do not interact. Two inserts of the same
   supplied key conflict on the owned table's primary key; the second waits for
   the first to finish and then fails with `unique_violation` (`23505`).
@@ -227,7 +251,8 @@ and `legacy_only` keep meaning "not needed yet".
 
 ## What this does not do
 
-- A branch at `:dual_write` does not insert into its legacy table; inserts land
-  in the owned branch.
+- A branch at `:dual_write` inserts into its legacy table only when it declares
+  `insert_through`. Absent that, an insert naming the branch is refused and
+  inserts land in the owned branch.
 - Derived rows (slots, jsonb elements, filters, synthesised values) and
   composite logical keys are not part of unions.
