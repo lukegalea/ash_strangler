@@ -51,6 +51,25 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **An opt-in insert route through a union's legacy branch (`insert_through`):** a host that must
+  create rows in a legacy table while `:dual_write` can declare it on the branch:
+  `insert_through because: "..."`, optionally with `insert_through [:a], because: "..."` to narrow
+  the written columns and `set: [processed: true, verified: false]` for legacy columns set to a
+  constant. An insert naming the branch (`NEW."__branch" = '<branch>'`) — the only way to reach
+  the route, the host's per-row choice — then lands in the legacy table: the trigger inserts the
+  legacy row with the branch's plain `map` columns and the constants (the legacy table allocates
+  its own key, so the route writes no key column), upserts `extension` columns under the key the
+  new row derives, and returns the view row of that key, so `RETURNING` carries the key, `__branch`
+  naming the branch, and every default. A supplied value for a column the insert cannot write (an
+  expression, constant or unmapped column, a `not_written_back` column, a column a `set:` constant
+  claims, a column read from a key-forming legacy column, or the key) is refused with the same
+  `BranchWriteRefused` as any refusal, naming the column. Absent the declaration nothing changes:
+  an insert naming the branch is refused and inserts land in the owned branch, and the
+  owned-branch insert path is untouched. The verifier refuses `insert_through` on a branch that is
+  not at `:dual_write`, on the owned branch, a `set:` constant naming a column the twin lacks or
+  one it types incompatibly, and a named column the insert cannot write.
+  `AshStrangler.Migration.render_move/2` picks the changed insert function up — a
+  `CREATE OR REPLACE FUNCTION`, no new trigger. New: `AshStrangler.Union.Info.insert_through/1`.
 - **A legacy `DELETE` at `:read_from_new` archives the row when the resource uses `AshArchival`:**
   the reverse view's `INSTEAD OF DELETE` used to delete the owned row, which destroyed what the
   new application and its audit trail still needed. For a resource with `AshArchival.Resource` and

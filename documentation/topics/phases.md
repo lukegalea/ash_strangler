@@ -536,7 +536,7 @@ audit trigger you install yourself is the answer.
 ## Changing a view's shape, in any phase
 
 A union already in `:dual_write` that gains an extension store, a `not_written_back` rule, a
-`refuse_delete` or `security_definer` can ship with `AshStrangler.Migration.render_move/2` instead
+`refuse_delete`, an `insert_through` or `security_definer` can ship with `AshStrangler.Migration.render_move/2` instead
 of a full migration: it creates only the extension tables and replaces the view and trigger
 functions in place. If the view's column list changed in a way that is not an append, it refuses and
 sends you back here.
