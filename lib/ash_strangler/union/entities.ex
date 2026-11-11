@@ -82,3 +82,15 @@ defmodule AshStrangler.Union.RefuseDelete do
   defstruct [:because, :__spark_metadata__]
   @type t :: %__MODULE__{}
 end
+
+defmodule AshStrangler.Union.InsertThrough do
+  @moduledoc """
+  An opt-in insert route on a `:dual_write` branch: an insert naming the branch
+  (`NEW."__branch" = '<branch>'`) lands in the legacy table. The legacy table
+  allocates its own key, the branch's plain `map` columns are written, `set:`
+  gives legacy columns a constant, and the trigger returns the view row of the
+  new key, so `RETURNING` carries the key and every default.
+  """
+  defstruct [:because, :set, :__spark_metadata__, columns: []]
+  @type t :: %__MODULE__{}
+end
