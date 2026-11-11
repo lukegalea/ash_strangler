@@ -24,7 +24,7 @@ defmodule AshStrangler.Union.Sql do
 
   alias AshStrangler.Sql.{Additive, Extension, Printer, View}
   alias AshStrangler.Twin
-  alias AshStrangler.Union.{Constant, Info, TenantKey, Unmapped}
+  alias AshStrangler.Union.{Constant, Info, InsertThrough, TenantKey, Unmapped}
   alias AshStrangler.Union.Extension, as: ExtensionEntry
   alias AshStrangler.Union.Map, as: MapEntry
 
@@ -405,20 +405,26 @@ defmodule AshStrangler.Union.Sql do
     values = Enum.map_join(columns, ", ", &"NEW.#{q(&1.name)}")
     owned = Info.owned(union).name
 
-    refusals =
-      Enum.map_join(Info.branches(union), "", fn b ->
-        reason =
-          if b.phase == :read_from_legacy,
-            do: b.refused_because,
-            else: "inserts land in the owned branch"
+    {declares, refusals} =
+      Enum.map_reduce(Info.branches(union), "", fn b, arms ->
+        case Info.insert_through(b) do
+          %InsertThrough{} = it when b.phase == :dual_write ->
+            {[declare_key_vars(b)], arms <> insert_route(union, b, it)}
 
-        "  IF NEW.\"__branch\" = #{Printer.literal(to_string(b.name))} THEN\n    #{refusal(b, :insert, reason)}\n  END IF;\n"
+          _ ->
+            reason =
+              if b.phase == :read_from_legacy,
+                do: b.refused_because,
+                else: "inserts land in the owned branch"
+
+            {[], arms <> branch_refusal(b, reason)}
+        end
       end)
 
     """
     DECLARE
       new_id uuid;
-    BEGIN
+    #{Enum.join(declares)}BEGIN
     #{refusals}  IF NEW."__branch" IS NOT NULL AND NEW."__branch" <> #{Printer.literal(to_string(owned))} THEN
         RAISE EXCEPTION 'strangler: unknown branch %', NEW."__branch";
       END IF;
@@ -487,6 +493,139 @@ defmodule AshStrangler.Union.Sql do
       RETURN OLD;
     END;
     """
+  end
+
+  # --- the insert route through a legacy branch ---------------------------------
+
+  defp branch_refusal(branch, reason) do
+    "  IF NEW.\"__branch\" = #{Printer.literal(to_string(branch.name))} THEN\n    #{refusal(branch, :insert, reason)}\n  END IF;\n"
+  end
+
+  # The branch arm that carries an insert into the legacy table. The legacy
+  # table allocates its own key, so the trigger inserts the legacy row, reads
+  # the allocated key columns back, upserts the extension columns under the
+  # key they derive, and re-reads the view row of that key: RETURNING carries
+  # the key and every default, with `__branch` naming this branch.
+  defp insert_route(union, b, it) do
+    frame = Printer.bare_frame(b.twin)
+    kinds = Info.lens_kinds(union, b.name)
+    [branch_key] = b.keys
+    key_columns = AshStrangler.Key.columns(branch_key)
+    key_sources = Enum.flat_map(b.keys, &List.wrap(&1.from))
+    set_columns = Keyword.keys(it.set)
+    extension = Info.extension_columns(b)
+    skipped = Info.not_written_back(b)
+    canonical_key = Info.key(union)
+
+    # The key expression over the allocated key columns, as the branch's select
+    # spells it: identical bytes except that each column is the RETURNING
+    # variable that now holds it.
+    key_sql =
+      View.key_sql(branch_key, Twin.relation(b.twin), fn {[], column} -> key_var(b, column) end)
+
+    writable =
+      union
+      |> Info.columns()
+      |> Enum.reject(&(&1.name in skipped or &1.name in extension))
+      |> Enum.filter(fn c ->
+        kinds[c.name] == :column and simple?(b, c.name) and
+          source_attr(b, c.name) not in key_sources and
+          source_attr(b, c.name) not in set_columns and
+          (it.columns == [] or c.name in it.columns)
+      end)
+
+    writable_names = Enum.map(writable, & &1.name)
+
+    guards =
+      "    IF NEW.#{q(canonical_key)} IS NOT NULL THEN\n      " <>
+        refusal(b, :insert, "the key column #{canonical_key} is allocated by the legacy table") <>
+        "\n    END IF;\n" <>
+        Enum.map_join(Info.columns(union), "", fn c ->
+          if c.name in extension or c.name in writable_names,
+            do: "",
+            else: insert_guard(b, c, kinds, skipped, key_sources, set_columns)
+        end)
+
+    insert_columns =
+      Enum.map(writable, &frame.({[], source_attr(b, &1.name)})) ++
+        Enum.map(it.set, fn {column, _} -> frame.({[], column}) end)
+
+    insert_values =
+      Enum.map(writable, &"CAST(NEW.#{q(&1.name)} AS #{legacy_type(b, &1.name)})") ++
+        Enum.map(it.set, fn {_, value} -> Printer.literal(value) end)
+
+    insert =
+      if insert_columns == [] do
+        "INSERT INTO #{Twin.relation(b.twin)} DEFAULT VALUES"
+      else
+        "INSERT INTO #{Twin.relation(b.twin)} (#{Enum.join(insert_columns, ", ")})\nVALUES (#{Enum.join(insert_values, ", ")})"
+      end
+
+    returning =
+      "RETURNING #{Enum.map_join(key_columns, ", ", &frame.({[], &1}))} " <>
+        "INTO #{Enum.map_join(key_columns, ", ", &key_var(b, &1))};\n"
+
+    "  IF NEW.\"__branch\" = #{Printer.literal(to_string(b.name))} THEN\n" <>
+      guards <>
+      "    #{insert} #{returning}" <>
+      extension_upsert_on_insert(union, extension, key_sql) <>
+      "    SELECT * INTO NEW FROM #{Info.view_name(union)} WHERE #{q(canonical_key)} = #{key_sql};\n" <>
+      "    IF NOT FOUND THEN RAISE EXCEPTION 'row % is not in #{Info.view(union)} after the insert', #{key_sql}; END IF;\n" <>
+      "    RETURN NEW;\n" <>
+      "  END IF;\n"
+  end
+
+  defp insert_guard(b, c, kinds, skipped, key_sources, set_columns) do
+    reason =
+      cond do
+        c.name in skipped ->
+          "column #{c.name} is not written back on insert"
+
+        kinds[c.name] == :column and source_attr(b, c.name) in set_columns ->
+          "column #{c.name} is set to a constant on this branch's inserts"
+
+        kinds[c.name] == :column and source_attr(b, c.name) in key_sources ->
+          "column #{c.name} is read from a legacy column that forms the row's key"
+
+        true ->
+          "column #{c.name} has no legacy column to write on this branch"
+      end
+
+    "    IF NEW.#{q(c.name)} IS NOT NULL THEN\n      #{refusal(b, :insert, reason)}\n    END IF;\n"
+  end
+
+  # A supplied extension column lands in the extension table under the new key;
+  # nothing supplied, no row.
+  defp extension_upsert_on_insert(_union, [], _key_sql), do: ""
+
+  defp extension_upsert_on_insert(union, extension, key_sql) do
+    key = q(Info.key(union))
+    supplied = Enum.map_join(extension, " OR ", &"NEW.#{q(&1)} IS NOT NULL")
+    names = Enum.map_join(extension, ", ", &q/1)
+    values = Enum.map_join(extension, ", ", &"NEW.#{q(&1)}")
+    sets = Enum.map_join(extension, ", ", &"#{q(&1)} = EXCLUDED.#{q(&1)}")
+
+    "    IF #{supplied} THEN\n" <>
+      "      INSERT INTO #{Info.extension_table(union)} (#{key}, #{names}) VALUES (#{key_sql}, #{values})\n" <>
+      "        ON CONFLICT (#{key}) DO UPDATE SET #{sets};\n    END IF;\n"
+  end
+
+  # The plpgsql variables an insert route reads the allocated key columns into,
+  # one per column the branch's key derives from, typed as the twin types them.
+  defp declare_key_vars(b) do
+    [branch_key] = b.keys
+
+    branch_key
+    |> AshStrangler.Key.columns()
+    |> Enum.map_join("", fn column ->
+      "  #{key_var(b, column)} #{Printer.pg_type!(Twin.type!(b.twin, column))};\n"
+    end)
+  end
+
+  defp key_var(b, column) do
+    [branch_key] = b.keys
+    index = Enum.find_index(AshStrangler.Key.columns(branch_key), &(&1 == column))
+    "strangler_#{b.name}_key_#{index}"
   end
 
   defp update_branch(_union, %{phase: :read_from_legacy} = b),
