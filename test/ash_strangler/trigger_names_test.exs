@@ -316,6 +316,112 @@ defmodule AshStrangler.TriggerNamesTest do
     assert length(Enum.uniq(names)) == 6
   end
 
+  # A fresh view resource over `trgnames.items` whose view table is `table`.
+  defp define_twin(table) do
+    name = "AshStrangler.TriggerNamesTest.Dyn#{System.unique_integer([:positive])}"
+
+    ExUnit.CaptureIO.capture_io(:stderr, fn ->
+      Code.eval_string("""
+      defmodule #{name} do
+        use Ash.Resource,
+          domain: nil,
+          validate_domain_inclusion?: false,
+          data_layer: AshPostgres.DataLayer,
+          extensions: [AshStrangler.Resource]
+
+        postgres do
+          table "#{table}"
+          schema "trgnames"
+          repo AshStrangler.TestRepo
+          migrate? false
+        end
+
+        attributes do
+          attribute :id, :uuid, primary_key?: true, allow_nil?: false, writable?: false
+          attribute :full_name, :string, public?: true
+        end
+
+        actions do
+          defaults [:read]
+        end
+
+        strangler do
+          phase :dual_write
+
+          source AshStrangler.TriggerNamesTest.Items do
+            writes :triggers
+            key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+            concat :full_name, from: [:first_name, :last_name], separator: " "
+          end
+        end
+      end
+      """)
+    end)
+
+    Module.concat([name])
+  end
+
+  defp function_names(module) do
+    for statement <- Migration.statements(module),
+        [function] <-
+          Regex.scan(~r/CREATE OR REPLACE FUNCTION "trgnames"\."([^"]+)"\(\)/, statement.up,
+            capture: :all_but_first
+          ),
+        do: function
+  end
+
+  defp install_and_list(module) do
+    for statement <- Migration.statements(module), do: TestRepo.query!(statement.up, [])
+    triggers(AshPostgres.DataLayer.Info.table(module))
+  end
+
+  defp operation(name), do: name |> String.split("_") |> List.last()
+
+  defp assert_valid(names) do
+    assert length(names) == 3
+    assert length(Enum.uniq(names)) == 3
+    assert Enum.all?(names, &(byte_size(&1) <= 63 and String.valid?(&1)))
+    assert names |> Enum.map(&operation/1) |> Enum.sort() == ["delete", "insert", "update"]
+  end
+
+  test "a 50-byte table keeps the names PostgreSQL truncates them to, and they are distinct" do
+    table = String.duplicate("h", 50)
+    module = define_twin(table)
+    names = function_names(module)
+
+    assert length(names) == 3
+    assert Enum.all?(names, &(byte_size(&1) == 63))
+
+    assert Enum.sort(names) ==
+             Enum.sort(
+               for op <- ~w(insert update delete),
+                   do: binary_part("strangler_#{table}_#{op}", 0, 63)
+             )
+
+    assert length(Enum.uniq(names)) == 3
+
+    stored = install_and_list(module)
+    assert length(stored) == 3
+    assert Enum.sort(stored) == Enum.sort(names)
+  end
+
+  test "a 60-byte table is hashed into three distinct names" do
+    module = define_twin(String.duplicate("i", 60))
+    names = function_names(module)
+    assert_valid(names)
+    assert Enum.all?(names, &String.contains?(&1, "iiiiiiiiiiiiiiiiiiiiiiiii_"))
+    assert length(install_and_list(module)) == 3
+  end
+
+  test "a multi-byte table gets valid UTF-8 names within 63 bytes that end in the operation" do
+    for table <- [String.duplicate("é", 30), String.duplicate("表", 20)] do
+      module = define_twin(table)
+      names = function_names(module)
+      assert_valid(names)
+      assert length(install_and_list(module)) == 3
+    end
+  end
+
   test "the down statements drop the objects they created" do
     for statement <- Enum.reverse(Migration.statements(Long)),
         do: TestRepo.query!(statement.down, [])

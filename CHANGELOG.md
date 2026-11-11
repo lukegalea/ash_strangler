@@ -37,10 +37,15 @@ Requires Elixir 1.20 or later.
   identifier to 63 bytes. `strangler_<table>_insert`, `_update` and `_delete` overflow from a table
   name of 47 bytes, and from 52 the cut removes the operation altogether: the three were one object,
   each `CREATE OR REPLACE` replaced the last, and a write the view could not carry by itself was
-  refused. A name that overflows is now a table prefix and a hash of the table, the rule
-  `:read_from_new`'s triggers already followed. A name that fits is unchanged. A view table of 47 to
-  51 bytes had three working but truncated names; regenerating renames them, so drop the old
-  truncated triggers and functions (`\df+ strangler_*`) when you apply it.
+  refused. A name that overflows keeps the name PostgreSQL stores (cut to 63 bytes on a character
+  boundary, and now spelled out in the generated SQL) when the three cut names are distinct, which
+  they are for a view table of 47 to 51 bytes, so those existing triggers and functions are not
+  renamed. Only names that would collide become a table prefix and a hash of the table, the rule
+  `:read_from_new`'s triggers already followed. A name that fits is unchanged.
+- **Trigger and function names for a non-ASCII table stay within 63 bytes.** The overflow prefix was
+  25 graphemes, which for multi-byte characters could exceed the limit and let PostgreSQL cut the
+  operation off again. It is now at most 25 bytes, ending on a character boundary, in both the
+  forward and the reverse triggers.
 
 ### Documentation
 

@@ -1006,6 +1006,29 @@ defmodule AshStrangler.ReverseWritesTest do
     end
   end
 
+  describe "object names" do
+    defp reverse_function_names(table) do
+      for %{up: up} <- ReverseTriggers.build(gadget_resource(table: table)),
+          [name] <-
+            Regex.scan(~r/CREATE OR REPLACE FUNCTION "[^"]+"\."([^"]+)"\(\)/, up,
+              capture: :all_but_first
+            ),
+          do: name
+    end
+
+    test "a multi-byte table keeps three distinct, valid, 63-byte-safe names ending in the operation" do
+      for table <- [String.duplicate("é", 30), String.duplicate("表", 20)] do
+        names = reverse_function_names(table)
+
+        assert length(Enum.uniq(names)) == 3
+        assert Enum.all?(names, &(byte_size(&1) <= 63 and String.valid?(&1)))
+
+        assert names |> Enum.map(&(&1 |> String.split("_") |> List.last())) |> Enum.sort() ==
+                 ["delete", "insert", "update"]
+      end
+    end
+  end
+
   # --- helpers -----------------------------------------------------------------
 
   defp install!(resource) do

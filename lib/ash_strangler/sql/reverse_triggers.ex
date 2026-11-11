@@ -155,7 +155,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   """
 
   alias AshStrangler.{Expr, Info, Key, Lens, Mechanism, Twin}
-  alias AshStrangler.Sql.{Printer, ReverseView, View}
+  alias AshStrangler.Sql.{ObjectName, Printer, ReverseView, View}
 
   # The alias of the owned table in a generated `UPDATE`, so a column's stored value
   # is never read by a bare name a PL/pgSQL variable could shadow.
@@ -402,13 +402,11 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   defp object_name(ctx, operation) do
     name = "strangler_#{ctx.table}_reverse_#{operation}"
 
-    if byte_size(name) <= 63 do
+    if byte_size(name) <= ObjectName.max_bytes() do
       name
     else
-      hash =
-        :sha256 |> :crypto.hash(ctx.table) |> Base.encode16(case: :lower) |> binary_part(0, 8)
-
-      "strangler_#{String.slice(ctx.table, 0, 25)}_#{hash}_reverse_#{operation}"
+      prefix = ObjectName.byte_prefix(ctx.table, 25)
+      "strangler_#{prefix}_#{ObjectName.hash(ctx.table)}_reverse_#{operation}"
     end
   end
 
