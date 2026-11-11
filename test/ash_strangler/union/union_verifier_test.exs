@@ -273,4 +273,71 @@ defmodule AshStrangler.UnionVerifierTest do
       assert rejection(valid(south: twice)) =~ "at most one `refuse_delete`"
     end
   end
+
+  describe "insert_through" do
+    test "a :read_from_legacy branch takes none, and neither does the owned branch" do
+      north = String.replace(@north, "phase :dual_write", "phase :read_from_legacy")
+
+      assert rejection(valid(north: inside(north, ~S|insert_through because: "why"|))) =~
+               "`insert_through` needs the branch at `:dual_write`, and branch :north is at :read_from_legacy"
+
+      assert rejection(valid(owned: ~S|owned :native do insert_through because: "why" end|)) =~
+               "owned branch takes no `insert_through`"
+    end
+
+    test "an empty because" do
+      assert rejection(valid(north: inside(@north, ~S|insert_through because: " "|))) =~
+               "`insert_through` has an empty `because`"
+    end
+
+    test "a constant naming a column the twin lacks, and one it types incompatibly" do
+      assert rejection(
+               valid(north: inside(@north, ~S|insert_through because: "why", set: [nope: true]|))
+             ) =~
+               "sets :nope, which AshStrangler.Test.Clinic.Legacy.NorthVisits does not have"
+
+      assert rejection(
+               valid(
+                 north: inside(@north, ~S|insert_through because: "why", set: [site_id: "north"]|)
+               )
+             ) =~
+               ~s|sets :site_id to "north", which the twin types as Ash.Type.Integer|
+    end
+
+    test "a set constant on the branch's own key column" do
+      assert rejection(
+               valid(north: inside(@north, ~S|insert_through because: "why", set: [id: 7]|))
+             ) =~
+               "sets :id, which forms the row's key"
+    end
+
+    test "a write list with a column the insert cannot write, twice, or one it does not declare" do
+      assert rejection(valid(north: inside(@north, ~S|insert_through [:notes], because: "why"|))) =~
+               "names :notes, which has no legacy column to write"
+
+      assert rejection(valid(north: inside(@north, ~S|insert_through [:ghost], because: "why"|))) =~
+               "names :ghost, which is not a declared column"
+
+      assert rejection(valid(north: inside(@north, ~S|insert_through [:id], because: "why"|))) =~
+               "names :id, which is the key"
+
+      assert rejection(
+               valid(
+                 north: inside(@north, "insert_through [:patient, :patient], because: \"why\"")
+               )
+             ) =~
+               "insert_through column :patient is declared 2 times"
+    end
+
+    test "a declaration the branch can carry is accepted" do
+      assert :ok =
+               VerifyUnion.verify(
+                 probe(
+                   valid(
+                     north: inside(@north, ~S|insert_through because: "why", set: [clinic_id: 7]|)
+                   )
+                 ).spark_dsl_config()
+               )
+    end
+  end
 end
