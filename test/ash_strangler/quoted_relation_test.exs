@@ -521,6 +521,23 @@ defmodule AshStrangler.QuotedRelationTest do
       end
     end
 
+    test "a hand-written config quotes the mixed-case relation itself" do
+      # The hand-passed config's `relation:` is a SQL `FROM` item, used verbatim:
+      # the caller quotes a mixed-case name, exactly as the derived config's
+      # `View.from_clause/1` does. `qrel.Mixed_Items` would fold to lowercase and
+      # name nothing.
+      TestRepo.query!(~s|INSERT INTO qrel."Mixed_Items" (id, name) VALUES (31, 'c')|, [])
+
+      config = [
+        legacy: [relation: ~s|qrel."Mixed_Items"|, key: "id"],
+        view: [relation: ~s|qrel."Mixed_Items"|, key: "id"],
+        columns: [name: "name"]
+      ]
+
+      assert %{agrees?: true, counts: %{legacy: 1, view: 1, drift: 0}} =
+               AshStrangler.Reconciler.diff(TestRepo, config)
+    end
+
     test "derived views read from it" do
       sql = up(MixedDerived)
       assert sql =~ "FROM #{@quoted}"
