@@ -396,7 +396,8 @@ defmodule AshStrangler.Reconciler do
     # `AshStrangler.Sql.View` creates the view under. A reconciler that resolved
     # the relation differently from the generator would be checking a relation
     # the generator did not make.
-    "#{AshPostgres.DataLayer.Info.schema(resource) || "public"}.#{table}"
+    schema = AshPostgres.DataLayer.Info.schema(resource) || "public"
+    "#{Printer.identifier(schema)}.#{Printer.identifier(table)}"
   end
 
   defp compared_lenses(resource) do

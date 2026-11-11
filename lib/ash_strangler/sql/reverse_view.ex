@@ -100,7 +100,7 @@ defmodule AshStrangler.Sql.ReverseView do
   defp do_build(resource) do
     table = AshPostgres.DataLayer.Info.table(resource)
     new_relation = owned_relation(resource)
-    relation = Info.relation(resource)
+    relation = AshStrangler.Twin.sql_relation(Info.twin(resource))
 
     columns = reverse_columns!(resource)
 
@@ -133,7 +133,7 @@ defmodule AshStrangler.Sql.ReverseView do
       [
         AshStrangler.Sql.Additive.reshape_view(
           :"strangler_#{AshPostgres.DataLayer.Info.table(resource)}_reverse_view",
-          Info.relation(resource),
+          AshStrangler.Twin.sql_relation(Info.twin(resource)),
           names
         )
       ]

@@ -66,7 +66,7 @@ defmodule AshStrangler.Sql.Triggers do
   """
 
   alias AshStrangler.{Info, Lens, Sql, Twin}
-  alias AshStrangler.Sql.Printer
+  alias AshStrangler.Sql.{ObjectName, Printer}
 
   # Captured at compile time because a guard cannot call a remote function. There is
   # still exactly one definition of the name -- `AshStrangler.Backfill.flag_column/0`
@@ -593,22 +593,32 @@ defmodule AshStrangler.Sql.Triggers do
 
   defp trigger_name(ctx, operation), do: ~s("#{object_name(ctx, operation)}")
 
-  # PostgreSQL truncates an identifier to 63 bytes without complaint, and the
-  # operation is the end of this name: for a long table the three functions, and the
-  # three triggers, would be one object, each `CREATE OR REPLACE` replacing the last.
-  # A name that overflows is a table prefix and a hash of the whole table name, the
-  # rule `AshStrangler.Sql.ReverseTriggers` applies. A name that fits is unchanged.
+  # PostgreSQL stores an identifier of at most 63 bytes and cuts a longer one without
+  # complaint. For a table of 47 to 51 bytes the cut leaves the first letter of the
+  # operation, so the three names are still distinct and have always worked; those
+  # objects exist, so a name that overflows keeps the name PostgreSQL stores, spelled
+  # out so a `DROP` names it exactly. Only when the three cut names would collide (a
+  # longer table loses the operation altogether, and the three would be one object,
+  # each `CREATE OR REPLACE` replacing the last) does the name become a table prefix of
+  # at most 25 bytes and a hash of the whole table, the rule
+  # `AshStrangler.Sql.ReverseTriggers` applies.
   defp object_name(ctx, operation) do
     name = "strangler_#{ctx.table}_#{operation}"
 
-    if byte_size(name) <= 63 do
-      name
-    else
-      hash =
-        :sha256 |> :crypto.hash(ctx.table) |> Base.encode16(case: :lower) |> binary_part(0, 8)
-
-      "strangler_#{String.slice(ctx.table, 0, 25)}_#{hash}_#{operation}"
+    cond do
+      byte_size(name) <= ObjectName.max_bytes() -> name
+      distinct_when_cut?(ctx.table) -> ObjectName.truncate(name)
+      true -> hashed_name(ctx.table, operation)
     end
+  end
+
+  defp distinct_when_cut?(table) do
+    cut = for op <- ~w(insert update delete), do: ObjectName.truncate("strangler_#{table}_#{op}")
+    length(Enum.uniq(cut)) == 3
+  end
+
+  defp hashed_name(table, operation) do
+    "strangler_#{ObjectName.byte_prefix(table, 25)}_#{ObjectName.hash(table)}_#{operation}"
   end
 
   # `because:` is user-supplied prose and routinely contains apostrophes -- the

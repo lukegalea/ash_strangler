@@ -31,16 +31,25 @@ Requires Elixir 1.20 or later.
   failed. `Twin.sql_relation/1` spells the relation through the printer's identifier rule, and a
   lowercase name stays bare, so the SQL for every existing relation is unchanged. `Twin.relation/1`
   is still the logical name that a report prints and a derived key hashes. A join's `on:` columns
-  go through the same rule. Other modules that name a relation in SQL (the backfill, the
-  reconciler, the reverse view, unions and derived views) still print it unquoted.
+  go through the same rule.
+- **The reconciler, the reverse view and its triggers, unions, derived views, the
+  obligation assertions and the observation baseline quote a mixed-case relation too.** They
+  interpolated the logical name into `FROM`, `UPDATE`, `DELETE FROM` and `CREATE VIEW`, so a
+  mixed-case legacy relation (or a mixed-case view table, for the reconciler) was folded to
+  lowercase and the statement failed. A lowercase name stays bare, so existing SQL is unchanged.
 - **The trigger and function names of a long view no longer collapse into one.** PostgreSQL cuts an
   identifier to 63 bytes. `strangler_<table>_insert`, `_update` and `_delete` overflow from a table
   name of 47 bytes, and from 52 the cut removes the operation altogether: the three were one object,
   each `CREATE OR REPLACE` replaced the last, and a write the view could not carry by itself was
-  refused. A name that overflows is now a table prefix and a hash of the table, the rule
-  `:read_from_new`'s triggers already followed. A name that fits is unchanged. A view table of 47 to
-  51 bytes had three working but truncated names; regenerating renames them, so drop the old
-  truncated triggers and functions (`\df+ strangler_*`) when you apply it.
+  refused. A name that overflows keeps the name PostgreSQL stores (cut to 63 bytes on a character
+  boundary, and now spelled out in the generated SQL) when the three cut names are distinct, which
+  they are for a view table of 47 to 51 bytes, so those existing triggers and functions are not
+  renamed. Only names that would collide become a table prefix and a hash of the table, the rule
+  `:read_from_new`'s triggers already followed. A name that fits is unchanged.
+- **Trigger and function names for a non-ASCII table stay within 63 bytes.** The overflow prefix was
+  25 graphemes, which for multi-byte characters could exceed the limit and let PostgreSQL cut the
+  operation off again. It is now at most 25 bytes, ending on a character boundary, in both the
+  forward and the reverse triggers.
 
 ### Documentation
 

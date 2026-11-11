@@ -227,9 +227,9 @@ defmodule AshStrangler.Union.Sql do
     if strategy == :identity do
       []
     else
-      relation = Twin.relation(branch.twin)
+      relation = Twin.sql_relation(branch.twin)
       name = "strangler_#{Info.view(union)}_#{branch.name}_key_idx"
-      expression = View.key_sql(key, relation, Printer.bare_frame(branch.twin))
+      expression = View.key_sql(key, Twin.relation(branch.twin), Printer.bare_frame(branch.twin))
 
       [
         %{
@@ -295,7 +295,7 @@ defmodule AshStrangler.Union.Sql do
         else: ""
 
     "SELECT #{key_sql} AS #{q(Info.key(union))},\n  #{Printer.literal(to_string(branch.name))}::text AS \"__branch\",\n  #{columns}#{tenant_parts(union, branch, frame)}\n" <>
-      "FROM #{Twin.relation(branch.twin)}#{join}#{where(branch, frame)}"
+      "FROM #{Twin.sql_relation(branch.twin)}#{join}#{where(branch, frame)}"
   end
 
   defp where(%{filter: nil}, _frame), do: ""
@@ -541,7 +541,7 @@ defmodule AshStrangler.Union.Sql do
             end
           )
 
-        "    UPDATE #{Twin.relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
+        "    UPDATE #{Twin.sql_relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
           "    IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Twin.relation(b.twin)}', OLD.#{q(Info.key(union))}; END IF;\n"
       end
 
@@ -582,7 +582,7 @@ defmodule AshStrangler.Union.Sql do
   end
 
   defp delete_legacy_row(union, b) do
-    "    DELETE FROM #{Twin.relation(b.twin)} WHERE #{legacy_match(union, b)};\n" <>
+    "    DELETE FROM #{Twin.sql_relation(b.twin)} WHERE #{legacy_match(union, b)};\n" <>
       "    IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Twin.relation(b.twin)}', OLD.#{q(Info.key(union))}; END IF;\n"
   end
 

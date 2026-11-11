@@ -127,7 +127,7 @@ defmodule AshStrangler.Observation.Baseline do
       repo.query!(
         """
         SELECT to_jsonb(t) AS row FROM (
-          SELECT * FROM #{schema}.#{table}
+          SELECT * FROM #{AshStrangler.Sql.Printer.identifier(schema)}.#{AshStrangler.Sql.Printer.identifier(table)}
           WHERE ($1::text IS NULL OR #{key_sql} > $1::#{key_type})
           ORDER BY #{key_sql}
           LIMIT #{@batch}
