@@ -51,9 +51,18 @@ Requires Elixir 1.20 or later.
   25 graphemes, which for multi-byte characters could exceed the limit and let PostgreSQL cut the
   operation off again. It is now at most 25 bytes, ending on a character boundary, in both the
   forward and the reverse triggers.
+- **A union key index whose relation lives in a schema that contains a dot drops correctly.** The
+  index's `down` statement found the schema by splitting the spelled relation on its first dot, so a
+  branch twin in `"odd.schema"` produced `DROP INDEX IF EXISTS "odd.strangler_...` — an unterminated
+  identifier — while the `up` had installed the index in the right schema. The schema now comes from
+  the twin, spelled through the printer's identifier rule, the way the derived view's key index
+  already qualifies its own drop. A twin with no schema leaves the drop unqualified, as before.
 
 ### Documentation
 
+- The reconciler documents that a hand-written `relation:` is a SQL `FROM` item, used verbatim:
+  a caller naming a mixed-case relation quotes it itself (`~s(legacy."Users")`), because the
+  unquoted spelling folds to lowercase, and the derived config already spells both sides that way.
 - `estates.md` says `--strict` with `--no-data` is refused for `--estate` too.
 - `phases.md` calls out that a legacy `INSERT` at `:read_from_new` which leaves out a mapped column
   stores `NULL` rather than the legacy default, a documented limit, with the workaround (a default
