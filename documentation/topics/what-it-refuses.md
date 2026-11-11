@@ -21,7 +21,7 @@ compiling the broken mapping and reading what came out.
 
 ## Two layers, and one rule about the boundary
 
-There are **twenty verifiers** and, behind one of them, **ten proof obligations**.
+There are **thirty verifiers** and, behind one of them, **ten proof obligations**.
 The split is not arbitrary. A verifier answers a question about the *declaration* —
 is this attribute accounted for, does this identity exist, is this reference a real
 column. An obligation answers a question about the *values*: is there a legacy
@@ -292,8 +292,8 @@ that for a single column buys nothing.
 
 ## A timestamp cast the session can move
 
-A naive legacy timestamp feeding an aware attribute is refused unless the mapping
-says which zone the column is recorded in.
+**`VerifyTimestampZones`**: a naive legacy timestamp feeding an aware attribute is
+refused unless the mapping says which zone the column is recorded in.
 
 ```elixir
 map :archived_at, from: :deleted_at            # refused
@@ -1195,6 +1195,47 @@ the catalog does not have, a whole relation declared while something reads
 it, two resources writing one column, and a mapped foreign key that is
 `NOT VALID` or points at columns nothing maps, unless it is an
 `open_reference`.
+
+### A secret that is still an attribute
+
+**`VerifySecrets`** refuses a twin that declares a column `secrets` and also keeps
+it as an attribute. Omitting the attribute is the whole mechanism that keeps the
+column out of every view, ledger image and notification, so a declaration beside a
+kept attribute would be a comment. Delete the attribute or regenerate the twin.
+
+### A twin that disagrees with its snapshot
+
+**`VerifySnapshot`** compares a twin pinned with `twin do snapshot "…" end` to the
+catalog, with no database: a relation the catalog lacks, a column it does not have,
+a different type, `one_of` set or nullability, a catalog column the twin leaves out
+that is neither secret nor untypable, a different primary key, or a secret that is
+not a column. A twin written by `mix ash_strangler.gen.twin --from-snapshot` passes
+by construction; a hand edit that drifts does not.
+
+### A watched twin with no key
+
+**`VerifyWatch`** refuses `watch` on a twin without a primary key. The notification
+carries the key of the changed row and nothing else, so a keyless relation would
+announce that something changed and say nothing about what.
+
+### A union that cannot answer for its branches
+
+**`VerifyUnion`** checks an `AshStrangler.Union` at compile time: one `view`, at
+least one legacy branch and exactly one owned branch; unique column, branch and key
+names; a branch twin that is a twin and reads only its own columns; exactly one
+supported `key` per branch and every column answered once; no two columns mapped
+from one legacy column on a `:dual_write` branch; and no two branches sharing a key
+namespace, whose ids would collide. Each refusal names the branch and the column.
+
+### A derived view that cannot answer for its sources
+
+**`VerifyDerived`** checks an `AshStrangler.Derived` at compile time: a `view`, a
+twin, a registry that declares the `logical` kind, and `from` columns the twin has;
+at least one source, with unique source and column names and no column named like
+the key or `__source`; every column answered exactly once by each source and read
+only from the twin; and for an `element`, a `from` column, a `value` column and a
+different `ordinal` column, none of which a `slot` or `synthesized` row sets. Each
+refusal names the source and the column.
 
 # What replaced the checks that are gone
 
