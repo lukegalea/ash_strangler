@@ -74,6 +74,15 @@ defmodule AshStrangler.Reconciler do
   function and nothing else, so the derived path is a caller of the hand-passed
   one rather than a replacement for it.
 
+  Both `relation:` values are a SQL `FROM` item, used verbatim: every query
+  this module runs says `FROM <relation>` and nothing parses the string. The
+  derived config therefore passes `AshStrangler.Sql.View.from_clause/1` on the
+  legacy side — the view's own `FROM`, joins and all — and quotes the view
+  side through the printer's identifier rule. A hand-written config naming a
+  mixed-case relation quotes it the same way: `~s(legacy."Users")`, since the
+  unquoted `legacy.Users` is folded to `legacy.users` and names a relation
+  that does not exist.
+
   ## Normalization, and why it is derived rather than passed
 
   Ash normalises values on the way in. `Ash.Type.CiString` trims by default, so

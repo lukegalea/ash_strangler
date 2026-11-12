@@ -235,16 +235,20 @@ defmodule AshStrangler.Union.Sql do
         %{
           name: :"#{name}",
           up: "CREATE INDEX IF NOT EXISTS #{name} ON #{relation} (#{expression});",
-          down: "DROP INDEX IF EXISTS #{qualify(relation, name)};"
+          down: "DROP INDEX IF EXISTS #{qualify(branch.twin, name)};"
         }
       ]
     end
   end
 
-  defp qualify(relation, name) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, _table] -> "#{schema}.#{name}"
-      [_table] -> name
+  # The index lives in the schema of the relation it indexes. The schema comes
+  # from the twin rather than from splitting the spelled relation: a quoted
+  # schema or table may itself contain a dot (`"odd.schema"."t"`), and a string
+  # split cannot tell that dot from the separator's.
+  defp qualify(twin, name) do
+    case AshPostgres.DataLayer.Info.schema(twin) do
+      nil -> name
+      schema -> "#{Printer.identifier(schema)}.#{name}"
     end
   end
 
