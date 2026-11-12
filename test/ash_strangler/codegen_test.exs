@@ -358,6 +358,42 @@ defmodule AshStrangler.CodegenTest do
     end
   end
 
+  describe "mix ash_strangler.gen.migration" do
+    test "refreshes the snapshots of the resources it writes when the domain attaches" do
+      attach!()
+      root = tmp_root()
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      assert Codegen.pending(snapshot_root: root) != []
+
+      capture_io(fn ->
+        Mix.Tasks.AshStrangler.Gen.Migration.run([
+          "--name",
+          "install_layer",
+          "--only",
+          inspect(@resource)
+        ])
+      end)
+
+      assert File.exists?(Codegen.snapshot_path(root, @resource))
+      assert Codegen.pending(snapshot_root: root) == []
+      assert [_] = Path.wildcard(Path.join(root, "repo_priv/migrations/*_install_layer.exs"))
+    end
+
+    test "leaves snapshots alone when no domain attaches" do
+      root = tmp_root()
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      capture_io(fn ->
+        Mix.Tasks.AshStrangler.Gen.Migration.run(["--name", "install_layer"])
+      end)
+
+      refute File.exists?(root) and Path.wildcard(Path.join(root, "**/*.json")) != []
+    end
+  end
+
   describe "next_migration_version/1" do
     test "it allocates strictly after an existing newer file" do
       dir = migrations_tmp_dir()
