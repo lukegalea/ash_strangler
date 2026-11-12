@@ -16,7 +16,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
 
   ## Why this is not `mix ash.codegen`
 
-  Because it cannot be. A strangler resource's `table` names a view, so it must
+  By itself, `mix ash.codegen` cannot write this DDL. A strangler resource's `table` names a view, so it must
   declare `migrate? false` — otherwise codegen emits a `create table` for that
   name and the view DDL then fails against it. But `migrate? false` also stops
   the migration generator producing a snapshot for the resource, and
@@ -27,6 +27,16 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
   AshPostgres itself takes for view-backed resources — `mix
   ash_postgres.gen.resources --include-views` writes `migrate? false` beside a
   comment saying migrations for views are handled manually.
+
+  ## Covering it from `mix ash.codegen`
+
+  What `mix ash.codegen` can do is *notice* the layer. Attach `AshStrangler.Codegen` to the
+  domain (`use Ash.Domain, extensions: [AshStrangler.Codegen]`) and `mix ash.codegen --check`
+  fails in CI when the rendered DDL differs from the committed snapshots, while `mix ash.codegen
+  <name>` writes a `<version>_<name>_strangler.exs` migration beside AshPostgres's own. This task
+  stays available: when the domain attaches the extension, it refreshes the snapshots of the
+  resources it writes, so the two ways of writing the DDL cannot disagree. See the
+  [codegen guide](codegen.md).
 
   ## Regenerating is safe
 
@@ -113,6 +123,27 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
 
       Review it, then run `mix ecto.migrate`.
       """)
+
+      refresh_snapshots(resources)
+    end
+  end
+
+  # A domain that attaches `AshStrangler.Codegen` has committed snapshots that
+  # `mix ash.codegen --check` compares against. Writing the DDL here without
+  # refreshing them would leave the two ways of writing it in disagreement, so
+  # the resources this migration covers get their snapshots rewritten.
+  defp refresh_snapshots(resources) do
+    if AshStrangler.Codegen.attached?() do
+      case AshStrangler.Codegen.write_snapshots!(resources: resources) do
+        [] ->
+          :ok
+
+        paths ->
+          Mix.shell().info(
+            "Refreshed #{length(paths)} strangler snapshot(s): " <>
+              Enum.map_join(paths, ", ", &Path.relative_to_cwd/1)
+          )
+      end
     end
   end
 
@@ -137,7 +168,7 @@ defmodule Mix.Tasks.AshStrangler.Gen.Migration do
     repo = repo(opts)
     priv = repo.config()[:priv] || Path.join("priv", repo_dir(repo))
 
-    Path.join([File.cwd!(), priv, "migrations"])
+    Path.expand(Path.join(priv, "migrations"))
   end
 
   defp repo_dir(repo) do
