@@ -155,6 +155,10 @@ defmodule AshStrangler.Test.LegacySchema do
     # and the extension table carries the columns the legacy schema has no
     # room for (R1.2).
     install_resource!(AshStrangler.Test.Contract)
+    # The :dual_write DELETE decision: an archival destroy is an UPDATE of the
+    # archive column, an exclude_destroy_actions destroy is a hard delete.
+    install_resource!(AshStrangler.Test.ArchivedUser)
+    install_resource!(AshStrangler.Test.ExcludedDestroyUser)
 
     :ok
   end

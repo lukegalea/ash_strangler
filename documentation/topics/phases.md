@@ -218,6 +218,20 @@ trigger raises when something attempts the write:
 ERROR:  cannot write %.%: Not decomposable: 'de la Cruz' splits wrong, and no rule fixes it.
 ```
 
+**What a `DELETE` does here is the other half of an asymmetry the phase model
+makes deliberately.** At `:dual_write` the legacy table is still the system of
+record. An Ash destroy on a resource that uses `AshArchival` reaches the
+compatibility view as an **`UPDATE` of the mapped archive column** —
+`AshArchival` turns the destroy into an update, it archives the legacy row,
+and the dual-write `INSTEAD OF DELETE` never fires. The only `DELETE`s the
+dual-write `INSTEAD OF DELETE` sees are deliberate hard deletes: a destroy
+action listed in `exclude_destroy_actions`, a resource without archival, or
+SQL written against the view. Deleting the legacy row is correct for those;
+converting them into archives would override an explicit choice. The legacy
+application's own `DELETE` on its own table is outside this package. (At
+`:read_from_new` the same `DELETE` lands differently — the next section
+documents what the reverse view's `INSTEAD OF DELETE` archives there.)
+
 This is also the phase in which you run the backfill and the reconciler. Neither
 changes what is generated; both are how you earn the right to move on.
 
@@ -380,11 +394,47 @@ auto-updatable view would delete the owned row. Where the view is otherwise plai
 is the only trigger emitted, so the `INSERT` and `UPDATE` stay automatic and `ON CONFLICT`
 keeps working.
 
-Two limits come with it. The reverse view does not hide archived rows, as the forward
+One limit comes with it. The reverse view does not hide archived rows, as the forward
 view does not: an application that soft-deletes already filters on `deleted_at`, and one
-that physically deleted and never read that column will keep seeing the row. And
-`AshArchival`'s `archive_related` cascade is an Ash action that a trigger does not run,
-so a legacy `DELETE` archives the one row.
+that physically deleted and never read that column will keep seeing the row.
+
+**The `DELETE` also cascades `archive_related`.** `AshArchival`'s own cascade is Ash
+actions, which a trigger cannot run, so the `INSTEAD OF DELETE` does the same work in the
+`DELETE`'s own statement: for each relationship in the resource's `archive_related`, in
+declared order, it stamps the destination's archive column (its own column name,
+honouring `source:`) with `now()` on the related rows that are not archived yet, then
+does the same through each destination's own `archive_related`, again only from rows
+this statement archived. It is one statement of data-modifying CTEs chained with
+`RETURNING`, so the `DELETE` and its cascade commit or fail together, and every row it
+archives carries the same stamp. A related row archived earlier keeps its stamp and is
+not followed, as `AshArchival`, which reads through the archive filter, does not follow
+it; a `DELETE` of a row that was archived already is `DELETE 0` and cascades nothing.
+
+It stamps the archive column and nothing else. The destination's destroy action, its
+other changes, validations and notifiers do not run, exactly as for the row the legacy
+`DELETE` archives itself; a destination strangled with `ledger? true` has its ledger
+trigger on its owned table, which records the update.
+
+A relationship a trigger cannot follow faithfully is refused at compile time, at every
+level of the cascade, by `AshStrangler.Verifiers.VerifyArchiveRelated`, naming the
+resource that declares it, the relationship and the reason:
+
+  * the relationship does not exist, or is `many_to_many`, `manual`, `no_attributes?`,
+    has a `filter`, or is a `has_one` with `from_many?` — which rows it relates is
+    something only Ash computes;
+  * the destination is outside `AshPostgres.DataLayer`, in another repo, has no table,
+    uses `:context` multitenancy, or is temporal;
+  * the destination is strangled at `:read_from_legacy` or `:dual_write`, where its
+    table is still the compatibility view over the legacy table — the cascade can
+    follow it once that resource reaches `:read_from_new` and owns its table;
+  * the destination does not use `AshArchival.Resource`, or its primary destroy action
+    does not archive (there is none, or it is in `exclude_destroy_actions`) —
+    `AshArchival` would destroy those rows;
+  * a resource on the way sets `archive_related_arguments`, which SQL cannot pass;
+  * a cycle: one statement cannot update the same row twice, and a cycle has no depth
+    to stop at.
+
+There is no opt-out: take the relationship out of `archive_related`, or change it.
 
 Because it projects *backwards*, this view can only be built from mappings whose
 reverse exists. **`AshStrangler.Verifiers.VerifyReverseMappable` refuses the phase

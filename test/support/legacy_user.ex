@@ -14,6 +14,8 @@ defmodule AshStrangler.Test.Domain do
     resource AshStrangler.Test.LedgerUser
     resource AshStrangler.Test.ExtendedUser
     resource AshStrangler.Test.Contract
+    resource AshStrangler.Test.ArchivedUser
+    resource AshStrangler.Test.ExcludedDestroyUser
   end
 end
 

@@ -21,7 +21,7 @@ compiling the broken mapping and reading what came out.
 
 ## Two layers, and one rule about the boundary
 
-There are **thirty verifiers** and, behind one of them, **ten proof obligations**.
+There are **thirty-one verifiers** and, behind one of them, **ten proof obligations**.
 The split is not arbitrary. A verifier answers a question about the *declaration* —
 is this attribute accounted for, does this identity exist, is this reference a real
 column. An obligation answers a question about the *values*: is there a legacy
@@ -1173,6 +1173,21 @@ archive attribute with no writable mapping. Extension storage is not enough:
 AshArchival would mark the extension row while the legacy lifecycle stayed
 silent. Map the archive timestamp onto the legacy encoding, or refuse
 archival on this resource. See `platform-conventions.md`.
+
+### An `archive_related` a trigger cannot follow
+
+**`VerifyArchiveRelated`** applies to a resource at `:read_from_new` that
+archives. Its legacy `DELETE` cascades `archive_related` in the trigger's own
+statement, by comparing foreign keys and stamping archive columns, so every
+relationship on the way, at every level, must be one a foreign key describes: not
+`many_to_many`, `manual`, `no_attributes?`, filtered or a `has_one` with
+`from_many?`; a destination in the same repo of `AshPostgres.DataLayer`, with a
+table, without `:context` multitenancy, not temporal, and, if it is strangled
+itself, past the compatibility view (`:read_from_new` or later, not
+`:read_from_legacy` or `:dual_write`); a destination that uses `AshArchival.Resource` and whose
+primary destroy archives; no `archive_related_arguments`; and no cycle. The
+error names the resource that declares the relationship, the relationship, the
+reason, and the path from the resource being deleted. See `phases.md`.
 
 ### The ledger in `:read_from_new`
 

@@ -41,6 +41,22 @@ defmodule AshStrangler.Sql.Triggers do
   exact failure this package exists to prevent, so attempts to write a read-only
   mapping raise, quoting the mapping's `because:` text.
 
+  ## What `DELETE` deletes, and what it archives
+
+  The dual-write `INSTEAD OF DELETE` deletes the legacy row, always. At
+  `:dual_write` the legacy table is still the system of record, and a
+  `:dual_write` resource that uses `AshArchival` never sends this trigger a
+  `DELETE`: `AshArchival` turns a destroy into an `UPDATE` of the mapped archive
+  column (`AshStrangler.Verifiers.VerifyArchival` requires that mapping), the
+  legacy row is archived where it sits, and this trigger is not involved. What
+  reaches it instead are the deliberate hard deletes — a destroy action listed
+  in `exclude_destroy_actions`, a resource without archival, and SQL written
+  against the view by the legacy application — and for those, deleting the
+  legacy row is exactly what was asked for. Converting them into archives would
+  override an explicit choice. At `:read_from_new` the same `DELETE` archives
+  the Ash-owned row instead (`AshStrangler.Sql.ReverseTriggers`); the asymmetry
+  is the phase model's, not an oversight.
+
   ## Writes reverse the read direction exactly, and now by construction
 
   In 0.1 the write side was `String.replace(to, "$NEW.", "NEW.")` over a *separately
