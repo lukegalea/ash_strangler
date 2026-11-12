@@ -1478,10 +1478,8 @@ defmodule Mix.Tasks.AshStrangler.Check do
   end
 
   defp relation_parts(twin) do
-    case String.split(Twin.relation(twin), ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
-    end
+    {schema, table} = Twin.schema_and_table(twin)
+    {schema || "public", table}
   end
 
   defp list(columns), do: columns |> Enum.sort() |> Enum.map_join(", ", &inspect/1)
@@ -1498,14 +1496,15 @@ defmodule Mix.Tasks.AshStrangler.Check do
   defp ledger_backlog(repo, group) do
     group
     |> Enum.filter(&Info.ledger?/1)
-    |> Enum.map(&Info.relation/1)
+    |> Enum.map(&Info.twin/1)
     |> Enum.uniq()
     |> Enum.map(&ledger_backlog_for(repo, &1))
     |> tally()
   end
 
-  defp ledger_backlog_for(repo, relation) do
-    {schema, table} = relation_parts_of(relation)
+  defp ledger_backlog_for(repo, twin) do
+    relation = Twin.relation(twin)
+    {schema, table} = relation_parts(twin)
 
     sql = """
     SELECT count(*) FROM #{Ledger.events_table()}
@@ -1523,13 +1522,6 @@ defmodule Mix.Tasks.AshStrangler.Check do
           "#{relation} — #{message}. The events table does not exist yet, or the " <>
             "migration that creates it has not run."
         )
-    end
-  end
-
-  defp relation_parts_of(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
     end
   end
 

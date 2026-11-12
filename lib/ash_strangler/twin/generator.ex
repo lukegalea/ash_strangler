@@ -35,6 +35,8 @@ defmodule AshStrangler.Twin.Generator do
   What to generate:
 
     * `:relation` — `"schema.table"`, a key of the catalog's `"relations"`;
+    * `:schema`, `:table` — that relation's two names, kept apart because a name with a dot in
+      it cannot be read back out of `:relation`;
     * `:catalog` — the catalog;
     * `:module`, `:domain`, `:repo` — modules;
     * `:destination` — `fn "schema.table" -> module | nil end`, resolving
@@ -49,6 +51,8 @@ defmodule AshStrangler.Twin.Generator do
   @type spec :: %{
           optional(:system_actor) => String.t() | nil,
           relation: String.t(),
+          schema: String.t(),
+          table: String.t(),
           catalog: map(),
           module: module(),
           domain: module(),
@@ -64,7 +68,7 @@ defmodule AshStrangler.Twin.Generator do
   @spec render(spec()) :: String.t()
   def render(spec) do
     relation = Map.fetch!(spec.catalog["relations"], spec.relation)
-    {schema, table} = split(spec.relation)
+    %{schema: schema, table: table} = spec
 
     columns =
       relation
@@ -143,7 +147,7 @@ defmodule AshStrangler.Twin.Generator do
   # `providerPartyId` are `client_party_id` and `provider_party_id` by then, so
   # two keys to one table get two names rather than both the table's.
   defp relationship_name(source_attribute, target) do
-    {_schema, table} = split(target)
+    table = target_table(target)
     source = Atom.to_string(source_attribute)
 
     case String.replace_suffix(source, "_id", "") do
@@ -310,10 +314,14 @@ defmodule AshStrangler.Twin.Generator do
     end)
   end
 
-  defp split(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
+  # A foreign key's target is a name out of the catalog, which keys its relations by
+  # `schema.table` and keeps no parts of its own, so the table can only be read back off it.
+  # It names a relationship and nothing else, so a dot in the table name costs a less tidy
+  # name, never a wrong statement.
+  defp target_table(target) do
+    case String.split(target, ".", parts: 2) do
+      [_schema, table] -> table
+      [table] -> table
     end
   end
 end

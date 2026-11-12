@@ -172,7 +172,9 @@ if Code.ensure_loaded?(Igniter) do
       module = Igniter.Project.Module.parse(name)
 
       if AshStrangler.Twin.twin?(module) do
-        {:ok, [existing_target(module, options)], existing_repo(module, options)}
+        with {:ok, target} <- existing_target(module, options) do
+          {:ok, [target], existing_repo(module, options)}
+        end
       else
         {:error,
          """
@@ -186,21 +188,15 @@ if Code.ensure_loaded?(Igniter) do
     end
 
     defp existing_target(module, options) do
-      relation =
+      parts =
         case options |> Keyword.get(:relation, []) |> List.wrap() do
-          [override | _] -> override
-          [] -> AshStrangler.Twin.relation(module)
+          [override | _] -> parse_relation(override)
+          [] -> {:ok, AshStrangler.Twin.schema_and_table(module)}
         end
 
-      {schema, table} = split_relation(relation)
-
-      %{
-        relation: "#{schema}.#{table}",
-        schema: schema,
-        table: table,
-        module: module,
-        domain: domain_of(module, options)
-      }
+      with {:ok, {schema, table}} <- parts do
+        {:ok, build_target(schema || "public", table, module, domain_of(module, options))}
+      end
     end
 
     defp existing_repo(module, options) do
@@ -276,13 +272,15 @@ if Code.ensure_loaded?(Igniter) do
     defp resolve_targets(relations, domain, options) do
       case {relations, options[:module]} do
         {[_relation], nil} ->
-          {:ok, Enum.map(relations, &target(&1, domain))}
+          targets(relations, domain)
 
         {[relation], module} ->
-          {:ok, [%{target(relation, domain) | module: Igniter.Project.Module.parse(module)}]}
+          with {:ok, [target]} <- targets([relation], domain) do
+            {:ok, [%{target | module: Igniter.Project.Module.parse(module)}]}
+          end
 
         {_several, nil} ->
-          {:ok, Enum.map(relations, &target(&1, domain))}
+          targets(relations, domain)
 
         {_several, _module} ->
           {:error,
@@ -291,26 +289,49 @@ if Code.ensure_loaded?(Igniter) do
       end
     end
 
-    defp target(relation, domain) do
-      {schema, table} = split_relation(relation)
+    defp targets(relations, domain) do
+      Enum.reduce_while(relations, {:ok, []}, fn relation, {:ok, acc} ->
+        case target(relation, domain) do
+          {:ok, target} -> {:cont, {:ok, acc ++ [target]}}
+          {:error, message} -> {:halt, {:error, message}}
+        end
+      end)
+    end
 
+    # A `--relation` is read the way SQL reads a qualified name (`AshStrangler.Sql.Relation`), so
+    # `"odd.schema".t` is the schema `odd.schema`. An unqualified relation is taken as `public`,
+    # and said out loud in the generated `schema "public"` rather than left to `search_path`.
+    defp target(relation, domain) do
+      with {:ok, {schema, table}} <- parse_relation(relation) do
+        {:ok,
+         build_target(
+           schema || "public",
+           table,
+           Module.concat(domain, module_name(table)),
+           domain
+         )}
+      end
+    end
+
+    defp parse_relation(relation) do
+      case AshStrangler.Sql.Relation.parse(relation) do
+        {:ok, parts} -> {:ok, parts}
+        {:error, message} -> {:error, "`--relation` #{message}"}
+      end
+    end
+
+    defp build_target(schema, table, module, domain) do
       %{
         relation: "#{schema}.#{table}",
         schema: schema,
         table: table,
-        module: Module.concat(domain, Macro.camelize(table)),
+        module: module,
         domain: domain
       }
     end
 
-    # An unqualified relation is taken as `public`, and said out loud in the
-    # generated `schema "public"` rather than left to `search_path`.
-    defp split_relation(relation) do
-      case String.split(relation, ".", parts: 2) do
-        [schema, table] -> {schema, table}
-        [table] -> {"public", table}
-      end
-    end
+    # A table name with a dot in it is still one module segment.
+    defp module_name(table), do: table |> String.replace(".", "_") |> Macro.camelize()
 
     # --- generation --------------------------------------------------------
 
@@ -341,11 +362,11 @@ if Code.ensure_loaded?(Igniter) do
       |> Keyword.get(:secret, [])
       |> List.wrap()
       |> Enum.reduce_while({:ok, %{}}, fn secret, {:ok, acc} ->
-        case String.split(secret, ".") do
-          [schema, table, column] ->
+        case AshStrangler.Sql.Relation.parse_column(secret) do
+          {:ok, {schema, table, column}} ->
             {:cont, {:ok, Map.update(acc, "#{schema}.#{table}", [column], &[column | &1])}}
 
-          _ ->
+          {:error, _message} ->
             {:halt, {:error, "`--secret` takes schema.table.column, got #{inspect(secret)}"}}
         end
       end)
@@ -413,6 +434,8 @@ if Code.ensure_loaded?(Igniter) do
       contents =
         AshStrangler.Twin.Generator.render(%{
           relation: twin.relation,
+          schema: twin.schema,
+          table: twin.table,
           catalog: run.catalog,
           module: twin.module,
           domain: twin.domain,

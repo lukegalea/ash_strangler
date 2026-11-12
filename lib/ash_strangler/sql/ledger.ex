@@ -209,6 +209,10 @@ defmodule AshStrangler.Sql.Ledger do
     end
   end
 
+  # The owned table is always spelled quoted, as it always was; an embedded
+  # double quote is doubled so a table or schema named with one still parses.
+  defp quoted(name), do: ~s(") <> String.replace(name, ~s("), ~s("")) <> ~s(")
+
   defp do_build(resource_or_dsl, key) do
     # v0.4.0 correction: in :read_from_new the legacy relation is the reverse
     # VIEW and the OWNED table is the resource's postgres table -- capture
@@ -220,14 +224,15 @@ defmodule AshStrangler.Sql.Ledger do
         schema = AshPostgres.DataLayer.Info.schema(resource_or_dsl) || "public"
         table = AshPostgres.DataLayer.Info.table(resource_or_dsl)
 
-        {~s("#{schema}"."#{table}"), schema, table}
+        {quoted(schema) <> "." <> quoted(table), schema, table}
       else
         # The `ON` clause and the drop guard name the relation, so the relation
         # spells the way SQL does -- a mixed-case name quoted
         # (`Twin.sql_relation/1`), not the logical name PostgreSQL would fold
         # to lowercase. The function and trigger NAMES keep the logical parts.
-        {schema, table} = split_relation(Info.relation(resource_or_dsl))
-        {Twin.sql_relation(Info.twin(resource_or_dsl)), schema, table}
+        twin = Info.twin(resource_or_dsl)
+        {schema, table} = Twin.schema_and_table(twin)
+        {Twin.sql_relation(twin), schema || "public", table}
       end
 
     {schema, table} = {target_schema, target_table}
@@ -435,12 +440,5 @@ defmodule AshStrangler.Sql.Ledger do
       AFTER INSERT OR UPDATE OR DELETE ON #{relation}
       FOR EACH ROW EXECUTE FUNCTION #{function}();
     """
-  end
-
-  defp split_relation(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
-    end
   end
 end

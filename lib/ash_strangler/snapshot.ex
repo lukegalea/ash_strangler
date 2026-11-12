@@ -513,14 +513,13 @@ defmodule AshStrangler.Snapshot do
   end
 
   defp split_column(path) do
-    case String.split(path, ".") do
-      [schema, table, column] -> {"#{schema}.#{table}", column}
-      _ -> raise ArgumentError, "expected schema.table.column, got #{inspect(path)}"
+    case AshStrangler.Sql.Relation.parse_column(path) do
+      {:ok, {schema, table, column}} -> {{schema, table}, column}
+      {:error, message} -> raise ArgumentError, message
     end
   end
 
-  defp quote_relation(relation),
-    do: relation |> String.split(".") |> Enum.map_join(".", &quote_ident/1)
+  defp quote_relation({schema, table}), do: "#{quote_ident(schema)}.#{quote_ident(table)}"
 
   defp quote_ident(name), do: ~s("#{String.replace(name, ~s("), ~s(""))}")
 end

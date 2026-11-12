@@ -207,6 +207,31 @@ defmodule AshStrangler.SnapshotTest do
     end
   end
 
+  describe "capture/3 heads in a schema whose name contains a dot" do
+    @tag :tmp_dir
+    test "reads the head from a quoted schema.table.column", %{tmp_dir: dir} do
+      copy_fixture(dir, ~w(extensions.sql))
+
+      Snapshot.with_scratch_database(config(), fn source ->
+        :ok = Snapshot.load(@fixture, source)
+
+        execute(source, [
+          ~s|CREATE SCHEMA "odd.meta"|,
+          ~s|CREATE TABLE "odd.meta".migrations (name text)|,
+          ~s|INSERT INTO "odd.meta".migrations VALUES ('001_init'), ('002_visits')|
+        ])
+
+        assert {:ok, lock} =
+                 Snapshot.capture(dir, source,
+                   schemas: ["clinic"],
+                   head_from: %{"app" => ~s|"odd.meta".migrations.name|}
+                 )
+
+        assert lock["heads"] == %{"app" => %{"head" => "002_visits", "count" => 2}}
+      end)
+    end
+  end
+
   describe "drift/3 (G-DRIFT)" do
     test "a database built from the snapshot has no drift, and every kind of change is named" do
       Snapshot.with_scratch_database(config(), fn live ->
