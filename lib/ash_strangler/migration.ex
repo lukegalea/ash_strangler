@@ -161,7 +161,7 @@ defmodule AshStrangler.Migration do
   # environment this function reads (`:ash_domains`, `unions:`, `deriveds:`) is
   # not loaded when an extension calls in from there.
   defp ensure_app_config do
-    if Mix.Project.get(), do: Mix.Task.run("app.config")
+    if Code.ensure_loaded?(Mix.Project) and Mix.Project.get(), do: Mix.Task.run("app.config")
     :ok
   end
 
