@@ -1182,8 +1182,9 @@ statement, by comparing foreign keys and stamping archive columns, so every
 relationship on the way, at every level, must be one a foreign key describes: not
 `many_to_many`, `manual`, `no_attributes?`, filtered or a `has_one` with
 `from_many?`; a destination in the same repo of `AshPostgres.DataLayer`, with a
-table, without `:context` multitenancy, not temporal and not strangled at
-`:read_from_legacy`; a destination that uses `AshArchival.Resource` and whose
+table, without `:context` multitenancy, not temporal, and, if it is strangled
+itself, past the compatibility view (`:read_from_new` or later, not
+`:read_from_legacy` or `:dual_write`); a destination that uses `AshArchival.Resource` and whose
 primary destroy archives; no `archive_related_arguments`; and no cycle. The
 error names the resource that declares the relationship, the relationship, the
 reason, and the path from the resource being deleted. See `phases.md`.

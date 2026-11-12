@@ -424,8 +424,9 @@ resource that declares it, the relationship and the reason:
     something only Ash computes;
   * the destination is outside `AshPostgres.DataLayer`, in another repo, has no table,
     uses `:context` multitenancy, or is temporal;
-  * the destination is strangled at `:read_from_legacy`, where its table is the
-    read-only compatibility view;
+  * the destination is strangled at `:read_from_legacy` or `:dual_write`, where its
+    table is still the compatibility view over the legacy table — the cascade can
+    follow it once that resource reaches `:read_from_new` and owns its table;
   * the destination does not use `AshArchival.Resource`, or its primary destroy action
     does not archive (there is none, or it is in `exclude_destroy_actions`) —
     `AshArchival` would destroy those rows;

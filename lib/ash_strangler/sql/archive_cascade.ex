@@ -27,8 +27,12 @@ defmodule AshStrangler.Sql.ArchiveCascade do
       `from_many?`: which rows it relates is something only Ash can compute;
     * a destination outside `AshPostgres.DataLayer`, in another repo, with no
       table, with `:context` multitenancy, or temporal;
-    * a destination strangled at `:read_from_legacy`, whose table is the
-      read-only compatibility view;
+    * a destination strangled at `:read_from_legacy` or `:dual_write`, whose
+      table is still the compatibility view over the legacy table: the cascade's
+      `UPDATE` would land on the legacy table through that view (read-only, or
+      through the destination's own dual-write `INSTEAD OF UPDATE` trigger),
+      not on an owned table. The cascade can follow it once that resource
+      reaches `:read_from_new`;
     * a destination that does not use `AshArchival.Resource`, or whose primary
       destroy action does not archive (there is none, or it is listed in
       `exclude_destroy_actions`): `AshArchival` would destroy those rows;
@@ -237,10 +241,13 @@ defmodule AshStrangler.Sql.ArchiveCascade do
          "the destination #{inspect(destination)} is temporal, where an archive closes a " <>
            "version, which a stamp in place would rewrite"}
 
-      Info.strangled?(destination) and Info.strangler_phase!(destination) == :read_from_legacy ->
+      Info.strangled?(destination) and
+          Info.strangler_phase!(destination) in [:read_from_legacy, :dual_write] ->
         {:error,
-         "the destination #{inspect(destination)} is strangled at :read_from_legacy, so its " <>
-           "table is the read-only compatibility view"}
+         "the destination #{inspect(destination)} is strangled at " <>
+           "#{inspect(Info.strangler_phase!(destination))}, so its table is still the " <>
+           "compatibility view over the legacy table; the cascade can follow it once it " <>
+           "reaches :read_from_new"}
 
       true ->
         check_archives(destination)

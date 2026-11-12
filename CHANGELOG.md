@@ -102,9 +102,10 @@ Requires Elixir 1.20 or later.
   refused at compile time by the new `VerifyArchiveRelated`, at every level, naming the resource,
   the relationship and the reason: `many_to_many`, `manual`, `no_attributes?`, a `filter`, a
   `has_one` with `from_many?`, a destination outside `AshPostgres.DataLayer`, in another repo,
-  without a table, with `:context` multitenancy, temporal, strangled at `:read_from_legacy`, not
-  using `AshArchival.Resource` or whose primary destroy does not archive, `archive_related_arguments`,
-  and a cycle. No opt-out: a resource at `:read_from_new` with such an `archive_related` no longer
+  without a table, with `:context` multitenancy, temporal, strangled at `:read_from_legacy` or
+  `:dual_write` (its table is still the compatibility view over the legacy table; it can be
+  cascaded once it reaches `:read_from_new`), not using `AshArchival.Resource` or whose primary
+  destroy does not archive, `archive_related_arguments`, and a cycle. No opt-out: a resource at `:read_from_new` with such an `archive_related` no longer
   compiles until the relationship is removed from the list or changed. New:
   `AshStrangler.Sql.ArchiveCascade`.
 - **An opt-in insert route through a union's legacy branch (`insert_through`):** a host that must

@@ -499,37 +499,31 @@ defmodule AshStrangler.ArchiveRelatedCascadeTest do
       assert_refused(owner, :children, "archive_related_arguments")
     end
 
-    test "a strangled destination at :read_from_legacy, whose table is a read-only view" do
-      dest =
-        define!(
-          table: "cascade_legacy_users",
-          extensions: "[AshStrangler.Resource, AshArchival.Resource]",
-          body: """
-          attributes do
-            attribute :id, :uuid, primary_key?: true, allow_nil?: false
-            attribute :login, :string, public?: true
-            attribute :archived_at, :utc_datetime_usec, public?: true
-          end
-
-          actions do
-            defaults [:read, :destroy]
-          end
-
-          strangler do
-            phase :read_from_legacy
-
-            source AshStrangler.Test.Legacy.Users do
-              key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
-              map :login, from: :login
-              map :archived_at, from: :deleted_at, zone: "UTC"
-            end
-          end
-          """
+    test "a strangled destination at :read_from_legacy, whose table is the compatibility view" do
+      owner =
+        owner!(
+          ~s|has_many :users, #{strangled_destination!(:read_from_legacy)}, destination_attribute: :id|,
+          [:users]
         )
 
-      owner = owner!(~s|has_many :users, #{dest}, destination_attribute: :id|, [:users])
+      message = assert_refused(owner, :users, ":read_from_legacy")
+      assert message =~ "compatibility view over the legacy table"
+      assert message =~ "once it reaches :read_from_new"
+    end
 
-      assert_refused(owner, :users, ":read_from_legacy")
+    test "a strangled destination at :dual_write, whose table is still the compatibility view" do
+      # The cascade's UPDATE would run through the destination's dual-write
+      # INSTEAD OF UPDATE trigger onto the legacy table: a second trigger
+      # inside the statement, which the cascade does not follow.
+      owner =
+        owner!(
+          ~s|has_many :users, #{strangled_destination!(:dual_write)}, destination_attribute: :id|,
+          [:users]
+        )
+
+      message = assert_refused(owner, :users, ":dual_write")
+      assert message =~ "compatibility view over the legacy table"
+      assert message =~ "once it reaches :read_from_new"
     end
 
     test "a cycle, refused at the relationship that closes it" do
@@ -723,6 +717,36 @@ defmodule AshStrangler.ArchiveRelatedCascadeTest do
 
       actions do
         defaults [:read, :destroy]
+      end
+      """
+    )
+  end
+
+  # An archival destination that is itself strangled, at `phase`, over the
+  # shared `legacy.users` fixture.
+  defp strangled_destination!(phase) do
+    define!(
+      table: "cascade_legacy_users",
+      extensions: "[AshStrangler.Resource, AshArchival.Resource]",
+      body: """
+      attributes do
+        attribute :id, :uuid, primary_key?: true, allow_nil?: false
+        attribute :login, :string, public?: true
+        attribute :archived_at, :utc_datetime_usec, public?: true
+      end
+
+      actions do
+        defaults [:read, :destroy]
+      end
+
+      strangler do
+        phase #{inspect(phase)}
+
+        source AshStrangler.Test.Legacy.Users do
+          key :id, from: :id, strategy: {:uuid_v5, namespace: "6b1e8b2c-6f6d-4a4a-9f1a-5b0e0d3c4a71"}
+          map :login, from: :login
+          map :archived_at, from: :deleted_at, zone: "UTC"
+        end
       end
       """
     )
