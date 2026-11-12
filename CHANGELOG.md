@@ -17,6 +17,10 @@ Requires Elixir 1.20 or later.
 
 ### Bug fixes
 
+- **`ash_archival` is an optional dependency in every environment.** It was declared for dev and
+  test only, so a host compiled this package without ordering `ash_archival` first, and the
+  archive paths compiled with "module is not available" warnings. A host without archival is
+  unaffected; one with it is now held to `~> 2.0`.
 - **A `source:` on a strangled resource's own attribute is refused at compile time**
   (`VerifyOwnSourceNames`). The view names each column after the attribute while Ash reads and
   writes it by `source:`, so the first query failed at runtime with `column ... does not exist`.
