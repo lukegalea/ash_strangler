@@ -16,6 +16,8 @@ defmodule AshStrangler.CodegenTest do
 
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureIO
+
   alias AshStrangler.Codegen
 
   @resource AshStrangler.Test.LegacyUser
@@ -204,6 +206,158 @@ defmodule AshStrangler.CodegenTest do
     end
   end
 
+  describe "codegen/1" do
+    test "an unattached application is a no-op for --check, even with strangled resources" do
+      output =
+        capture_io(fn ->
+          assert Codegen.codegen(["--check"]) in [:ok, nil]
+        end)
+
+      assert output =~ "no domain attaches AshStrangler.Codegen"
+    end
+
+    test "an unattached application writes nothing, even with --snapshots-only" do
+      root = tmp_root()
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      capture_io(fn -> Codegen.codegen(["--snapshots-only"]) end)
+
+      refute File.exists?(root)
+      refute File.exists?(Path.join(root, "repo_priv/migrations"))
+    end
+
+    test "--check is clean on matching snapshots" do
+      attach!()
+      root = doctored_root(&Function.identity/1)
+      with_codegen_config!(root)
+
+      output = capture_io(fn -> assert Codegen.codegen(["--check"]) == :ok end)
+
+      # Nothing pending, nothing to say.
+      assert output == ""
+    end
+
+    test "--check raises PendingCodegen naming the stale resource" do
+      attach!()
+
+      root =
+        doctored_root(fn doc ->
+          update_in(doc, ["statements", Access.at(0), "up"], &(&1 <> "\n-- older body"))
+        end)
+
+      with_codegen_config!(root)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          assert_raise Ash.Error.Framework.PendingCodegen,
+                       ~r/Pending Code Generation Detected/,
+                       fn -> Codegen.codegen(["--check"]) end
+        end)
+
+      assert stderr =~ "AshStrangler.Test.LegacyUser"
+      assert stderr =~ "changed: "
+    end
+
+    test "--dry-run prints the pending statements" do
+      attach!()
+
+      # The snapshot is the stale half; what --dry-run prints is the CURRENT
+      # render — the statement the next migration would carry.
+      root =
+        doctored_root(fn doc ->
+          update_in(doc, ["statements", Access.at(0), "up"], &(&1 <> "\n-- older body"))
+        end)
+
+      with_codegen_config!(root)
+
+      output = capture_io(fn -> Codegen.codegen(["--dry-run"]) end)
+
+      assert output =~ "AshStrangler.Test.LegacyUser"
+      assert output =~ "changed: "
+      first = Codegen.rendered()[@resource] |> List.first()
+      assert output =~ String.trim_trailing(first.up)
+    end
+
+    test "--snapshots-only writes snapshots and no migration" do
+      attach!()
+      root = tmp_root()
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      migrations_dir = Path.join(root, "repo_priv/migrations")
+      File.mkdir_p!(migrations_dir)
+      marker = Path.join(migrations_dir, "20991231235959_previously.exs")
+      File.write!(marker, "")
+
+      capture_io(fn -> Codegen.codegen(["--snapshots-only"]) end)
+
+      assert File.exists?(Codegen.snapshot_path(root, @resource))
+      assert File.ls!(migrations_dir) == ["20991231235959_previously.exs"]
+    end
+
+    test "--dev is refused while anything is pending" do
+      attach!()
+
+      root =
+        doctored_root(fn doc ->
+          update_in(doc, ["statements", Access.at(0), "up"], &(&1 <> "\n-- older body"))
+        end)
+
+      with_codegen_config!(root)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          assert_raise Mix.Error, ~r/no `--dev` mode/, fn -> Codegen.codegen(["--dev"]) end
+        end)
+
+      assert stderr =~ "AshStrangler.Test.LegacyUser"
+    end
+
+    test "--dev is a no-op when clean, and writes nothing" do
+      attach!()
+      root = doctored_root(&Function.identity/1)
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      output = capture_io(fn -> Codegen.codegen(["--dev"]) end)
+
+      assert output =~ "--dev is a no-op for it"
+      refute File.exists?(Path.join(root, "repo_priv/migrations"))
+    end
+
+    test "<name> writes a migration strictly after an existing newer file and a preset counter, and refreshes snapshots" do
+      attach!()
+      root = tmp_root()
+      with_codegen_config!(root)
+      with_repo_priv!(root)
+
+      migrations_dir = Path.join(root, "repo_priv/migrations")
+      File.mkdir_p!(migrations_dir)
+      File.write!(Path.join(migrations_dir, "20991231235959_someone_elses.exs"), "")
+
+      # The counter AshPostgres's generator publishes into: this extension must
+      # not land on the version AshPostgres writes in the same run.
+      Process.put(:ash_postgres_last_migration_timestamp, "20300101000000")
+
+      output = capture_io(fn -> Codegen.codegen(["--name", "reshape_legacy"]) end)
+      assert output =~ "Covers 1 resource(s)"
+
+      # bump("20991231235959") — strictly after the newer existing file, which
+      # is also strictly after the bumped counter and the current second.
+      path = Path.join(migrations_dir, "21000101000000_reshape_legacy_strangler.exs")
+      assert File.exists?(path)
+
+      source = File.read!(path)
+      assert source =~ "defmodule AshStrangler.TestRepo.Migrations.ReshapeLegacyStrangler"
+      assert source =~ "CREATE OR REPLACE VIEW"
+
+      # The snapshots were refreshed in the same run, so the layer is clean.
+      assert Codegen.pending(snapshot_root: root) == []
+      assert File.exists?(Codegen.snapshot_path(root, @resource))
+    end
+  end
+
   describe "next_migration_version/1" do
     test "it allocates strictly after an existing newer file" do
       dir = migrations_tmp_dir()
@@ -248,7 +402,46 @@ defmodule AshStrangler.CodegenTest do
   end
 
   defp tmp_root do
-    Path.join(System.tmp_dir!(), "strangler-codegen-#{System.unique_integer()}")
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "strangler-codegen-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    # `unique_integer` restarts at every VM boot, so a previous `mix test` run
+    # may have left this exact directory behind.
+    File.rm_rf!(root)
+    root
+  end
+
+  # `config :ash_strangler, AshStrangler.Codegen, snapshot_root: ...`, for the
+  # duration of one test.
+  defp with_codegen_config!(root) do
+    original = Application.get_env(:ash_strangler, Codegen, [])
+
+    Application.put_env(
+      :ash_strangler,
+      Codegen,
+      Keyword.put(original, :snapshot_root, root)
+    )
+
+    ExUnit.Callbacks.on_exit(fn -> Application.put_env(:ash_strangler, Codegen, original) end)
+  end
+
+  # Points `AshStrangler.TestRepo`'s `priv/` at a temporary directory, so a
+  # generated migration never lands in the project's own tree.
+  defp with_repo_priv!(root) do
+    original = Application.get_env(:ash_strangler, AshStrangler.TestRepo, [])
+
+    Application.put_env(
+      :ash_strangler,
+      AshStrangler.TestRepo,
+      Keyword.put(original, :priv, Path.join(root, "repo_priv"))
+    )
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Application.put_env(:ash_strangler, AshStrangler.TestRepo, original)
+    end)
   end
 
   defp migrations_tmp_dir do

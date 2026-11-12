@@ -4,20 +4,154 @@
 
 defmodule AshStrangler.Codegen do
   @moduledoc """
-  The comparison layer behind `mix ash.codegen`'s strangler coverage: what the
-  renderer produces now, what the committed snapshots record, and the difference
-  between the two — so the comparison lives in the library, not in hosts.
+  Makes `mix ash.codegen` cover the strangler compatibility layer.
 
-  Attaching this extension to a domain opts that domain's strangled resources
-  into coverage; nothing is compared and nothing is written for applications
-  whose domains do not attach it.
+  The view, key index and ledger DDL for the legacy estate comes from
+  `AshStrangler.Migration`, not from AshPostgres: a strangled resource declares
+  `migrate? false` (its `table` names the compatibility *view*, and codegen
+  would emit a `create table` for that name), and with `migrate? false` there
+  is no resource snapshot for `custom_statements` to hang off either. That is
+  why `mix ash_strangler.gen.migration` is its own task — and it is why the CI
+  gate, `mix ash.codegen --check`, is blind to the layer: a mapping change that
+  leaves the installed DDL stale is only caught later, by `mix
+  ash_strangler.check --strict` against a database.
+
+  This extension exports `codegen/1`, the callback `mix ash.codegen` calls on
+  every extension in use. It renders the current statements **from compiled
+  resources, with no database** (`AshStrangler.Migration.statements/1`, the
+  same function the generator task writes migrations from) and compares them,
+  statement for statement, against a committed snapshot of what the newest
+  installed strangler migration contains. See `pending/1` for the comparison.
+
+  ## Opt-in by attachment
+
+  Attach the extension to the domain whose strangled resources it should
+  cover:
+
+      use Ash.Domain, extensions: [AshStrangler.Codegen]
+
+  `mix ash.codegen` runs every extension defined in every dependency that
+  depends on ash, attached or not — so this module runs in every host that
+  depends on `ash_strangler`. It therefore does nothing beyond one `info` line
+  unless at least one domain in the application's `:ash_domains` attaches it,
+  and it covers only the resources of attaching domains (plus the unions and
+  deriveds in `config :ash_strangler`, which are application-wide). A host
+  that upgrades without attaching sees no change.
+
+  ## Flags
+
+  Flags of *other* extensions flow through `codegen/1` too; the ones this hook
+  acts on:
+
+    * `--check` — when a snapshot is stale or missing, reports each affected
+      resource by name and raises `Ash.Error.Framework.PendingCodegen` (the
+      same exception AshPostgres raises, so the task's handling — and the
+      "Pending Code Generation Detected" message — is unchanged).
+    * `--dry-run` — prints the pending statements.
+    * `<name>` — writes `priv/<repo>/migrations/<timestamp>_<name>_strangler.exs`
+      and refreshes the snapshots. The timestamp is allocated strictly after
+      the newest file already in the migrations directory and strictly after
+      AshPostgres's own in-process counter, so it cannot land on the version
+      AshPostgres writes in the same run, whichever extension runs first. The
+      `_strangler` suffix also keeps the migration recognizably the strangler
+      layer's own, in a directory AshPostgres writes too.
+    * `--snapshots-only` — writes the snapshots and no migration. That is how
+      an existing host seeds the snapshots before adopting the extension.
+    * `--dev` — refused while anything is pending, and a no-op when clean; see
+      "Why there is no `--dev`" below.
+
+  ## Why there is no `--dev`
+
+  AshPostgres's dev mode exists so its final named run can roll the dev
+  migrations back and squash them against resource snapshots. The strangler
+  layer has no snapshots to squash and its statements are idempotent
+  (`CREATE OR REPLACE`, `IF NOT EXISTS`), so a dev-suffixed migration would
+  only add a second name for DDL the final run rewrites, plus a
+  `schema_migrations` row orphaned when the final file replaces the dev one.
+  During development run `mix ash.codegen <name>` directly. The refusal only
+  fires when strangler statements are actually pending: an iteration that
+  changed nothing in the mapping still passes through.
+
+  ## Where the snapshots live, and what they record
+
+  `priv/strangler_snapshots/<repo underscored>/<underscored resource>.json`,
+  one file per rendered resource, because a stale mapping is reported by name
+  and per-file diffs are reviewable. Each file records the `name` and `up` of
+  every statement the renderer produces for that resource — what the newest
+  installed strangler DDL contains, as proven when the host seeded it.
+  `down` is not recorded: the renderer derives it from `up`, so it can never
+  disagree. Statements are compared in position order, including the view
+  reshape guard: the snapshot records what the renderer produces now, not
+  what a migration file once contained, and the guard's `up` embeds the view's
+  expected column list, so it changes whenever the view changes shape.
+
+  ## More than one repo
+
+  Covered resources are grouped by the repo their `AshPostgres.DataLayer`
+  declares, and each group gets its own migration in that repo's `priv`
+  directory and its own snapshot directory — a migration is executed by one
+  repo, so DDL for another repo's schemas does not belong in it. Resources
+  that declare no repo fall back to the application's first `ecto_repos`
+  entry.
+
+  ## Configuration
+
+      config :ash_strangler, AshStrangler.Codegen,
+        snapshot_root: "priv/strangler_snapshots",
+        migration_suffix: "strangler"
+
+  `snapshot_root` replaces the base directory; the repo subdirectory and the
+  `<resource>.json` name are appended to whatever base is configured.
+  `migration_suffix` replaces the `_strangler` filename suffix.
+
+  The extension declares no DSL sections. It is attached to a domain so its
+  intent — the strangler layer is part of that domain's contract — is visible
+  where the strangled resources are declared.
   """
 
   use Spark.Dsl.Extension
 
   @behaviour Ash.Extension
 
+  @default_migration_suffix "strangler"
   @default_snapshot_root "priv/strangler_snapshots"
+
+  @doc """
+  Called by `mix ash.codegen`, which appends `--name <name-or-nil>` to its own
+  arguments before handing them to every extension.
+
+  Other extensions' flags (`--snapshots-only`, `--no-format`, ...) flow
+  through here too; the ones that matter to this hook are parsed below. An
+  application whose domains do not attach this extension gets one `info` line
+  and nothing else.
+  """
+  @impl Ash.Extension
+  def codegen(argv) do
+    {opts, _invalid, _positional} =
+      OptionParser.parse(argv,
+        strict: [
+          name: :string,
+          check: :boolean,
+          dry_run: :boolean,
+          dev: :boolean,
+          snapshots_only: :boolean
+        ]
+      )
+
+    if attached?() do
+      cond do
+        opts[:dev] -> dev()
+        opts[:check] -> check()
+        opts[:dry_run] -> dry_run()
+        opts[:snapshots_only] -> snapshots_only()
+        true -> generate(name!(opts[:name]))
+      end
+    else
+      Mix.shell().info(
+        "Strangler compatibility layer: no domain attaches AshStrangler.Codegen; skipping."
+      )
+    end
+  end
 
   @doc """
   Every resource this extension covers for the current application, mapped to
@@ -53,7 +187,7 @@ defmodule AshStrangler.Codegen do
   Each entry is a map with the resource, its snapshot path, a `:status` of
   `:missing | :invalid | :changed`, a human summary of the difference, and the
   pending statements — the current render of what the next migration has to
-  carry (empty for a `:removed`, because a removal is carried by nothing).
+  carry (statements that only disappeared from the render are listed in the summary, not here, because a removal is carried by nothing).
 
   Options:
 
@@ -220,6 +354,142 @@ defmodule AshStrangler.Codegen do
     version
   end
 
+  # -- the codegen modes -------------------------------------------------------
+
+  defp check do
+    case pending() do
+      [] ->
+        :ok
+
+      pending ->
+        Mix.shell().error(pending_report(pending))
+
+        raise Ash.Error.Framework.PendingCodegen,
+          diff: Enum.map(pending, &{&1.snapshot_path, &1.summary})
+    end
+  end
+
+  defp dry_run do
+    case pending() do
+      [] ->
+        Mix.shell().info("Strangler compatibility layer is up to date.")
+
+      pending ->
+        Mix.shell().info(dry_run_report(pending))
+    end
+  end
+
+  defp dev do
+    case pending() do
+      [] ->
+        Mix.shell().info("Strangler compatibility layer is up to date; --dev is a no-op for it.")
+
+      pending ->
+        Mix.shell().error(pending_report(pending))
+        Mix.raise(dev_refusal())
+    end
+  end
+
+  defp snapshots_only do
+    paths = write_snapshots!()
+
+    Mix.shell().info(
+      "Wrote #{length(paths)} strangler snapshot(s) under #{relative(snapshot_root())}."
+    )
+  end
+
+  defp generate(name) do
+    case pending() do
+      [] ->
+        Mix.shell().info("Strangler compatibility layer is up to date; no migration written.")
+
+      pending ->
+        paths =
+          repo_groups()
+          |> Enum.map(fn {repo, resources} -> write_migration!(repo, resources, name) end)
+
+        write_snapshots!()
+
+        case pending() do
+          [] ->
+            Mix.shell().info("""
+
+            Covers #{length(pending)} resource(s): #{Enum.map_join(pending, ", ", &inspect(&1.resource))}
+
+            Review #{Enum.map_join(paths, " and ", &relative/1)}, then run `mix ecto.migrate` for each repo.
+            """)
+
+          still ->
+            Mix.raise(
+              "wrote #{Enum.join(paths, ", ")} and refreshed the snapshots, but these still differ: " <>
+                Enum.map_join(still, ", ", &inspect(&1.resource))
+            )
+        end
+    end
+  end
+
+  # One migration per repo: a migration is executed by one repo, so DDL for
+  # another repo's schemas does not belong in it. The migration carries the
+  # FULL current render of its group, not only the pending statements — every
+  # statement is idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`), so
+  # re-running the unchanged parts is safe and the file always describes the
+  # whole layer for that repo.
+  defp repo_groups do
+    default = default_repo!()
+
+    covered_resources()
+    |> Enum.map(&{repo_for(&1, default), &1})
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.sort_by(fn {repo, _resources} -> inspect(repo) end)
+  end
+
+  # The directory is the repo's own priv/migrations and the name comes from the
+  # developer's own command line, not from request input; see write_snapshots!/1.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp write_migration!(repo, resources, name) do
+    dir = migrations_path(repo)
+    version = next_migration_version(dir)
+    suffix = migration_suffix()
+
+    module_name = "#{inspect(repo)}.Migrations.#{Macro.camelize("#{name}_#{suffix}")}"
+    source = AshStrangler.Migration.render(module_name, resources)
+
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "#{version}_#{name}_#{suffix}.exs")
+    Mix.Generator.create_file(path, source, force: true)
+    path
+  end
+
+  defp name!(name) do
+    if is_binary(name) and name != "" do
+      name
+    else
+      Mix.raise("""
+      Name must be provided when generating a strangler migration, unless `--check`, `--dry-run`, `--snapshots-only` or `--dev` is also provided.
+
+      Please provide a name, for example:
+
+          mix ash.codegen <name>
+      """)
+    end
+  end
+
+  defp dev_refusal do
+    """
+    ash_strangler's compatibility layer has no `--dev` mode.
+
+    AshPostgres uses `--dev` so its final named run can roll the dev migrations back and
+    squash them against resource snapshots. The strangler layer has no snapshots to squash
+    and its statements are idempotent (`CREATE OR REPLACE`, `IF NOT EXISTS`), so a dev
+    migration would only add a second name for DDL the final run rewrites, plus a
+    `schema_migrations` row orphaned when the dev file is replaced.
+
+    Run `mix ash.codegen <name>` instead: it writes the strangler migration and refreshes
+    the snapshots in the same run. AshPostgres's own dev files, if any were written before
+    this refusal, are unaffected.
+    """
+  end
+
   # -- comparison --------------------------------------------------------------
 
   defp compare(root, resource, statements) do
@@ -326,6 +596,46 @@ defmodule AshStrangler.Codegen do
     end)
   end
 
+  # -- reporting ---------------------------------------------------------------
+
+  defp pending_report(pending) do
+    Enum.map_join(pending, "\n\n", fn entry ->
+      """
+
+      Pending strangler compatibility DDL for #{inspect(entry.resource)}: #{entry.summary}
+      snapshot: #{relative(entry.snapshot_path)}
+      """
+    end) <>
+      """
+
+      Run `mix ash.codegen <name>` to write the migration and refresh the snapshots,
+      or `mix ash.codegen --dry-run` to see the pending statements.
+      """
+  end
+
+  defp dry_run_report(pending) do
+    Enum.map_join(pending, "\n\n", fn entry ->
+      body =
+        Enum.map_join(entry.pending, "\n", fn {name, up} ->
+          String.trim_trailing("""
+          -- #{name}
+          #{up}
+          """)
+        end)
+
+      String.trim_trailing("""
+      #{inspect(entry.resource)}: #{entry.summary}
+      #{body}
+      """)
+    end)
+  end
+
+  defp relative(path) do
+    Path.relative_to(path, File.cwd!())
+  rescue
+    _ -> path
+  end
+
   # -- paths and discovery -----------------------------------------------------
 
   # `mix ash.codegen` runs `compile` but not `app.config`, and the order the
@@ -342,8 +652,10 @@ defmodule AshStrangler.Codegen do
   end
 
   defp repo_for(resource) do
-    default = default_repo!()
+    repo_for(resource, default_repo!())
+  end
 
+  defp repo_for(resource, default) do
     if Code.ensure_loaded?(AshPostgres.DataLayer.Info) do
       case AshPostgres.DataLayer.Info.repo(resource, :mutate) do
         repo when is_atom(repo) and not is_nil(repo) -> repo
@@ -374,13 +686,30 @@ defmodule AshStrangler.Codegen do
     end
   end
 
+  # Ecto's own convention: `:priv` from the repo config if set, otherwise
+  # `priv/<repo_underscored>`, resolved against the PROJECT root.
+  #
+  # Not `Mix.Project.app_path/0` — that points inside `_build`, so a migration
+  # written relative to it lands in build output, gets wiped by `mix clean`,
+  # and is never committed.
+  defp migrations_path(repo) do
+    priv = repo.config()[:priv] || Path.join("priv", repo_dir(repo))
+    Path.expand(Path.join(priv, "migrations"))
+  end
+
   defp snapshot_root do
-    Path.join([File.cwd!(), config(:snapshot_root, @default_snapshot_root)])
+    # `Path.expand`, not `Path.join(cwd, ...)`: an absolute override
+    # (`/srv/shared/snapshots`) must not be glued onto the project root.
+    Path.expand(config(:snapshot_root, @default_snapshot_root))
   end
 
   defp config(key, default) do
     ensure_app_config()
     Application.get_env(:ash_strangler, __MODULE__, []) |> Keyword.get(key, default)
+  end
+
+  defp migration_suffix do
+    config(:migration_suffix, @default_migration_suffix)
   end
 
   defp repo_dir(repo) do

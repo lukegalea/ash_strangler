@@ -126,6 +126,8 @@ defmodule AshStrangler.Migration do
   """
   @spec resources(list(module()) | nil) :: [Ash.Resource.t()]
   def resources(domains \\ nil) do
+    ensure_app_config()
+
     (domains || Ash.Info.domains(Mix.Project.config()[:app]))
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
     |> Enum.filter(&(AshStrangler.Info.strangled?(&1) or watched?(&1)))
@@ -153,6 +155,14 @@ defmodule AshStrangler.Migration do
               "not a strangler-mapped resource, union or derived: #{Enum.join(unknown, ", ")}. " <>
                 "Known: #{known |> Map.keys() |> Enum.sort() |> Enum.join(", ")}"
     end
+  end
+
+  # `mix ash.codegen` runs `compile` but not `app.config`, so the application
+  # environment this function reads (`:ash_domains`, `unions:`, `deriveds:`) is
+  # not loaded when an extension calls in from there.
+  defp ensure_app_config do
+    if Mix.Project.get(), do: Mix.Task.run("app.config")
+    :ok
   end
 
   defp watched?(resource),
