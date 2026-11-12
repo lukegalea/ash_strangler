@@ -17,6 +17,14 @@ Requires Elixir 1.20 or later.
 
 ### Bug fixes
 
+- **A schema or table whose name contains a dot is found by the twin, not by splitting a string.**
+  The ledger drain and `AshStrangler.Observation.Baseline`, the generated ingester, `mix
+  ash_strangler.check` (twin freshness, catalog read, identities, ledger backlog) and `mix
+  ash_strangler.gen.twin` took the schema from the first dot of the relation's logical name, so
+  `"odd.schema"."t"` read as schema `odd`. They read it from the twin now
+  (`AshStrangler.Twin.schema_and_table/1`). What a person types is read as SQL reads it
+  (`AshStrangler.Sql.Relation`): `gen.twin --relation`, `--secret` and `snapshot --head-from` accept
+  a double-quoted name that holds dots. Logical names and the SQL of an ordinary schema are unchanged.
 - **`ash_archival` is an optional dependency in every environment.** It was declared for dev and
   test only, so a host compiled this package without ordering `ash_archival` first, and the
   archive paths compiled with "module is not available" warnings. A host without archival is
