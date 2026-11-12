@@ -172,6 +172,7 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/estates.md",
         "documentation/topics/unions.md",
         "documentation/topics/derived-rows.md",
+        "documentation/topics/codegen.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
          search_data: Spark.Docs.search_data_for(AshStrangler.Resource)},

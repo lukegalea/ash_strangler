@@ -70,6 +70,20 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **`mix ash.codegen` covers the strangler layer, opt-in by attachment.** `AshStrangler.Codegen`
+  is a Spark extension that exports `codegen/1`. Attach it to a domain
+  (`extensions: [AshStrangler.Codegen]`) and `mix ash.codegen --check` raises
+  `PendingCodegen` naming each resource whose rendered DDL differs from its committed snapshot,
+  `--dry-run` prints the pending statements, `mix ash.codegen <name>` writes
+  `<version>_<name>_strangler.exs` (one per repo) and refreshes the snapshots, `--snapshots-only`
+  seeds them, and `--dev` refuses while anything is pending. A host whose domains do not attach it
+  sees no change. Snapshots live in `priv/strangler_snapshots/<repo>/<resource>.json`; the root
+  and the migration suffix are configurable with `config :ash_strangler, AshStrangler.Codegen`.
+  Public API: `pending/1`, `rendered/0`, `write_snapshots!/1`, `snapshot_path/1,2`,
+  `next_migration_version/1`. `mix ash_strangler.gen.migration` refreshes the snapshots of the
+  resources it writes when their domain attaches the extension. `Migration.resources/1` now loads
+  the application config itself. See the [codegen guide](documentation/topics/codegen.md).
+
 - **An opt-in insert route through a union's legacy branch (`insert_through`):** a host that must
   create rows in a legacy table while `:dual_write` can declare it on the branch:
   `insert_through because: "..."`, optionally with `insert_through [:a], because: "..."` to narrow

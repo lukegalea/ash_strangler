@@ -542,6 +542,16 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   (an `AshStrangler.Estate.Obligation`: a query, its denominator and a severity).
   An obligation that cannot run is not green. See the estates guide for the JSON.
 
+## `mix ash.codegen` coverage
+
+Attach `AshStrangler.Codegen` to a domain (`use Ash.Domain, extensions: [AshStrangler.Codegen]`)
+to make `mix ash.codegen --check` notice a stale compatibility layer. It is opt-in: a host whose
+domains do not attach it sees nothing. Seed with `mix ash.codegen --snapshots-only` and commit
+`priv/strangler_snapshots/`. `mix ash.codegen <name>` then writes `<version>_<name>_strangler.exs`
+and refreshes the snapshots; `--dev` refuses while anything is pending. Never hand-edit the
+snapshots, and never write a strangler migration by hand: regenerate. `mix
+ash_strangler.gen.migration` refreshes the snapshots too when the domain attaches the extension.
+
 ## What the verifiers cannot check
 
 They see one version of the code and have no memory of the previous one, so they
