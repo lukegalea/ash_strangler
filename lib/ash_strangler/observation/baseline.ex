@@ -58,11 +58,10 @@ defmodule AshStrangler.Observation.Baseline do
   defp do_run(resource, repo, group, isolation) do
     group = group || Ash.UUID.generate()
     version = MappingVersion.hash(resource)
-    relation = Info.relation(resource)
-    {schema, table} = split(relation)
-
     key = Info.key(resource)
     twin = Info.twin(resource)
+    {schema, table} = AshStrangler.Twin.schema_and_table(twin)
+    schema = schema || "public"
 
     key_type =
       AshStrangler.Sql.Printer.pg_type!(Ash.Resource.Info.attribute(twin, key.from).type)
@@ -228,13 +227,6 @@ defmodule AshStrangler.Observation.Baseline do
       )
 
     rows != []
-  end
-
-  defp split(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
-    end
   end
 
   # Projection values come out of typed casts — a `::uuid` arrives as a

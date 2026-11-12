@@ -38,11 +38,8 @@ defmodule AshStrangler.Ingester do
          {:ok, id_derivation} <- require_supported_strategy(resource, key),
          {:ok, repo} <- require_repo(resource),
          relation when is_binary(relation) <- Info.relation(resource) do
-      {schema, table} =
-        case String.split(relation, ".", parts: 2) do
-          [schema, table] -> {schema, table}
-          [table] -> {"public", table}
-        end
+      {schema, table} = AshStrangler.Twin.schema_and_table(Info.twin(resource))
+      schema = schema || "public"
 
       name = resource |> Module.split() |> List.last()
 
@@ -372,7 +369,7 @@ defmodule AshStrangler.Ingester do
              LIMIT $3
                FOR UPDATE SKIP LOCKED
             \"\"\",
-            ["#{ctx.schema}", "#{ctx.table}", @batch_size]
+            [#{inspect(ctx.schema)}, #{inspect(ctx.table)}, @batch_size]
           )
 
         Enum.map(rows, fn row -> columns |> Enum.zip(row) |> Map.new() end)

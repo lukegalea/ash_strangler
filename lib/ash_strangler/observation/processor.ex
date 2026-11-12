@@ -87,8 +87,8 @@ defmodule AshStrangler.Observation.Processor do
   end
 
   defp claim(repo, resource, batch) do
-    relation = Info.relation(resource)
-    {schema, table} = split_relation(relation)
+    {schema, table} = AshStrangler.Twin.schema_and_table(Info.twin(resource))
+    schema = schema || "public"
 
     %Postgrex.Result{rows: rows} =
       repo.query!(
@@ -379,13 +379,6 @@ defmodule AshStrangler.Observation.Processor do
     |> Enum.uniq()
     |> Enum.flat_map(&Ash.Domain.Info.resources/1)
     |> Enum.filter(&AshStrangler.Info.strangled?/1)
-  end
-
-  defp split_relation(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
-    end
   end
 
   defp origin(nil), do: :unknown

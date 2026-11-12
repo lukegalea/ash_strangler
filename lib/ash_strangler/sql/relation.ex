@@ -49,7 +49,8 @@ defmodule AshStrangler.Sql.Relation do
   @doc """
   The schema, table and column of `text`, which must name all three: `schema.table.column`.
   """
-  @spec parse_column(String.t()) :: {:ok, {String.t(), String.t(), String.t()}} | {:error, String.t()}
+  @spec parse_column(String.t()) ::
+          {:ok, {String.t(), String.t(), String.t()}} | {:error, String.t()}
   def parse_column(text) when is_binary(text) do
     case names(text) do
       {:ok, [schema, table, column]} -> {:ok, {schema, table, column}}

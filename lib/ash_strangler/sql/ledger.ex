@@ -226,8 +226,9 @@ defmodule AshStrangler.Sql.Ledger do
         # spells the way SQL does -- a mixed-case name quoted
         # (`Twin.sql_relation/1`), not the logical name PostgreSQL would fold
         # to lowercase. The function and trigger NAMES keep the logical parts.
-        {schema, table} = split_relation(Info.relation(resource_or_dsl))
-        {Twin.sql_relation(Info.twin(resource_or_dsl)), schema, table}
+        twin = Info.twin(resource_or_dsl)
+        {schema, table} = Twin.schema_and_table(twin)
+        {Twin.sql_relation(twin), schema || "public", table}
       end
 
     {schema, table} = {target_schema, target_table}
@@ -435,12 +436,5 @@ defmodule AshStrangler.Sql.Ledger do
       AFTER INSERT OR UPDATE OR DELETE ON #{relation}
       FOR EACH ROW EXECUTE FUNCTION #{function}();
     """
-  end
-
-  defp split_relation(relation) do
-    case String.split(relation, ".", parts: 2) do
-      [schema, table] -> {schema, table}
-      [table] -> {"public", table}
-    end
   end
 end

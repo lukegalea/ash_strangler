@@ -125,6 +125,8 @@ defmodule AshStrangler.TwinSnapshotTest do
       Map.merge(
         %{
           relation: relation,
+          schema: relation |> String.split(".") |> hd(),
+          table: relation |> String.split(".") |> List.last(),
           catalog: catalog,
           module: module,
           domain: Clinic,
