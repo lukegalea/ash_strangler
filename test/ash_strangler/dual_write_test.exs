@@ -140,6 +140,47 @@ defmodule AshStrangler.DualWriteTest do
     end
   end
 
+  describe "a destroy on an archival resource" do
+    # `legacy.users.deleted_at` is a naive `timestamp`; these read it back as
+    # the instant the trigger stored, within the clock's travel time.
+    defp recent_deleted_at?(deleted_at) do
+      not is_nil(deleted_at) and
+        NaiveDateTime.diff(NaiveDateTime.utc_now(), deleted_at) in 0..60
+    end
+
+    test "an Ash destroy reaches the view as an UPDATE of the archive column, so the legacy row stays, stamped" do
+      # At :dual_write the legacy table is still the system of record, and
+      # AshArchival turns a destroy into a soft one: an UPDATE of the mapped
+      # `archived_at`, never a DELETE. The dual-write INSTEAD OF DELETE does
+      # not fire, so the row the old application still owns survives.
+      user =
+        Ash.create!(AshStrangler.Test.ArchivedUser, %{
+          login: "arch-#{System.unique_integer([:positive])}",
+          state_code: 0
+        })
+
+      Ash.destroy!(user)
+
+      legacy = legacy_row(user.login)
+      assert recent_deleted_at?(legacy.deleted_at)
+    end
+
+    test "a destroy action listed in exclude_destroy_actions deletes the legacy row" do
+      # The exclusion is an explicit choice to hard-delete, and converting it
+      # into an archive would override that choice.
+      user =
+        Ash.create!(AshStrangler.Test.ExcludedDestroyUser, %{
+          login: "hard-#{System.unique_integer([:positive])}",
+          state_code: 0
+        })
+
+      Ash.destroy!(user)
+
+      assert %Postgrex.Result{rows: []} =
+               TestRepo.query!("SELECT 1 FROM legacy.users WHERE login = $1", [user.login])
+    end
+  end
+
   describe "writing a writable? false mapping" do
     test "raises, quoting the mapping's own because: text" do
       user = create!(%{})

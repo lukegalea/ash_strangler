@@ -218,6 +218,20 @@ trigger raises when something attempts the write:
 ERROR:  cannot write %.%: Not decomposable: 'de la Cruz' splits wrong, and no rule fixes it.
 ```
 
+**What a `DELETE` does here is the other half of an asymmetry the phase model
+makes deliberately.** At `:dual_write` the legacy table is still the system of
+record. An Ash destroy on a resource that uses `AshArchival` reaches the
+compatibility view as an **`UPDATE` of the mapped archive column** —
+`AshArchival` turns the destroy into an update, it archives the legacy row,
+and the dual-write `INSTEAD OF DELETE` never fires. The only `DELETE`s the
+dual-write `INSTEAD OF DELETE` sees are deliberate hard deletes: a destroy
+action listed in `exclude_destroy_actions`, a resource without archival, or
+SQL written against the view. Deleting the legacy row is correct for those;
+converting them into archives would override an explicit choice. The legacy
+application's own `DELETE` on its own table is outside this package. (At
+`:read_from_new` the same `DELETE` lands differently — the next section
+documents what the reverse view's `INSTEAD OF DELETE` archives there.)
+
 This is also the phase in which you run the backfill and the reconciler. Neither
 changes what is generated; both are how you earn the right to move on.
 
