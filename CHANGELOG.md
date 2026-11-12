@@ -67,6 +67,12 @@ Requires Elixir 1.20 or later.
 - `phases.md` calls out that a legacy `INSERT` at `:read_from_new` which leaves out a mapped column
   stores `NULL` rather than the legacy default, a documented limit, with the workaround (a default
   on the view in the cutover migration).
+- `phases.md` and the dual-write trigger's module doc say what a `DELETE` does at `:dual_write`,
+  pinned by tests: an Ash destroy on a resource that uses `AshArchival` reaches the compatibility
+  view as an `UPDATE` of the mapped archive column, so the legacy row stays, archived; the only
+  `DELETE`s the dual-write `INSTEAD OF DELETE` sees are deliberate hard deletes (a destroy action
+  in `exclude_destroy_actions`, a resource without archival, SQL against the view), and it deletes
+  the legacy row for those. No behaviour change.
 
 ### Features
 
@@ -84,6 +90,23 @@ Requires Elixir 1.20 or later.
   resources it writes when their domain attaches the extension. `Migration.resources/1` now loads
   the application config itself. See the [codegen guide](documentation/topics/codegen.md).
 
+- **A legacy `DELETE` at `:read_from_new` cascades `AshArchival`'s `archive_related`:** the reverse
+  view's `INSTEAD OF DELETE` archives, in the same statement as the owned row, the related rows
+  `AshArchival` would archive — for each relationship in declared order, the not-yet-archived
+  destination rows related to a row the statement archived, stamped in the destination's own
+  archive column with `now()`, recursing through each destination's `archive_related`. One
+  statement of data-modifying CTEs chained with `RETURNING`, so the `DELETE` and its cascade commit
+  or fail together; a `DELETE` of an already-archived row cascades nothing. Only the archive column
+  is stamped: the destination's destroy action, changes and notifiers do not run (a strangled
+  destination's ledger records the update). A relationship a trigger cannot follow faithfully is
+  refused at compile time by the new `VerifyArchiveRelated`, at every level, naming the resource,
+  the relationship and the reason: `many_to_many`, `manual`, `no_attributes?`, a `filter`, a
+  `has_one` with `from_many?`, a destination outside `AshPostgres.DataLayer`, in another repo,
+  without a table, with `:context` multitenancy, temporal, strangled at `:read_from_legacy`, not
+  using `AshArchival.Resource` or whose primary destroy does not archive, `archive_related_arguments`,
+  and a cycle. No opt-out: a resource at `:read_from_new` with such an `archive_related` no longer
+  compiles until the relationship is removed from the list or changed. New:
+  `AshStrangler.Sql.ArchiveCascade`.
 - **An opt-in insert route through a union's legacy branch (`insert_through`):** a host that must
   create rows in a legacy table while `:dual_write` can declare it on the branch:
   `insert_through because: "..."`, optionally with `insert_through [:a], because: "..."` to narrow
@@ -111,8 +134,8 @@ Requires Elixir 1.20 or later.
   report one row. A second `DELETE` of an archived row is `DELETE 0` and does not re-stamp it. The
   ledger records the archive once, as an update. A resource without archival still deletes the
   owned row. The reverse view does not hide archived rows (the archive reads as the legacy
-  `deleted_at`, and an un-delete must find the row), and `archive_related` is not cascaded by the
-  trigger. A resource that archives always gets the `INSTEAD OF DELETE` trigger, because a
+  `deleted_at`, and an un-delete must find the row); `archive_related` is cascaded in the same
+  statement (above). A resource that archives always gets the `INSTEAD OF DELETE` trigger, because a
   plain view would delete the owned row; where the view is otherwise plain it is the only
   trigger, so `INSERT ... ON CONFLICT` keeps working. New:
   `AshStrangler.Sql.ReverseTriggers.archive_column/1`.

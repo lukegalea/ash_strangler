@@ -131,9 +131,28 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   The ledger trigger on the owned table sees one `UPDATE`, which is what it records
   for an archive, and nothing for a `DELETE`.
 
-  `AshArchival`'s `archive_related` cascade is an Ash action, not a column, and a
-  database trigger does not run it: a legacy `DELETE` archives the one row. Related
-  rows the resource would have archived are left as they are.
+  ## `archive_related`, in the same statement
+
+  `AshArchival`'s `archive_related` cascade is Ash actions, which a trigger cannot
+  run, so the archiving `INSTEAD OF DELETE` does the same work itself. The owned row
+  is stamped by a data-modifying CTE, and each relationship in `archive_related`, in
+  declared order, is one more CTE: it stamps the destination's archive column (honouring
+  `source:`) with `now()` on the rows whose foreign key matches a row the CTE before it
+  archived and whose archive column is still `NULL`, and returns what the next level
+  compares with. The recursion follows each destination's own `archive_related`, so it
+  proceeds only from rows this statement archived: a row archived earlier keeps its
+  stamp and is not followed, which is what `AshArchival`, reading through the archive
+  filter, does. A `DELETE` of an archived row archives nothing and so cascades nothing.
+  It is one statement, so the `DELETE` and its cascade commit or fail together, and
+  every row carries the same stamp. With no `archive_related` the function is the
+  single `UPDATE` above.
+
+  The cascade stamps the archive column only. The destination's destroy action, its
+  other changes and its notifiers do not run, as for the row the legacy `DELETE`
+  archives itself; a strangled destination with `ledger? true` records the update
+  through its own ledger trigger. The plan, and what a trigger cannot follow
+  faithfully, is `AshStrangler.Sql.ArchiveCascade`; `AshStrangler.Verifiers.VerifyArchiveRelated`
+  refuses those relationships at compile time, and building the trigger for one raises.
 
   ## An `UPDATE` assigns only what the statement changed
 
@@ -155,11 +174,14 @@ defmodule AshStrangler.Sql.ReverseTriggers do
   """
 
   alias AshStrangler.{Expr, Info, Key, Lens, Mechanism, Twin}
-  alias AshStrangler.Sql.{ObjectName, Printer, ReverseView, View}
+  alias AshStrangler.Sql.{ArchiveCascade, ObjectName, Printer, ReverseView, View}
 
   # The alias of the owned table in a generated `UPDATE`, so a column's stored value
   # is never read by a bare name a PL/pgSQL variable could shadow.
   @target "strangler_target"
+
+  # The CTE of a cascading `DELETE` that archives the owned row itself.
+  @archived "strangler_archived"
 
   @doc """
   Whether the old application's writes need `INSTEAD OF` triggers, per the rule in
@@ -235,6 +257,21 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     end
   end
 
+  # The `archive_related` cascade a legacy `DELETE` runs (see "`DELETE`" in the
+  # moduledoc). `VerifyArchiveRelated` refuses a cascade a trigger cannot follow at
+  # compile time; building one anyway raises the same message rather than emit a
+  # trigger that archives less than AshArchival would.
+  defp cascade(resource) do
+    if archival?(resource) do
+      case ArchiveCascade.plan(resource) do
+        {:ok, steps} -> steps
+        {:error, refusal} -> raise ArgumentError, ArchiveCascade.message(refusal)
+      end
+    else
+      []
+    end
+  end
+
   defp archive_column_or_nil(resource) do
     case archive_column(resource) do
       {:ok, column} -> column
@@ -298,6 +335,7 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       new_key: nw.(key.from),
       key_expression: View.key_expression(resource, key, fn {_path, from} -> nw.(from) end),
       archive_column: archive_column_or_nil(resource),
+      cascade: cascade(resource),
       assignments: assignments(resource, twin, key, exposure),
       decode_guards: decode_guards(resource),
       retired: retired(resource, twin)
@@ -509,6 +547,42 @@ defmodule AshStrangler.Sql.ReverseTriggers do
     """
   end
 
+  defp function_body(%{archive_column: archive_column, cascade: [_ | _]} = ctx, :delete)
+       when not is_nil(archive_column) do
+    """
+    CREATE OR REPLACE FUNCTION #{function_name(ctx, :delete)}() RETURNS trigger AS $strangler$
+    DECLARE
+      strangler_archived_rows bigint;
+    BEGIN
+      -- The resource archives, so a destroy is an UPDATE of the archive attribute
+      -- (see "DELETE" in the moduledoc), and its archive_related cascade runs in
+      -- the same statement. Each CTE stamps the rows related to the rows the CTE
+      -- it reads from archived, and only those not archived yet, so the cascade
+      -- recurses only from rows this statement archived. The DELETE and its
+      -- cascade commit or fail together.
+      WITH #{@archived} AS (
+        UPDATE #{ctx.owned} AS #{@target}
+        SET #{archive_column} = now()
+        WHERE #{@target}.#{ctx.stored_key_column} = OLD.#{ctx.view_key_column}
+          AND #{@target}.#{archive_column} IS NULL
+        RETURNING #{returning(ctx.cascade)}
+      ),
+    #{cascade_ctes(ctx.cascade, @archived, "strangler_cascade")}
+      SELECT count(*) INTO strangler_archived_rows FROM #{@archived};
+
+      -- Nothing was archived by this statement: the row is gone, was archived
+      -- already, or the owned table declined the update. `DELETE 0` says so,
+      -- and nothing cascaded.
+      IF strangler_archived_rows = 0 THEN
+        RETURN NULL;
+      END IF;
+
+      -- OLD, not NULL: NULL would report zero rows for a row that was deleted.
+      RETURN OLD;
+    END $strangler$ LANGUAGE plpgsql;
+    """
+  end
+
   defp function_body(%{archive_column: archive_column} = ctx, :delete)
        when not is_nil(archive_column) do
     """
@@ -550,6 +624,47 @@ defmodule AshStrangler.Sql.ReverseTriggers do
       RETURN OLD;
     END $strangler$ LANGUAGE plpgsql;
     """
+  end
+
+  # The cascade's CTEs, depth first in `archive_related` order, each reading the
+  # rows the CTE named `parent` archived. A CTE whose destination cascades no further
+  # returns nothing: PostgreSQL runs a data-modifying CTE whether or not anything
+  # reads it.
+  defp cascade_ctes(steps, parent, prefix) do
+    steps
+    |> Enum.with_index(1)
+    |> Enum.map_join(",\n", fn {step, index} ->
+      name = "#{prefix}_#{index}"
+
+      returning =
+        case step.cascade do
+          [] -> ""
+          cascade -> "\n    RETURNING #{returning(cascade)}"
+        end
+
+      cte = """
+        -- archive_related #{inspect(step.relationship)}
+        #{name} AS (
+          UPDATE #{step.relation} AS #{@target}
+          SET #{step.archive_column} = now()
+          WHERE #{@target}.#{step.destination_column} IN (SELECT #{parent}.#{step.source_column} FROM #{parent})
+            AND #{@target}.#{step.archive_column} IS NULL#{returning}
+        )\
+      """
+
+      case step.cascade do
+        [] -> cte
+        cascade -> cte <> ",\n" <> cascade_ctes(cascade, name, name)
+      end
+    end)
+  end
+
+  # The columns of an archived row the next level's steps compare with.
+  defp returning(steps) do
+    steps
+    |> Enum.map(& &1.source_column)
+    |> Enum.uniq()
+    |> Enum.map_join(", ", &"#{@target}.#{&1}")
   end
 
   # `{owned_column, expression}`: the owned key, then `legacy_id` when the view
