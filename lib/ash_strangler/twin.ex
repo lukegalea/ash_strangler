@@ -256,6 +256,17 @@ defmodule AshStrangler.Twin do
   end
 
   @doc """
+  The twin's schema and table, each as the twin declares it: `{"legacy", "users"}`, or
+  `{nil, "users"}` when the twin declares no schema.
+
+  Read from the twin's `postgres` block, not from `relation/1`'s string, because a schema or
+  table whose name contains a dot (`"odd.schema"`) cannot be found again by splitting the
+  logical name. Anything that needs the parts of a twin's relation asks here.
+  """
+  @spec schema_and_table(Ash.Resource.t()) :: {String.t() | nil, String.t()}
+  def schema_and_table(twin), do: {AshPostgres.DataLayer.Info.schema(twin), table!(twin)}
+
+  @doc """
   The twin's relation as SQL spells it: each part through the printer's identifier
   rule, so `legacy."Mixed_Items"`.
 
