@@ -49,6 +49,24 @@ extension store is not a substitute: AshArchival's timestamp in an extension
 column while the legacy lifecycle says "not archived" is two answers to
 "was this archived?".
 
+## An optimistic lock needs a stored version
+
+A host may put Ash's `optimistic_lock/1` on every update from its base resource,
+so that a version column refuses a write made from a stale copy. On a shared-row
+resource that column has to come from somewhere. If the legacy schema has no
+version column and the mapping answers it with a constant,
+
+```elixir
+constant :version_number, expr(type(1, :integer))
+```
+
+the view returns the same value for every row: the lock's filter never refuses
+anything, and its increment is a write the view cannot carry.
+`VerifyOptimisticLock` refuses that combination at compile time and names each
+action that carries the lock. Give the resource the base's opt-out, or map the
+column from a legacy column that really holds a version. From `:read_from_new`
+the resource owns its table, the column is stored, and the lock is accepted.
+
 ## AshEvents replay is refused while rows are shared
 
 AshEvents replay clears and rebuilds the resource's data from its event log. On
