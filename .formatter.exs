@@ -118,6 +118,7 @@ spark_locals_without_parens = [
   tenant?: 1,
   tenant_of: 1,
   tenant_of: 2,
+  through: 1,
   twin: 1,
   type: 1,
   unmapped: 1,
