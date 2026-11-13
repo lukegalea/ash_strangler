@@ -21,7 +21,7 @@ compiling the broken mapping and reading what came out.
 
 ## Two layers, and one rule about the boundary
 
-There are **thirty-one verifiers** and, behind one of them, **ten proof obligations**.
+There are **thirty-two verifiers** and, behind one of them, **ten proof obligations**.
 The split is not arbitrary. A verifier answers a question about the *declaration* —
 is this attribute accounted for, does this identity exist, is this reference a real
 column. An obligation answers a question about the *values*: is there a legacy
@@ -1197,6 +1197,16 @@ correction): the trigger follows the owned table, because compatibility
 writers through the reverse view fire no Ash notifier. The compatibility
 `Sql.Notify` trigger remains refused there; PostgreSQL rejects row-level
 triggers on views.
+
+### An optimistic lock on a constant
+
+**`VerifyOptimisticLock`** refuses Ash's `optimistic_lock/1` on an attribute the
+resource projects as a `constant`, on any update or soft destroy, whether the
+action declares it or the top-level `changes` block applies it. A constant has
+no legacy column, so the lock's filter compares the same value on every row and
+never refuses a stale write, and its increment writes to a column the view
+cannot carry. It applies while a view stands in for the table. See
+`platform-conventions.md`.
 
 ### A legacy column nobody decided about
 

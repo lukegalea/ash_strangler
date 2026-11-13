@@ -86,6 +86,7 @@ defmodule AshStrangler.Resource do
       AshStrangler.Verifiers.VerifyJoinedWritesRefused,
       AshStrangler.Verifiers.VerifyObligations,
       AshStrangler.Verifiers.VerifyNoUpserts,
+      AshStrangler.Verifiers.VerifyOptimisticLock,
       AshStrangler.Verifiers.VerifyReverseMappable,
       AshStrangler.Verifiers.VerifyIdentitiesBacked,
       AshStrangler.Verifiers.VerifyPhaseTransition,

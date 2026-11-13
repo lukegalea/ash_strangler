@@ -88,6 +88,15 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **An optimistic lock on an attribute projected as a `constant` is refused at compile time**
+  (`VerifyOptimisticLock`). A constant has no legacy column, so the view answers the same value
+  for every row: Ash's `optimistic_lock/1` filter always passed, and its increment wrote to a
+  column the view cannot carry, which failed or stored nothing at the first update. The check
+  covers update actions and soft destroys, with the lock in the action or in the top-level
+  `changes` block. It applies while a view stands in for the table; from `:read_from_new` the
+  attribute is stored and the lock is accepted. A host whose base resource locks every update
+  gives a strangled read model that projects its version column as a constant that base's
+  opt-out.
 - **`mix ash.codegen` covers the strangler layer, opt-in by attachment.** `AshStrangler.Codegen`
   is a Spark extension that exports `codegen/1`. Attach it to a domain
   (`extensions: [AshStrangler.Codegen]`) and `mix ash.codegen --check` raises
