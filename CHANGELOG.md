@@ -88,6 +88,21 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **A tenant reached from the legacy row through a declared chain** (`tenant_of ..., through:`).
+  Some legacy rows carry no column that is, or references, their tenant: an invitation names a
+  tendering process, which names a plan event, whose plan's lowest property names the
+  enterprise. Opt-in, `through:` declares the lookups as a list of alternative chains of hops
+  `{relation, match, take}` starting at the single twin column `from`; the first chain that
+  reaches a value wins, and a hop that matches several rows takes the lowest `take`. The view
+  packs the end of the chain as the tenant and carries it as the hidden tenant part, so
+  `AshStrangler.Inversion` reads the branch as before (by value, without a legacy index). Estate
+  check E5 holds the chain to tenant closure: the kind has one part, every hop's relation and
+  columns are in the catalog, every hop follows a validated foreign key from the value so far
+  (either direction, or both onto the same column), and every chain ends on the kind's home or a
+  validated foreign key onto it, no wider than the part. Nothing is inferred: without `through:`
+  a `tenant_of` over a column that is not the home, or has no foreign key onto it, is refused as
+  before.
+
 - **Two union branches may share a key namespace when both declare it** (`shares_key_with`). One
   legacy entity can reach a union through either of two branches, chosen by a column of the row
   (a property held by an organization, or by one person through a link table), and keep the

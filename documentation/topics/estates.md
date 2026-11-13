@@ -109,6 +109,30 @@ three rules:
 - The column is declared `null?: false`, so the owned branch can't hold a row
   with no tenant.
 
+A legacy row that carries no column onto its tenant can reach it through a
+declared chain, opt-in, with `through:`:
+
+```elixir
+tenant_of :organization_id,
+  kind: {MyApp.Keys, :organization},
+  from: :rfq_id,
+  through: [
+    [{"vendorpm.rfqs", :id, :event_id}, {"vendorpm.events", :id, :service_plan_id},
+     {"vendorpm.properties_service_plans", :service_plan_id, :property_id},
+     {"vendorpm.properties", :id, :enterprise_id}],
+    [{"vendorpm.rfqs", :id, :pm_id}, {"vendorpm.pms", :id, :enterprise_id}]
+  ]
+```
+
+Each hop `{relation, match, take}` reads the row of `relation` whose `match`
+equals the value so far (the lowest `take` when several do); the first chain
+that reaches a value is the tenant. E5 then requires a one-part kind and one
+`from` column, every hop's relation and columns in the catalog, every hop on a
+validated foreign key from the value so far (either direction, or both onto the
+same column), and every chain ending on the kind's home or a validated foreign
+key onto it. A chain is never inferred: the same `from` without `through:` is
+refused by the closure rule above.
+
 Each problem names the module, the branch or source and the column.
 
 ## Where the checks run

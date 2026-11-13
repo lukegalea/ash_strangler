@@ -281,6 +281,7 @@ tenant_of :clinic, kind: {Clinic.Keys, :clinic}, from: :clinic_id
 |------|------|---------|------|
 | [`kind`](#union-legacy-tenant_of-kind){: #union-legacy-tenant_of-kind .spark-required} | `{module, atom}` |  | `{Registry, :kind}`: a packed kind of the registry. |
 | [`from`](#union-legacy-tenant_of-from){: #union-legacy-tenant_of-from .spark-required} | `atom \| list(atom)` |  | The twin column (or columns, in kind order) the key packs. |
+| [`through`](#union-legacy-tenant_of-through){: #union-legacy-tenant_of-through } | `list(list({String.t, atom \| String.t, atom \| String.t}))` |  | Opt-in: the tenant is not on the legacy row but is reached from it. A list of alternative chains, each a list of hops `{relation, match, take}` that starts at the single twin column `from`: the row of `relation` whose `match` equals the value so far (the lowest `take` when several match), whose `take` becomes the value. The first chain that reaches a value wins. The kind must have one part. Estate check E5 holds every hop to a validated foreign key and the last `take` to the kind's home column, so the chain is as closed as a direct `tenant_of`; without `through:` a column that is not the home, or has no foreign key onto it, is refused as before. |
 
 
 

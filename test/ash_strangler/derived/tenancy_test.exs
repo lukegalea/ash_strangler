@@ -23,7 +23,9 @@ defmodule AshStrangler.TenancyTest do
   @south "AshStrangler.Test.Clinic.Legacy.SouthVisits"
 
   # The union fixture's catalog, with the columns the tenant keys read: `clinic_id` closes onto the
-  # clinics relation by a validated foreign key; `site_id` has none.
+  # clinics relation by a validated foreign key; `site_id` has none onto it, only onto a site, whose
+  # own `clinic_id` closes (the chain a `through:` declares). `clinic_union.loose` is a relation no
+  # foreign key reaches.
   setup_all do
     catalog = @fixture |> File.read!() |> Jason.decode!()
 
@@ -64,7 +66,30 @@ defmodule AshStrangler.TenancyTest do
       relations["clinic_union.south_visits"]
       |> Map.put("columns", [column.("id"), column.("clinic_id")])
 
-    relations = Map.put(relations, "clinic_derived.visits", derived)
+    site_fk = %{
+      "columns" => ["site_id"],
+      "name" => "visits_site_id_fkey",
+      "on_delete" => "no_action",
+      "on_update" => "no_action",
+      "references" => %{"columns" => ["id"], "relation" => "clinic_union.sites"},
+      "validated" => true
+    }
+
+    relations =
+      relations
+      |> update_in(["clinic_union.north_visits", "foreign_keys"], &(&1 ++ [site_fk]))
+      |> Map.put("clinic_derived.visits", derived)
+      |> Map.put("clinic_union.sites", %{
+        derived
+        | "columns" => [column.("id"), column.("clinic_id")],
+          "foreign_keys" => [fk]
+      })
+      |> Map.put("clinic_union.loose", %{
+        derived
+        | "columns" => [column.("id"), column.("clinic_id")],
+          "foreign_keys" => [fk]
+      })
+
     File.write!(@catalog, Jason.encode!(%{catalog | "relations" => relations}))
     :ok
   end
@@ -160,6 +185,102 @@ defmodule AshStrangler.TenancyTest do
              problems(union(tenant_of(:clinic, :site_id), tenant_of(:clinic)))
 
     assert message =~ "clinic_union.north_visits.site_id"
+  end
+
+  describe "a tenant reached through a declared chain (`through:`)" do
+    defp through(chains),
+      do:
+        "tenant_of :clinic, kind: {#{@keys}, :clinic}, from: :site_id, through: #{inspect(chains)}"
+
+    @site [{"clinic_union.sites", :id, :clinic_id}]
+
+    test "is closed when every hop follows a validated foreign key and the chain ends on the home" do
+      assert problems(union(through([@site]), tenant_of(:clinic))) == []
+    end
+
+    test "takes alternative chains, each held to the rule" do
+      fallback = [{"clinic_union.sites", :id, :id}]
+
+      assert problems(union(through([@site, @site]), tenant_of(:clinic))) == []
+
+      assert [%{message: message}] =
+               problems(union(through([@site, fallback]), tenant_of(:clinic)))
+
+      assert message =~ "`through:` chain 2"
+    end
+
+    test "an undeclared chain is still refused: the same column without `through:`" do
+      assert [%{message: message}] =
+               problems(union(tenant_of(:clinic, :site_id), tenant_of(:clinic)))
+
+      assert message =~
+               "clinic_union.north_visits.site_id, which is not clinic_derived.clinics.id"
+    end
+
+    test "a hop no validated foreign key reaches is refused" do
+      assert [%{message: message}] =
+               problems(
+                 union(through([[{"clinic_union.loose", :id, :clinic_id}]]), tenant_of(:clinic))
+               )
+
+      assert message =~ "branch :north"
+      assert message =~ "chain 1"
+
+      assert message =~
+               "clinic_union.north_visits.site_id reaches clinic_union.loose.id by no validated foreign key"
+    end
+
+    test "a chain that does not end on the tenant is refused" do
+      assert [%{message: message}] =
+               problems(union(through([[{"clinic_union.sites", :id, :id}]]), tenant_of(:clinic)))
+
+      assert message =~ "ends on clinic_union.sites.id, which is not clinic_derived.clinics.id"
+    end
+
+    test "a hop over a relation or a column the catalog lacks is refused" do
+      assert [%{message: missing}] =
+               problems(
+                 union(through([[{"clinic_union.nope", :id, :clinic_id}]]), tenant_of(:clinic))
+               )
+
+      assert missing =~ "the estate catalog has no relation `clinic_union.nope`"
+
+      assert [%{message: column}] =
+               problems(
+                 union(through([[{"clinic_union.sites", :id, :nope}]]), tenant_of(:clinic))
+               )
+
+      assert column =~ "`clinic_union.sites` has no column `nope`"
+    end
+
+    test "a kind that is not a tenant kind is refused before the chain is read" do
+      assert [%{message: message}] =
+               problems(
+                 union(
+                   "tenant_of :clinic, kind: {#{@keys}, :site}, from: :site_id, through: #{inspect([@site])}",
+                   tenant_of(:clinic)
+                 )
+               )
+
+      assert message =~ "is not declared `tenant?: true`"
+    end
+
+    test "the view packs the end of the chain, and carries it as the tenant part" do
+      module = union(through([@site, [{"clinic_union.sites", :id, :id}]]), tenant_of(:clinic))
+
+      view =
+        module
+        |> AshStrangler.Migration.statements()
+        |> Enum.map_join("\n", & &1.up)
+
+      chain =
+        ~s|(SELECT (SELECT strangler_t0_0.clinic_id FROM "clinic_union"."sites" strangler_t0_0 | <>
+          ~s|WHERE strangler_t0_0.id = strangler_c0.v ORDER BY strangler_t0_0.clinic_id LIMIT 1) | <>
+          ~s|FROM (SELECT site_id AS v) strangler_c0)|
+
+      assert view =~ "coalesce(#{chain}, "
+      assert view =~ ~r/coalesce\(\(SELECT \(SELECT strangler_t0_0[^\n]*\) AS "__tenant_p0"/
+    end
   end
 
   test "a relation the catalog lacks cannot show closure" do

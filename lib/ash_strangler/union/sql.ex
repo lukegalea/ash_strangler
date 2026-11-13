@@ -331,12 +331,14 @@ defmodule AshStrangler.Union.Sql do
 
   # The tenant key's integer parts as the legacy columns themselves, uncast: a predicate on them pushes
   # into the branch and meets the legacy table's own index (see `AshStrangler.Inversion`).
+  # A chained key (`through:`) has one part, the end of its chain: a computed value, so the
+  # predicate meets no legacy index, but it is the same tenant the column packs.
   defp tenant_parts(union, branch, frame) do
     key = Info.tenant_key(branch, Info.tenant(union))
+    parts = if key, do: tenant_part_sqls(key, frame), else: []
 
     Enum.map(Enum.with_index(Info.tenant_part_columns(union)), fn {name, index} ->
-      column = key && Enum.at(TenantKey.columns(key), index)
-      ",\n  #{if column, do: frame.({[], column}), else: "NULL"} AS #{q(name)}"
+      ",\n  #{Enum.at(parts, index) || "NULL"} AS #{q(name)}"
     end)
   end
 
@@ -366,14 +368,51 @@ defmodule AshStrangler.Union.Sql do
   end
 
   @doc false
-  # The packed key of the tenant column, over the branch's twin columns.
+  # The packed key of the tenant column, over the branch's twin columns or the end of its chain.
   def tenant_sql(%TenantKey{kind: {registry, kind}} = key, frame),
-    do:
-      AshStrangler.KeyKinds.to_sql(
-        registry,
-        kind,
-        Enum.map(TenantKey.columns(key), &frame.({[], &1}))
-      )
+    do: AshStrangler.KeyKinds.to_sql(registry, kind, tenant_part_sqls(key, frame))
+
+  @doc false
+  # The integer parts the tenant key packs, as SQL.
+  def tenant_part_sqls(%TenantKey{} = key, frame) do
+    if TenantKey.chained?(key) do
+      [from] = TenantKey.columns(key)
+      start = frame.({[], from})
+
+      chains =
+        key
+        |> TenantKey.chains()
+        |> Enum.with_index()
+        |> Enum.map(fn {chain, c} -> chain_sql(chain, start, c) end)
+
+      [if(match?([_], chains), do: hd(chains), else: "coalesce(#{Enum.join(chains, ", ")})")]
+    else
+      Enum.map(TenantKey.columns(key), &frame.({[], &1}))
+    end
+  end
+
+  # Each hop is a scalar subquery over the value so far; the lowest `take` makes a hop that
+  # matches several rows deterministic. The start is bound once in a subselect with no FROM of its
+  # own, so a bare column of the frame can only name the branch row, never a hop relation's
+  # column of the same name; every hop reads through its own numbered alias.
+  defp chain_sql(chain, start, c) do
+    bound = "strangler_c#{c}"
+
+    hops =
+      chain
+      |> Enum.with_index()
+      |> Enum.reduce("#{bound}.v", fn {%{relation: {schema, table}, match: match, take: take}, h},
+                                      value ->
+        alias_ = "strangler_t#{c}_#{h}"
+        relation = if schema, do: "#{q(schema)}.#{q(table)}", else: q(table)
+        take = "#{alias_}.#{Printer.identifier(take)}"
+
+        "(SELECT #{take} FROM #{relation} #{alias_} WHERE #{alias_}.#{Printer.identifier(match)} = #{value} " <>
+          "ORDER BY #{take} LIMIT 1)"
+      end)
+
+    "(SELECT #{hops} FROM (SELECT #{start} AS v) #{bound})"
+  end
 
   # --- triggers -----------------------------------------------------------------
 
