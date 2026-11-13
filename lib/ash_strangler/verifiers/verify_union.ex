@@ -13,7 +13,9 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     * a branch has exactly one `key`, a supported strategy over twin columns,
       and answers every column exactly once (`map`, `constant` or `unmapped`);
     * on a `:dual_write` branch no two columns map from one legacy column;
-    * two branches never share a key namespace (their ids would collide).
+    * two branches share a key namespace (their ids could collide) only when
+      each names the other in `shares_key_with`; a declaration names another
+      legacy branch of the union whose key is in the same namespace.
 
   Every refusal names the branch and the column.
   """
@@ -434,26 +436,82 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
         do: "#{what} reads #{inspect(column)}, which #{inspect(twin)} does not have"
   end
 
+  # Two branches may share a key namespace only when each names the other in `shares_key_with`:
+  # the sharing is a claim about both branches' filters, so one side alone cannot make it.
   defp key_collisions(branches) do
-    branches
-    |> Enum.flat_map(fn b ->
-      case b.keys do
-        [%{strategy: {:uuid_v5, opts}}] -> [{{:v5, opts[:namespace]}, b.name}]
-        [%{strategy: {:uuid_v8, registry, kind}}] -> [{{:v8, registry, kind}, b.name}]
-        _ -> []
-      end
-    end)
-    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-    |> Enum.flat_map(fn
-      {_space, [_, _ | _] = names} ->
-        [
-          "branches #{Enum.map_join(names, ", ", &inspect/1)} share a key namespace, so their ids can collide"
-        ]
+    by_name = Map.new(branches, &{&1.name, &1})
 
-      _ ->
-        []
-    end)
+    sharing_declaration_problems(branches, by_name) ++
+      (branches
+       |> Enum.filter(&Info.key_space/1)
+       |> Enum.group_by(&Info.key_space/1)
+       |> Map.values()
+       |> Enum.flat_map(&undeclared_pairs/1))
   end
+
+  defp sharing_declaration_problems(branches, by_name) do
+    for b <- branches,
+        problem <-
+          dups(b.shares_key_with, "`shares_key_with` entry") ++
+            Enum.flat_map(Enum.uniq(b.shares_key_with), &sharing_target_problem(b, &1, by_name)),
+        do: "branch #{inspect(b.name)}: " <> problem
+  end
+
+  defp sharing_target_problem(%{name: name}, name, _by_name),
+    do: ["`shares_key_with` names the branch itself"]
+
+  defp sharing_target_problem(b, other, by_name) do
+    case Map.fetch(by_name, other) do
+      :error ->
+        ["`shares_key_with` names #{inspect(other)}, which is not a legacy branch of this union"]
+
+      {:ok, target} ->
+        cond do
+          is_nil(Info.key_space(b)) ->
+            [
+              "`shares_key_with` needs a `uuid_v5` or `uuid_v8` key: an `:identity` key has no namespace to share"
+            ]
+
+          Info.key_space(target) != Info.key_space(b) ->
+            [
+              "`shares_key_with` names #{inspect(other)}, whose key is in another namespace: " <>
+                "the two share nothing, so drop the declaration"
+            ]
+
+          true ->
+            []
+        end
+    end
+  end
+
+  defp undeclared_pairs(group) do
+    sorted = Enum.sort_by(group, & &1.name)
+
+    for {a, i} <- Enum.with_index(sorted),
+        b <- Enum.drop(sorted, i + 1),
+        problem <- pair_problem(a, b, b.name in a.shares_key_with, a.name in b.shares_key_with),
+        do: problem
+  end
+
+  defp pair_problem(_a, _b, true, true), do: []
+
+  defp pair_problem(a, b, true, false), do: [one_sided(a.name, b.name)]
+
+  defp pair_problem(a, b, false, true), do: [one_sided(b.name, a.name)]
+
+  defp pair_problem(a, b, false, false),
+    do: [
+      "branches #{inspect(a.name)}, #{inspect(b.name)} share a key namespace, so their ids can collide: " <>
+        "give each its own namespace or kind, or, when their filters keep the same legacy entity " <>
+        "in one branch at a time, declare `shares_key_with` on both"
+    ]
+
+  defp one_sided(declares, other),
+    do:
+      "branches #{inspect(declares)} and #{inspect(other)} share a key namespace, but only " <>
+        "#{inspect(declares)} declares `shares_key_with: [#{inspect(other)}]`: " <>
+        "declare `shares_key_with: [#{inspect(declares)}]` on #{inspect(other)} too, " <>
+        "or give the branches their own namespaces"
 
   defp error(dsl, first, all) do
     Spark.Error.DslError.exception(

@@ -28,7 +28,8 @@ defmodule AshStrangler.Union.Legacy do
     :__spark_metadata__,
     keys: [],
     mappings: [],
-    write_rules: []
+    write_rules: [],
+    shares_key_with: []
   ]
 
   @type t :: %__MODULE__{}

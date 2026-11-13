@@ -1250,7 +1250,10 @@ least one legacy branch and exactly one owned branch; unique column, branch and 
 names; a branch twin that is a twin and reads only its own columns; exactly one
 supported `key` per branch and every column answered once; no two columns mapped
 from one legacy column on a `:dual_write` branch; and no two branches sharing a key
-namespace, whose ids would collide. Each refusal names the branch and the column.
+namespace, whose ids would collide, unless each names the other in `shares_key_with`
+(a one-sided declaration is refused, naming both branches, and so is one naming the
+branch itself, an unknown branch or a branch keyed in another namespace). Each
+refusal names the branch and the column.
 
 ### A derived view that cannot answer for its sources
 

@@ -47,7 +47,9 @@ defmodule AshStrangler.Union.Dsl do
     name: :key,
     describe: """
     How the branch's legacy key becomes the canonical key. Keys of different
-    branches must not collide: give each its own namespace or kind.
+    branches must not collide: give each its own namespace or kind, or, when
+    two branches carry the same legacy entity under disjoint filters, declare
+    `shares_key_with` on both.
     """,
     examples: [
       ~S|key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}|
@@ -250,6 +252,17 @@ defmodule AshStrangler.Union.Dsl do
         """
       ],
       twin: [type: :module, required: true, doc: "The twin of the branch's legacy relation."],
+      shares_key_with: [
+        type: {:list, :atom},
+        default: [],
+        doc: """
+        Other legacy branches whose `key` uses this branch's namespace or kind, on purpose: the
+        same legacy entity reaches the view through whichever branch's filter takes it, and keeps
+        one id either way. Every branch of the group must name every other, or the union is
+        refused. Their filters must keep them apart; the estate obligation
+        `key-disjoint:<view>:<a>+<b>` counts the ids more than one of them produces.
+        """
+      ],
       phase: [type: {:one_of, @phases}, required: true],
       refused_because: [
         type: :string,

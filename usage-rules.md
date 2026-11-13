@@ -495,7 +495,10 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   column, and the key itself.
 - A legacy row's update or delete is refused in `:read_from_legacy` (as
   `AshStrangler.Error.BranchWriteRefused`, with the declared reason) and carried
-  to the legacy table in `:dual_write`. Give every branch its own key namespace.
+  to the legacy table in `:dual_write`. Give every branch its own key namespace,
+  unless two branches carry the same legacy entity under disjoint filters: then
+  declare `shares_key_with` on both (a one-sided declaration is refused), and the
+  estate obligation `key-disjoint:<view>:<a>+<b>` must measure 0.
 - Each branch answers every column; `unmapped` reads NULL.
 - Write-through on a `:dual_write` branch: `not_written_back [:col], because: ...` drops a column
   from the update (it keeps the legacy value, and is not a writer of a shared legacy column);

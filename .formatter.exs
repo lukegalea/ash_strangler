@@ -98,6 +98,7 @@ spark_locals_without_parens = [
   security_definer: 1,
   separator: 1,
   set: 1,
+  shares_key_with: 1,
   slot: 1,
   slot: 2,
   snapshot: 1,

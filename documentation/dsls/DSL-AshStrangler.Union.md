@@ -136,6 +136,7 @@ end
 | [`phase`](#union-legacy-phase){: #union-legacy-phase .spark-required} | `:read_from_legacy \| :dual_write \| :read_from_new \| :decommissioned` |  |  |
 | [`refused_because`](#union-legacy-refused_because){: #union-legacy-refused_because .spark-required} | `String.t` |  | Why a write to this branch is refused in `:read_from_legacy`. Quoted in the error. |
 | [`filter`](#union-legacy-filter){: #union-legacy-filter } | `any` |  | An expression over the twin's columns; the branch shows only the rows where it is true. The rest of the relation belongs to no branch. |
+| [`shares_key_with`](#union-legacy-shares_key_with){: #union-legacy-shares_key_with } | `list(atom)` | `[]` | Other legacy branches whose `key` uses this branch's namespace or kind, on purpose: the same legacy entity reaches the view through whichever branch's filter takes it, and keeps one id either way. Every branch of the group must name every other, or the union is refused. Their filters must keep them apart; the estate obligation `key-disjoint:<view>:<a>+<b>` counts the ids more than one of them produces. |
 
 
 ### union.legacy.key
@@ -145,7 +146,9 @@ key from
 
 
 How the branch's legacy key becomes the canonical key. Keys of different
-branches must not collide: give each its own namespace or kind.
+branches must not collide: give each its own namespace or kind, or, when
+two branches carry the same legacy entity under disjoint filters, declare
+`shares_key_with` on both.
 
 
 
