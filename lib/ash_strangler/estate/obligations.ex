@@ -13,6 +13,10 @@ defmodule AshStrangler.Estate.Obligations do
       time, for each strangled resource of the estate;
     * a census of the elements an `element` source of an `AshStrangler.Derived`
       refuses (see the integer guard), one per source;
+    * for each group of union branches that share a key namespace
+      (`shares_key_with`), `key-disjoint:<view>:<a>+<b>`: the ids of the view that
+      more than one of them produces. Its severity is `:error`: such an id is
+      two rows a write cannot tell apart;
     * whatever each plug-in returns from `c:AshStrangler.Estate.Plugin.obligations/1`.
 
   `report/3` measures them and returns the report below. `mix ash_strangler.check
@@ -53,7 +57,7 @@ defmodule AshStrangler.Estate.Obligations do
   estate problem: an obligation that could not be measured is not green.
   """
 
-  alias AshStrangler.{Derived, Estate, Info, Migration, Obligations}
+  alias AshStrangler.{Derived, Estate, Info, Migration, Obligations, Union}
   alias AshStrangler.Estate.Obligation
 
   @format "ash_strangler.obligations/1"
@@ -63,7 +67,9 @@ defmodule AshStrangler.Estate.Obligations do
   def registry(estate) do
     modules = Estate.resources(estate)
 
-    (resource_obligations(modules) ++ element_obligations(modules) ++ plugin_obligations(estate))
+    (resource_obligations(modules) ++
+       element_obligations(modules) ++
+       key_disjoint_obligations(modules) ++ plugin_obligations(estate))
     |> Enum.sort_by(& &1.id)
   end
 
@@ -142,6 +148,26 @@ defmodule AshStrangler.Estate.Obligations do
         sql: Derived.Sql.element_census_sql(module, source),
         shape: :census,
         severity: :warning,
+        source: inspect(module)
+      }
+    end
+  end
+
+  defp key_disjoint_obligations(modules) do
+    for module <- modules,
+        Migration.union?(module),
+        group <- Union.Info.key_sharing_groups(module) do
+      view = "#{Union.Info.schema(module)}.#{Union.Info.view(module)}"
+      names = Enum.map_join(group, ", ", &inspect/1)
+
+      %Obligation{
+        id: "key-disjoint:#{Union.Info.view(module)}:#{Enum.join(group, "+")}",
+        summary:
+          "branches #{names} share a key namespace (`shares_key_with`): no id of #{view} comes from more than one of them",
+        denominator: "distinct ids branches #{names} put in #{view}",
+        sql: Union.Sql.key_disjoint_census_sql(module, group),
+        shape: :census,
+        severity: :error,
         source: inspect(module)
       }
     end

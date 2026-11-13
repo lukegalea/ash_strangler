@@ -52,6 +52,30 @@ defmodule AshStrangler.Union.Sql do
   end
 
   @doc """
+  The census behind the estate obligation `key-disjoint:<view>:<a>+<b>`: one row of
+  (`collisions`, `total`), where `total` counts the distinct keys `branches` put in the view
+  and `collisions` those that more than one of them produces.
+
+  `branches` share a key namespace (`shares_key_with`), so their filters alone keep their ids
+  apart. A collision is a key the view returns twice, which a write through the triggers
+  cannot address. It reads the view, so it measures the branches still in it.
+  """
+  @spec key_disjoint_census_sql(module() | Spark.Dsl.t(), [atom()]) :: String.t()
+  def key_disjoint_census_sql(union, [_, _ | _] = branches) do
+    names = Enum.map_join(branches, ", ", &Printer.literal(to_string(&1)))
+
+    """
+    SELECT count(*) FILTER (WHERE "k"."branches" > 1)::bigint AS collisions, count(*)::bigint AS total
+    FROM (
+      SELECT count(DISTINCT "__branch") AS "branches"
+      FROM #{Info.view_name(union)}
+      WHERE "__branch" IN (#{names})
+      GROUP BY #{q(Info.key(union))}
+    ) AS "k"
+    """
+  end
+
+  @doc """
   The statements that move an already-installed union to its current declaration: the extension
   table (`IF NOT EXISTS`), a guard on the installed view's column list, `CREATE OR REPLACE VIEW`
   and `CREATE OR REPLACE FUNCTION`. No owned table and no trigger: both exist already, and a

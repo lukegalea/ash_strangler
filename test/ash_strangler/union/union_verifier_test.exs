@@ -74,6 +74,8 @@ defmodule AshStrangler.UnionVerifierTest do
 
   defp inside(branch, extra), do: String.replace(branch, ~r/end\s*\z/, extra <> "\nend\n")
 
+  defp shares(branch, names), do: inside(branch, "shares_key_with #{inspect(names)}")
+
   defp rejection(body) do
     module = probe(body)
 
@@ -193,6 +195,92 @@ defmodule AshStrangler.UnionVerifierTest do
       )
 
     assert rejection(valid(south: shared)) =~ "share a key namespace"
+  end
+
+  describe "shares_key_with" do
+    @shared_south String.replace(
+                    @south,
+                    "0a1b2c3d-4e5f-5a6b-8c7d-9e0f1a2b3c4d",
+                    "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"
+                  )
+
+    @west @shared_south
+          |> String.replace("legacy :south", "legacy :west")
+          |> String.replace("south writes", "west writes")
+
+    test "two branches that name each other may share a key namespace" do
+      module =
+        probe(valid(north: shares(@north, [:south]), south: shares(@shared_south, [:north])))
+
+      assert :ok = VerifyUnion.verify(module.spark_dsl_config())
+      assert AshStrangler.Union.Info.key_sharing_groups(module) == [[:north, :south]]
+    end
+
+    test "a one-sided declaration is refused, naming both branches" do
+      message = rejection(valid(north: shares(@north, [:south]), south: @shared_south))
+
+      assert message =~
+               "branches :north and :south share a key namespace, but only :north declares " <>
+                 "`shares_key_with: [:south]`"
+
+      assert message =~ "declare `shares_key_with: [:north]` on :south too"
+
+      assert rejection(valid(south: shares(@shared_south, [:north]))) =~
+               "branches :south and :north share a key namespace, but only :south declares"
+    end
+
+    test "a declaration naming the branch itself, an unknown branch or a duplicate is refused" do
+      assert rejection(valid(north: shares(@north, [:north]))) =~
+               "branch :north: `shares_key_with` names the branch itself"
+
+      assert rejection(valid(north: shares(@north, [:west]))) =~
+               "branch :north: `shares_key_with` names :west, which is not a legacy branch of this union"
+
+      assert rejection(
+               valid(
+                 north: shares(@north, [:south, :south]),
+                 south: shares(@shared_south, [:north])
+               )
+             ) =~ "branch :north: `shares_key_with` entry :south is declared 2 times"
+    end
+
+    test "a declaration naming a branch keyed in another namespace is refused" do
+      assert rejection(valid(north: shares(@north, [:south]), south: shares(@south, [:north]))) =~
+               "branch :north: `shares_key_with` names :south, whose key is in another namespace"
+    end
+
+    test "an :identity key has nothing to share" do
+      identity =
+        @north
+        |> String.replace(
+          ~S|key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}|,
+          ~S|key :id, strategy: :identity|
+        )
+        |> shares([:south])
+
+      assert rejection(valid(north: identity)) =~
+               "branch :north: `shares_key_with` needs a `uuid_v5` or `uuid_v8` key"
+    end
+
+    test "in a group of three, every branch must name every other" do
+      north = shares(@north, [:south, :west])
+      south = shares(@shared_south, [:north, :west])
+
+      message = rejection(valid(north: north, south: south <> "\n" <> @west))
+
+      assert message =~
+               "branches :north and :west share a key namespace, but only :north declares"
+
+      assert message =~
+               "branches :south and :west share a key namespace, but only :south declares"
+
+      refute message =~ "branches :north and :south"
+
+      west = shares(@west, [:north, :south])
+      module = probe(valid(north: north, south: south <> "\n" <> west))
+      assert :ok = VerifyUnion.verify(module.spark_dsl_config())
+      assert AshStrangler.Union.Info.key_sharing_groups(module) == [[:north, :south, :west]]
+    end
   end
 
   test "an empty refusal reason" do

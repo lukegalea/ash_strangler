@@ -128,6 +128,36 @@ defmodule AshStrangler.Union.Info do
   def live_branches(union),
     do: Enum.filter(branches(union), &(&1.phase in [:read_from_legacy, :dual_write]))
 
+  @doc """
+  The namespace a legacy branch's key packs into: `{:v5, namespace}`, `{:v8, registry, kind}`,
+  or `nil` for an `:identity` key (or a branch that does not declare exactly one key). Two
+  branches with the same namespace produce ids that can collide.
+  """
+  @spec key_space(Legacy.t()) :: {:v5, String.t()} | {:v8, module(), atom()} | nil
+  def key_space(%Legacy{keys: [%{strategy: {:uuid_v5, opts}}]}), do: {:v5, opts[:namespace]}
+
+  def key_space(%Legacy{keys: [%{strategy: {:uuid_v8, registry, kind}}]}),
+    do: {:v8, registry, kind}
+
+  def key_space(%Legacy{}), do: nil
+
+  @doc """
+  The groups of legacy branches that share a key namespace, each a list of branch names in
+  name order, the groups in order of their first name. On a union the verifier accepted, every
+  branch of a group declares `shares_key_with` every other.
+  """
+  @spec key_sharing_groups(module() | Spark.Dsl.t()) :: [[atom()]]
+  def key_sharing_groups(union) do
+    union
+    |> branches()
+    |> Enum.filter(&key_space/1)
+    |> Enum.group_by(&key_space/1, & &1.name)
+    |> Map.values()
+    |> Enum.filter(&match?([_, _ | _], &1))
+    |> Enum.map(&Enum.sort/1)
+    |> Enum.sort()
+  end
+
   @doc "The lens of each column on a legacy branch: `%{column => kind}`. The key is `:key`."
   @spec lens_kinds(module() | Spark.Dsl.t(), atom()) :: %{atom() => kind() | :key}
   def lens_kinds(union, name) do

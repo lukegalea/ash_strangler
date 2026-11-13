@@ -78,6 +78,48 @@ The filter is an expression over the twin's own columns, printed as the `WHERE` 
 branch's select. A row it excludes is in no branch of the view. The filter's columns count as
 read by the union in an estate, and a filter over a column the twin lacks fails compilation.
 
+## Two branches, one key
+
+Sometimes one legacy entity reaches the view through either of two branches, depending on a
+column of the row: a property held by an organization comes from its own table, and one held by
+a single person comes through that person's link table. Both branches must give the property
+the same id, so that references to it resolve and the id survives a move from one branch to the
+other. Give both the same key kind and declare the sharing on each:
+
+```elixir
+legacy :held_by_organization do
+  twin Estate.Legacy.Properties
+  shares_key_with [:held_by_person]
+  filter expr(not is_nil(organization_id))
+  key :id, strategy: {:uuid_v8, Estate.Keys, :property}
+  tenant_of :tenant, kind: {Estate.Keys, :organization}, from: :organization_id
+  ...
+end
+
+legacy :held_by_person do
+  twin Estate.Legacy.PersonProperties
+  shares_key_with [:held_by_organization]
+  filter expr(...)   # only properties with no organization, one row per property
+  key :property_id, strategy: {:uuid_v8, Estate.Keys, :property}
+  tenant_of :tenant, kind: {Estate.Keys, :person}, from: :person_id
+  ...
+end
+```
+
+The compiler accepts a shared namespace only when every branch of the group names every other.
+A declaration on one side is refused, naming both branches, because it is a claim about both
+branches' filters. A declaration that names the branch itself, a branch the union does not
+have, or a branch whose key is in another namespace is refused too.
+
+The filters are what keep the ids apart, and no schema can check them. The estate therefore
+carries an error obligation per group, `key-disjoint:<view>:<a>+<b>` (branch names in order,
+joined by `+`), a census of the distinct ids those branches put in the view and of how many
+come from more than one of them. It must be 0: a collision is a key the view returns twice,
+which a write cannot address. It reads the view, so it measures the branches still in it.
+
+Tenant inversion needs nothing more: each branch's arm comes from its own `tenant_of` kind, so
+a tenant id of one kind yields only the arms of the branches whose tenant is that kind.
+
 ## What is generated
 
 In order: the owned table (`"<view>_owned"` unless `owned` names one), a key
@@ -90,7 +132,8 @@ declared columns. Each branch casts each column to its declared type, so
 branches with different legacy types still union. Keys of different branches
 must not collide: each branch derives its own with `uuid_v5` (its own
 namespace) or `uuid_v8` (its own kind), and the compiler refuses two branches
-that share one. The owned table's keys default to `gen_random_uuid()`.
+that share one unless both declare it (see "Two branches, one key" below). The
+owned table's keys default to `gen_random_uuid()`.
 
 A union with a `tenant` column has one more hidden column per part of the
 tenant key, `__tenant_p0`, `__tenant_p1`, ..., last in the view: the legacy

@@ -79,6 +79,9 @@ defmodule AshStrangler.Union do
   same supplied key conflict on the owned table's primary key (`23505`).
   `AshStrangler.Union.Info` has the declarations; the keys of different
   branches must not collide, which the verifier checks for equal namespaces.
+  Two branches may share one only when each declares `shares_key_with` the
+  other; the estate obligation `key-disjoint:<view>:<a>+<b>` then measures that
+  their filters keep the ids apart.
   """
 
   use Spark.Dsl, default_extensions: [extensions: [AshStrangler.Union.Dsl]]

@@ -88,6 +88,17 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **Two union branches may share a key namespace when both declare it** (`shares_key_with`). One
+  legacy entity can reach a union through either of two branches, chosen by a column of the row
+  (a property held by an organization, or by one person through a link table), and keep the
+  same id either way, so references resolve and the id survives a move between branches.
+  `VerifyUnion` accepts a shared `uuid_v5` namespace or `uuid_v8` kind only when every branch of
+  the group names every other: a one-sided declaration is refused naming both branches, as is
+  one naming the branch itself, an unknown branch or a branch keyed in another namespace. The
+  estate registers an error obligation per group, `key-disjoint:<view>:<a>+<b>`, a census of the
+  distinct ids those branches put in the view and of how many come from more than one of them.
+  `AshStrangler.Inversion` is unchanged: each branch's arm already comes from its own tenant
+  kind. A union that declares nothing is unaffected.
 - **An optimistic lock on an attribute projected as a `constant` is refused at compile time**
   (`VerifyOptimisticLock`). A constant has no legacy column, so the view answers the same value
   for every row: Ash's `optimistic_lock/1` filter always passed, and its increment wrote to a
