@@ -115,12 +115,12 @@ declared chain, opt-in, with `through:`:
 ```elixir
 tenant_of :organization_id,
   kind: {MyApp.Keys, :organization},
-  from: :rfq_id,
+  from: :quote_id,
   through: [
-    [{"vendorpm.rfqs", :id, :event_id}, {"vendorpm.events", :id, :service_plan_id},
-     {"vendorpm.properties_service_plans", :service_plan_id, :property_id},
-     {"vendorpm.properties", :id, :enterprise_id}],
-    [{"vendorpm.rfqs", :id, :pm_id}, {"vendorpm.pms", :id, :enterprise_id}]
+    [{"legacy.quotes", :id, :job_id}, {"legacy.jobs", :id, :contract_id},
+     {"legacy.sites_contracts", :contract_id, :site_id},
+     {"legacy.sites", :id, :organization_id}],
+    [{"legacy.quotes", :id, :requester_id}, {"legacy.requesters", :id, :organization_id}]
   ]
 ```
 
