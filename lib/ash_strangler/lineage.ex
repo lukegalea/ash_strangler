@@ -241,7 +241,16 @@ defmodule AshStrangler.Lineage do
 
   # --- edges -------------------------------------------------------------------
 
-  defp edge(%Lens{} = lens, source, target) do
+  @doc """
+  The edge one lens contributes, between two nodes the caller built.
+
+  The classification (OpenLineage type and subtype, the transformation, the
+  masking flag and the invertibility) is decided here and nowhere else. Public
+  because a facade hop draws the same edges over its own nodes: the lens is
+  the strangler's, only the two ends are the caller's.
+  """
+  @spec edge(Lens.t(), Node.t(), Node.t()) :: Edge.t()
+  def edge(%Lens{} = lens, source, target) do
     {type, subtype} = edge_type(lens)
 
     %Edge{
