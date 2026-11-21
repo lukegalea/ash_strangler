@@ -204,11 +204,17 @@ defmodule AshStrangler.Facade.Info do
   @spec changes(Ash.Resource.Actions.action()) :: [{module(), keyword()}]
   def changes(action) do
     Enum.flat_map(action.changes, fn
-      %{change: {@replay_wrapper, opts}} when is_list(opts) -> List.wrap(opts[:change])
+      %{change: {@replay_wrapper, opts}} when is_list(opts) -> unwrap(opts[:change])
       %{change: change} -> [change]
       _ -> []
     end)
   end
+
+  # The wrapped change, as the wrapper keeps it: an `Ash.Resource.Change` struct
+  # (what `ash_events` stores) or the `{module, options}` pair itself.
+  defp unwrap(%{change: change}), do: [change]
+  defp unwrap({module, opts} = change) when is_atom(module) and is_list(opts), do: [change]
+  defp unwrap(_), do: []
 
   @doc """
   What a source action sets to a fixed value or copies from an argument, as
