@@ -10,6 +10,7 @@ defmodule AshStrangler.Facade.Write do
   The order is deliberate, and the checks before the source action are not
   conveniences:
 
+  0. A source with a tenant strategy refuses a write that carries no tenant.
   1. `as_of` on a facade write is refused **before anything runs**. A facade
      write takes effect now; there is no version of "change the past through
      this vocabulary" (ADR 0083 decision 5; ADR 0049 invariant 7).
@@ -46,7 +47,8 @@ defmodule AshStrangler.Facade.Write do
       facade = input.resource
       source = Info.source(facade)
 
-      with {:ok, source_row} <- source_row(facade, source, input, context),
+      with :ok <- tenant_required(facade, source, context),
+           {:ok, source_row} <- source_row(facade, source, input, context),
            {:ok, source_input} <- source_input(facade, input) do
         source_row
         |> Ash.Changeset.for_update(via(input), source_input, source_opts(context))
@@ -56,6 +58,17 @@ defmodule AshStrangler.Facade.Write do
           {:error, error} -> {:error, error}
         end
       end
+    end
+  end
+
+  # A `global? true` attribute-tenant source reads and updates with no tenant;
+  # a facade write is refused without one, as its read is, so a caller with no
+  # tenant never reaches a row across tenants.
+  defp tenant_required(facade, source, context) do
+    if Ash.Resource.Info.multitenancy_strategy(source) && is_nil(context.tenant) do
+      {:error, Ash.Error.Invalid.TenantRequired.exception(resource: facade)}
+    else
+      :ok
     end
   end
 

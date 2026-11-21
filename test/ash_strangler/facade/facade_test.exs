@@ -575,6 +575,32 @@ defmodule AshStrangler.FacadeTest do
       assert source.status == :open
     end
 
+    test "a write with no tenant is refused, for a person and for a system actor, and unchanged",
+         %{
+           actor: actor,
+           open: open
+         } do
+      for caller <- [actor, %{system?: true}] do
+        assert {:error, %{errors: [error | _]}} =
+                 Ash.ActionInput.for_action(WorkItem, :finish, %{id: open.id},
+                   actor: caller,
+                   authorize?: true
+                 )
+                 |> Ash.run_action()
+
+        assert %Ash.Error.Invalid.TenantRequired{} = error
+      end
+
+      refute_received {:source_action, :complete}
+
+      [source] =
+        Task
+        |> Ash.Query.filter(expr(id == ^open.id))
+        |> read!(authorize?: false)
+
+      assert source.status == :open
+    end
+
     test "a write whose caller the source forbids is forbidden, and unchanged", %{
       other_org: other_org,
       open: open

@@ -90,8 +90,8 @@ Three limits are facts, not oversights:
   forwarded, and rows come back as of that instant. Over a source with no
   time, a read that carries `as_of` is refused, never dropped. It is refused
   on every write, before anything runs.
-- **No tenant, no read.** A source with a multitenancy strategy refuses a
-  tenant-less call — for a person and for a system actor alike. A `global?
+- **No tenant, no read, no write.** A source with a multitenancy strategy refuses a
+  tenant-less read or write — for a person and for a system actor alike. A `global?
   true` attribute-tenant source would otherwise read every tenant's rows.
 
 ## What a write does
