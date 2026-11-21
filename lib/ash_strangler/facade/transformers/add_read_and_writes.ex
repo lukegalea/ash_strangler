@@ -47,24 +47,28 @@ defmodule AshStrangler.Facade.Transformers.AddReadAndWrites do
     |> Enum.any?(&(&1.type == :read))
   end
 
+  # Built through the DSL, so every option the read schema defaults (`get?`,
+  # `filter`, `timeout`, ...) holds its default, as on a read written by hand;
+  # a bare struct leaves them nil. Pagination is a nested entity, set after.
   defp read_action do
-    %Ash.Resource.Actions.Read{
+    Ash.Resource.Dsl
+    |> Transformer.build_entity!([:actions], :read,
       name: :read,
       primary?: true,
       # A tuple, as the DSL's own `manual` transform normalises to.
-      manual: {AshStrangler.Facade.Read, []},
-      # The DSL's own default: the facade has no multitenancy of its own, but
-      # an unset value breaks Ash's multitenancy dispatch.
-      multitenancy: :enforce,
+      manual: {AshStrangler.Facade.Read, []}
+    )
+    |> Map.put(
       # Offset pagination only: a manual read hands rows back, and Ash reports
       # no count for one. Keyset cursors are not translated, so they are not
       # offered here either.
-      pagination: %Ash.Resource.Actions.Read.Pagination{
+      :pagination,
+      %Ash.Resource.Actions.Read.Pagination{
         offset?: true,
         keyset?: false,
         countable: false
       }
-    }
+    )
   end
 
   defp generic_action(write, facade, dsl) do

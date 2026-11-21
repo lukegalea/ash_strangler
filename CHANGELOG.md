@@ -47,6 +47,10 @@ Requires Elixir 1.20 or later.
 
 ### Bug fixes
 
+- **A facade's generated `:read` carries the read schema's defaults.** It was
+  built as a bare struct, so `get?` and other defaulted options were `nil`, and
+  code that reads the action (`not action.get?`) raised `ArgumentError`. It is
+  now built through the DSL, like a read written by hand.
 - **A schema or table whose name contains a dot is found by the twin, not by splitting a string.**
   The ledger drain and `AshStrangler.Observation.Baseline`, the generated ingester, `mix
   ash_strangler.check` (twin freshness, catalog read, identities, ledger backlog) and `mix
