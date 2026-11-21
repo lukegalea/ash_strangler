@@ -88,6 +88,16 @@ Requires Elixir 1.20 or later.
 
 ### Features
 
+- **A lens over Ash resource attributes, with no twin, and a BEAM evaluator for it.**
+  `AshStrangler.Lens.over/3` builds the lenses of a façade over any Ash resource (casts come from
+  the two Ash types, not from Postgres), and `AshStrangler.Obligations.over/3` decides their
+  obligations without a relation, adding `PutNotNull` for a put the source's `allow_nil? false`
+  would refuse. `AshStrangler.Eval` evaluates `get` and `put` for the tier 1 and tier 2 grammar with
+  SQL's `NULL` semantics, held equal to the printed SQL by property tests, and refuses a node it
+  cannot evaluate by name; a source value the viewer may not read stays a forbidden field.
+  `AshStrangler.Translate` pushes a filter or a sort over the façade's attributes through the
+  forward lens onto the source, rewriting an exact comparison onto the source column and refusing,
+  never dropping, what it cannot translate. Twin-backed lenses and obligations are unchanged.
 - **A tenant reached from the legacy row through a declared chain** (`tenant_of ..., through:`).
   Some legacy rows carry no column that is, or references, their tenant: an invitation names a
   tendering process, which names a plan event, whose plan's lowest property names the

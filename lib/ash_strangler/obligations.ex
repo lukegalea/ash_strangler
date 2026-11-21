@@ -106,6 +106,41 @@ defmodule AshStrangler.Obligations do
     end
   end
 
+  @doc """
+  Every finding for `entries` read over the attributes of `source`, an Ash
+  resource, with no twin: the obligations of a façade's lenses.
+
+  The obligations are the ones `check/1` decides, with the facts taken from the
+  source attribute instead of a pg-introspected twin: a `decode`'s `GetTotal`
+  reads the source attribute's `one_of`, so an `:atom` with `one_of` is decided
+  at compile time where a twin over a text column could only be measured. There
+  is no relation to run an assertion against, so no finding carries one: an
+  obligation that cannot be decided is a `:warning` whose answer is the BEAM
+  evaluator's refusal at write time.
+
+  One obligation is new, because a twin cannot state it: `PutNotNull`. A lens
+  that can write `nil` into a source attribute that does not allow `nil`
+  (`allow_nil? false`) has a put the source will refuse.
+  """
+  @spec over(Ash.Resource.t(), Spark.Dsl.t() | Ash.Resource.t(), [struct()]) :: [finding()]
+  def over(source, target, entries) when is_atom(source) do
+    context = %{
+      resource: target,
+      twin: source,
+      attributes: attribute_index(target),
+      source: nil,
+      twin_free?: true
+    }
+
+    lenses = Lens.over(source, target, entries)
+
+    findings =
+      Enum.flat_map(entries, &per_mapping(&1, context)) ++
+        linearity_of(Map.values(lenses)) ++ put_not_null(lenses, context)
+
+    Enum.map(findings, &%{&1 | assertion: nil})
+  end
+
   @doc "Only the findings that are errors — what a verifier refuses on."
   @spec errors(Spark.Dsl.t() | Ash.Resource.t()) :: [finding()]
   def errors(resource_or_dsl),
@@ -725,9 +760,10 @@ defmodule AshStrangler.Obligations do
   # The relevance condition from reversible languages: a value may be produced
   # once and consumed once. Two mappings writing one legacy column means the
   # trigger's `SET` clause has two assignments for it and one silently wins.
-  defp linearity(resource_or_dsl) do
-    resource_or_dsl
-    |> Lens.for_resource()
+  defp linearity(resource_or_dsl), do: linearity_of(Lens.for_resource(resource_or_dsl))
+
+  defp linearity_of(lenses) do
+    lenses
     |> Enum.reject(&(&1.combinator == :key))
     |> Enum.flat_map(fn lens -> Enum.map(lens.writes, fn {column, _} -> {column, lens} end) end)
     |> Enum.group_by(fn {column, _lens} -> column end, fn {_column, lens} -> lens.attribute end)
@@ -754,6 +790,37 @@ defmodule AshStrangler.Obligations do
         assertion: nil
       }
     end)
+  end
+
+  # --- PutNotNull ----------------------------------------------------------------
+
+  defp put_not_null(lenses, context) do
+    for {attribute, %Lens{invertible: invertible} = lens} <- lenses,
+        invertible != :no,
+        {column, _backward} <- lens.writes,
+        %{allow_nil?: false} <- [Ash.Resource.Info.attribute(context.twin, column)],
+        nullable?(context, attribute) or lens.combinator == :coalesce do
+      %{
+        obligation: :PutNotNull,
+        attribute: attribute,
+        severity: :warning,
+        message: """
+        `#{inspect(attribute)}` can be put as `nil`, and #{inspect(column)} on #{inspect(context.twin)}
+        does not allow `nil`.
+
+        The source refuses that write. Either make #{inspect(attribute)} `allow_nil? false`, or
+        leave it and accept that a `nil` put is refused by the source's own validation.
+        """,
+        assertion: nil
+      }
+    end
+  end
+
+  defp nullable?(context, attribute) do
+    case Map.get(context.attributes, attribute) do
+      %{allow_nil?: allow_nil?} -> allow_nil?
+      nil -> false
+    end
   end
 
   # --- helpers -----------------------------------------------------------------
@@ -835,7 +902,12 @@ defmodule AshStrangler.Obligations do
     ]
   end
 
+  # A twin-free source may not be Postgres, or have a table at all. The
+  # assertion built from this is discarded for it, so the name only has to exist.
+  defp relation(%{twin_free?: true}), do: "(no relation)"
   defp relation(%{twin: twin}), do: AshStrangler.Twin.sql_relation(twin)
+
+  defp column(%{twin_free?: true}, attribute), do: to_string(attribute)
 
   defp column(%{twin: twin}, attribute) do
     AshStrangler.Sql.Printer.column(twin, attribute)

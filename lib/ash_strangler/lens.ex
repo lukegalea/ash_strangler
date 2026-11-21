@@ -159,26 +159,61 @@ defmodule AshStrangler.Lens do
   @spec by_attribute(Spark.Dsl.t() | Ash.Resource.t()) :: %{atom() => t()}
   def by_attribute(resource_or_dsl) do
     case AshStrangler.Info.source(resource_or_dsl) do
-      nil ->
-        %{}
-
-      source ->
-        Enum.reduce(source.mappings, %{}, fn
-          %Unmapped{attributes: attributes} = entry, acc ->
-            lens = of(entry, source, resource_or_dsl)
-
-            Enum.reduce(attributes, acc, fn attribute, acc ->
-              Map.put(acc, attribute, %{
-                lens
-                | attribute: attribute,
-                  forward: unmapped_forward(lens, attribute)
-              })
-            end)
-
-          entry, acc ->
-            Map.put(acc, entry.attribute, of(entry, source, resource_or_dsl))
-        end)
+      nil -> %{}
+      source -> index(source.mappings, source, resource_or_dsl, false)
     end
+  end
+
+  @doc """
+  The lenses of `entries` over the attributes of an Ash resource, with no twin:
+  the constructor a façade uses.
+
+  `source` is any Ash resource (a Postgres one, or not); the columns the entries
+  name (`from:`) are its attributes, calculations or aggregates. `target` is the
+  resource whose attributes the lenses produce: the façade. `entries` are the
+  mapping structs the DSL builds (`%AshStrangler.Map{}`, `%AshStrangler.Decode{}`,
+  `%AshStrangler.Concat{}` and so on). Returns the lenses keyed by the attribute
+  each produces, exactly as `by_attribute/1` does.
+
+  What differs from a twin-backed lens is where the facts come from. A derived
+  cast compares the two Ash types and carries them (`type(expr, type)`); it never
+  asks Postgres for a storage type, so a source that is not AshPostgres works.
+  Nothing is rendered against a relation, so the SQL printer is not the consumer:
+  `AshStrangler.Eval` evaluates a lens in the BEAM and `AshStrangler.Translate`
+  pushes a filter or a sort through it.
+
+  Raises `ArgumentError` when an entry reads something `source` does not have.
+  """
+  @spec over(Ash.Resource.t(), Spark.Dsl.t() | Ash.Resource.t(), [struct()]) :: %{atom() => t()}
+  def over(source, target, entries) when is_atom(source) and is_list(entries) do
+    lenses = index(entries, %Source{twin: source}, target, true)
+
+    for {attribute, lens} <- lenses, {[], column} <- lens.sources, lens.combinator != :key do
+      if is_nil(Ash.Resource.Info.field(source, column)) do
+        raise ArgumentError,
+              "#{inspect(attribute)} reads #{inspect(column)}, which is not a field of #{inspect(source)}"
+      end
+    end
+
+    lenses
+  end
+
+  defp index(entries, source, resource_or_dsl, twin_free?) do
+    Enum.reduce(entries, %{}, fn
+      %Unmapped{attributes: attributes} = entry, acc ->
+        lens = build_lens(entry, source, resource_or_dsl, twin_free?)
+
+        Enum.reduce(attributes, acc, fn attribute, acc ->
+          Map.put(acc, attribute, %{
+            lens
+            | attribute: attribute,
+              forward: unmapped_forward(lens, attribute)
+          })
+        end)
+
+      entry, acc ->
+        Map.put(acc, entry.attribute, build_lens(entry, source, resource_or_dsl, twin_free?))
+    end)
   end
 
   @doc """
@@ -263,11 +298,15 @@ defmodule AshStrangler.Lens do
   their other half. Accepts a compiled module or a mid-transform `dsl_state`.
   """
   @spec of(struct(), Source.t(), Spark.Dsl.t() | Ash.Resource.t()) :: t()
-  def of(entry, %Source{twin: twin} = source, resource_or_dsl) do
+  def of(entry, %Source{} = source, resource_or_dsl),
+    do: build_lens(entry, source, resource_or_dsl, false)
+
+  defp build_lens(entry, %Source{twin: twin} = source, resource_or_dsl, twin_free?) do
     context = %{
       twin: twin,
       resource: resource_or_dsl,
-      attributes: attribute_index(resource_or_dsl)
+      attributes: attribute_index(resource_or_dsl),
+      twin_free?: twin_free?
     }
 
     entry
@@ -385,6 +424,16 @@ defmodule AshStrangler.Lens do
   # `text` against `citext` and the cast is load-bearing — without it the view
   # column's declared type stays `text`, so `WHERE email = 'X'` through the view is
   # case-SENSITIVE while the resource says it is not.
+  defp derived_cast(%{twin_free?: true} = context, column, attribute) do
+    with %{type: target} <- Map.get(context.attributes, attribute),
+         source when not is_nil(source) <- field_type(context.twin, column),
+         true <- Ash.Type.get_type(source) != Ash.Type.get_type(target) do
+      {target, source}
+    else
+      _ -> nil
+    end
+  end
+
   defp derived_cast(context, column, attribute) do
     with %{type: target} <- Map.get(context.attributes, attribute),
          legacy when not is_nil(legacy) <- twin_type(context.twin, column),
@@ -393,6 +442,14 @@ defmodule AshStrangler.Lens do
          true <- legacy_pg != target_pg do
       {target_pg, legacy_pg}
     else
+      _ -> nil
+    end
+  end
+
+  # A twin-free source's field (attribute, calculation or aggregate) type.
+  defp field_type(source, column) do
+    case Ash.Resource.Info.field(source, column) do
+      %{type: type} when not is_nil(type) -> type
       _ -> nil
     end
   end
