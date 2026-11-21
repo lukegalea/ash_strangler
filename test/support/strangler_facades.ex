@@ -27,6 +27,7 @@ defmodule AshStrangler.Test.Facades do
     resource AshStrangler.Test.Facades.CredentialCard
     resource AshStrangler.Test.Facades.Meeting
     resource AshStrangler.Test.Facades.MeetingMinute
+    resource AshStrangler.Test.Facades.MeetingLine
     resource AshStrangler.Test.Facades.Document
     resource AshStrangler.Test.Facades.DocumentView
     resource AshStrangler.Test.Facades.UserContact
@@ -343,6 +344,26 @@ defmodule AshStrangler.Test.Facades.MeetingMinute do
     defer :valid_at
 
     write(:retitle, via: :update, accepts: [:title])
+  end
+end
+
+defmodule AshStrangler.Test.Facades.MeetingLine do
+  @moduledoc "A facade over the MeetingMinute facade: the temporal source's time reaches it hop by hop."
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :heading, :string, public?: true
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.MeetingMinute
+
+    map :id, from: :id
+    map :heading, from: :title
   end
 end
 
