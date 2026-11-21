@@ -729,7 +729,11 @@ defmodule AshStrangler.Dsl do
     ]
   }
 
-  @mapping_entities [
+  # `reference` derives a packed key from legacy integers — a strangled-mapping
+  # concept with no meaning over an Ash source that already holds its own keys.
+  # The other nine are the shared vocabulary `AshStrangler.Dsl.mapping_entities/0`
+  # exposes to the facade, which declares them verbatim.
+  @facade_safe_entities [
     @map,
     @decode,
     @collapse,
@@ -738,9 +742,10 @@ defmodule AshStrangler.Dsl do
     @negate,
     @affine,
     @constant,
-    @unmapped,
-    @reference
+    @unmapped
   ]
+
+  @mapping_entities @facade_safe_entities ++ [@reference]
 
   @source %Spark.Dsl.Entity{
     name: :source,
@@ -955,4 +960,17 @@ defmodule AshStrangler.Dsl do
 
   @doc false
   def mapping_entity_names, do: Enum.map(@mapping_entities, & &1.name)
+
+  @doc """
+  The mapping entities a `facade` section reuses, in declaration order:
+  `map`, `decode`, `collapse`, `coalesce`, `concat`, `negate`, `affine`,
+  `constant` and `unmapped`.
+
+  The facade's DSL declares these same entity structs, so one grammar serves
+  both — a lens built for a view means the same thing over an Ash source.
+  `reference` is deliberately absent: a packed legacy key has no meaning over
+  a source that already holds its own keys, and neither has `key`, which is
+  the strangler's own derivation of one.
+  """
+  def mapping_entities, do: @facade_safe_entities
 end

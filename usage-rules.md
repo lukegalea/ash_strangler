@@ -547,6 +547,40 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   (an `AshStrangler.Estate.Obligation`: a query, its denominator and a severity).
   An obligation that cannot run is not green. See the estates guide for the JSON.
 
+## Facades
+
+- A **facade** is an Ash resource with no storage of its own
+  (`AshStrangler.Facade`) that gives a different vocabulary to the rows of one
+  source resource: `facade do source MyApp.Task ... end` with the strangler's
+  mapping entities (`map`, `decode`, `collapse`, `coalesce`, `concat`,
+  `negate`, `affine`, `constant`, `unmapped`), plus `hide ..., because:`,
+  `defer` and `write`. It reads by calling the source's read action as the
+  caller, and each write runs one named source action as the caller. It
+  declares no rule about who may see or change anything: adding a `policy`, a
+  `field_policy`, `secured_fields`, `extra_grants` or a create/update/destroy
+  action does not compile, because the source's own are the only ones there
+  are. See the "Facades" guide.
+- `sensitive?` is inherited on a facade, never set: a facade attribute is
+  sensitive exactly when something its lens reads is sensitive on the source,
+  and a difference in either direction fails the compile. Declaring
+  sensitivity the source does not claim hides data the caller may filter on;
+  missing it publishes a secret the source had decided to protect.
+- A facade's estate check is the same rule as rule 9, one level up: every
+  attribute of the source is exposed, `hide ... because:`d, or `defer`red —
+  one the facade does not name goes silently unanswered, which is the failure
+  the check exists to refuse.
+- On a facade, offset pagination only and no count (Ash reports none for a
+  manual read), `as_of` is read-only and refused on every write, and one
+  write is one source action — `sets:` is checked at compile time against
+  what the source action actually sets, so the source's guards see the row
+  as it is. `query.filter` travels whole to the source, policy filter
+  included: a filter the caller cannot read matches nothing, and a sort by
+  one is refused.
+- A hop chain over a facade source is read hop by hop
+  (`AshStrangler.Facade.Info.hops/1`): one `%Facade.Hop{}` per hop, with the
+  hop's own mapping version, dataset and edges. No hop trusts the description
+  of the one above it.
+
 ## `mix ash.codegen` coverage
 
 Attach `AshStrangler.Codegen` to a domain (`use Ash.Domain, extensions: [AshStrangler.Codegen]`)

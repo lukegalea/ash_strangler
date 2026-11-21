@@ -31,7 +31,19 @@ defmodule AshStrangler.MappingVersion do
   """
   @spec hash(Ash.Resource.t()) :: String.t()
   def hash(resource) do
-    :crypto.hash(:sha256, :erlang.term_to_binary(canonical(resource), [:deterministic]))
+    hash_term(canonical(resource))
+  end
+
+  @doc """
+  The hash `hash/1` computes, over any canonical term.
+
+  One hash function for every hop of a lineage chain: the strangler's mapping
+  and the facade's declaration hash the same way, so versions are comparable
+  down the chain rather than only within one resource.
+  """
+  @spec hash_term(term()) :: String.t()
+  def hash_term(term) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(term, [:deterministic]))
     |> Base.encode16(case: :lower)
   end
 
@@ -68,9 +80,18 @@ defmodule AshStrangler.MappingVersion do
   # metadata stripped and nested structures cleaned recursively: a collapse's
   # states keep their ORDER (first-match precedence is the meaning) but lose
   # their metadata.
-  defp canonical_entity(nil), do: nil
 
-  defp canonical_entity(entity) do
+  @doc """
+  The canonical, hashable form of one mapping entity: `{struct, fields}`, with
+  the Spark metadata stripped and nested structures cleaned recursively.
+
+  Public because a facade's hop hashes the same entity structs — the facade
+  declares the strangler's mapping grammar, so both hash it the same way.
+  """
+  @spec canonical_entity(struct() | nil) :: term()
+  def canonical_entity(nil), do: nil
+
+  def canonical_entity(entity) do
     {entity.__struct__, clean(Map.from_struct(entity))}
   end
 

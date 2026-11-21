@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 spark_locals_without_parens = [
+  accepts: 1,
   add: 1,
   affine: 1,
   affine: 2,
@@ -28,6 +29,8 @@ spark_locals_without_parens = [
   decode: 1,
   decode: 2,
   default: 1,
+  defer: 1,
+  defer: 2,
   deferred: 1,
   deferred: 2,
   derive: 1,
@@ -40,6 +43,8 @@ spark_locals_without_parens = [
   filter: 1,
   from: 1,
   functions_schema: 1,
+  hide: 1,
+  hide: 2,
   hit_policy: 1,
   insert_through: 0,
   insert_through: 1,
@@ -79,6 +84,7 @@ spark_locals_without_parens = [
   path: 1,
   phase: 1,
   plugins: 1,
+  read_action: 1,
   read_only?: 1,
   reference: 1,
   reference: 2,
@@ -98,6 +104,7 @@ spark_locals_without_parens = [
   security_definer: 1,
   separator: 1,
   set: 1,
+  sets: 1,
   shares_key_with: 1,
   slot: 1,
   slot: 2,
@@ -125,10 +132,13 @@ spark_locals_without_parens = [
   unmapped: 2,
   value: 1,
   values: 1,
+  via: 1,
   view: 1,
   watch: 1,
   wave: 1,
   when: 1,
+  write: 1,
+  write: 2,
   writes: 1,
   zone: 1
 ]
