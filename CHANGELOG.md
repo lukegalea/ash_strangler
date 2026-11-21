@@ -15,6 +15,28 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Requires Elixir 1.20 or later.
 
+### Features
+
+- **`AshStrangler.Facade`: a resource over resources.** A facade is an Ash
+  resource with no storage of its own (`data_layer: Ash.DataLayer.Simple`)
+  that gives a different vocabulary to the rows of one source resource. It
+  reads by calling the source's read action as the caller — the whole
+  `query.filter` travels, translated, the policy filter included — and each
+  `write` is a generic action that runs one named source action as the caller.
+  It declares no security vocabulary and no storage actions of its own: the
+  source's policies and field policies decide, a source value the caller was
+  refused reads as a `%Ash.ForbiddenField{}` named for the facade attribute
+  (a value computed from one is forbidden too, never computed), `sensitive?`
+  is inherited and never set, the estate check places every attribute of the
+  source, and the same proof obligations a strangled mapping is held to fail
+  the compile. `as_of` is read-only on a facade and refused on every write;
+  offset pagination only, and no count; one write is one source action.
+  `AshStrangler.Facade.Info.hops/1` reads a lineage chain hop by hop — a
+  facade over a facade over an owned resource is two `:facade` hops and an
+  `:owned` one — with datasets named for Postgres-backed sources and edges
+  classified by the same code that draws a strangled mapping. See the
+  "Facades" guide.
+
 ### Bug fixes
 
 - **A schema or table whose name contains a dot is found by the twin, not by splitting a string.**

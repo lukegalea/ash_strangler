@@ -176,6 +176,7 @@ defmodule AshStrangler.MixProject do
         "documentation/topics/estates.md",
         "documentation/topics/unions.md",
         "documentation/topics/derived-rows.md",
+        "documentation/topics/facades.md",
         "documentation/topics/codegen.md",
         "usage-rules.md",
         {"documentation/dsls/DSL-AshStrangler.Resource.md",
@@ -210,7 +211,8 @@ defmodule AshStrangler.MixProject do
           AshStrangler.Estate,
           AshStrangler.Estate.Plugin,
           AshStrangler.Union,
-          AshStrangler.Derived
+          AshStrangler.Derived,
+          AshStrangler.Facade
         ],
         Keys: [
           AshStrangler.UuidV8,
