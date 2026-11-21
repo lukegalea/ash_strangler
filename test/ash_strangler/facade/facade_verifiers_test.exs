@@ -331,7 +331,46 @@ defmodule AshStrangler.Facade.VerifiersTest do
 
       message = assert_rejected_by(AshStrangler.Facade.Verifiers.VerifyWrites, body)
       assert message =~ ":name"
-      assert message =~ "does not accept"
+      assert message =~ "neither accepts"
+    end
+
+    test "an `accepts:` column the action copies from an argument compiles" do
+      body = """
+      facade do
+        source AshStrangler.Test.Facades.Task
+
+        map :id, from: :id
+        map :notes, from: :internal_notes
+
+        hide :org_id, because: "The probe has no tenants."
+        hide :name, because: "Not part of this vocabulary."
+        hide :status, because: "Not part of this vocabulary."
+        hide :estimate_minutes, because: "The probe does not show effort."
+        defer :legacy_ref
+
+        write :annotate, via: :annotate, accepts: [:notes]
+      end
+      """
+
+      assert :ok = verify_compiles(body)
+    end
+
+    test "a `sets:` value a `transition_state` does not reach does not compile" do
+      body = """
+      facade do
+        source AshStrangler.Test.Facades.Ticket
+
+        map :id, from: :id
+        map :title, from: :title
+        decode :state, from: :state, values: %{open: :new, closed: :finished}
+
+        write :close, via: :close, sets: [state: :new]
+      end
+      """
+
+      message = assert_rejected_by(AshStrangler.Facade.Verifiers.VerifyWrites, body)
+      assert message =~ "does not set :state to :open"
+      assert message =~ "state: :closed"
     end
 
     test "a write naming no `sets:` and no `accepts:` does not compile" do

@@ -19,10 +19,14 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
       runtime will quote;
     * every `sets:` value is put through the lens at compile time, and the
       source action must really set that source attribute to that value — via
-      `Ash.Resource.Change.SetAttribute`, possibly wrapped by
-      `AshEvents.Events.ReplayChangeWrapper` when the source carries events;
-    * every `accepts:` attribute's source column must be in the action's
-      `accept`, so the write is refused before it can silently do nothing.
+      `Ash.Resource.Change.SetAttribute`, or a state machine's
+      `transition_state` (which sets the machine's state attribute to its
+      target), possibly wrapped by `AshEvents.Events.ReplayChangeWrapper` when
+      the source carries events;
+    * every `accepts:` attribute's source column must reach the action as an
+      input — in its `accept`, or as an argument the action copies into that
+      column with `set_attribute(column, arg(name))` — so the write is refused
+      before it can silently do nothing.
 
   The facade's primary key is exactly one attribute, since the generated
   action takes it as one `id` argument.
@@ -33,10 +37,9 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
   alias AshStrangler.{Eval, Facade.Info}
   alias Spark.Dsl.Verifier
 
-  # Matched as atoms rather than module references: ash_events is an optional
-  # dependency, and matching a name is not a dependency on the module.
-  @replay_wrapper :"Elixir.AshEvents.Events.ReplayChangeWrapper"
-  @set_attribute :"Elixir.Ash.Resource.Change.SetAttribute"
+  # Matched as an atom rather than a module reference: ash_state_machine is not
+  # a dependency of this package, and matching a name is not a dependency on it.
+  @transition_state :"Elixir.AshStateMachine.BuiltinChanges.TransitionState"
 
   @impl true
   def verify(dsl) do
@@ -99,7 +102,7 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
       via_problems(action, write, source),
       empty_problems(write),
       lens_problems(write, lenses),
-      sets_problems(write, action, lenses),
+      sets_problems(write, action, source, lenses),
       accepts_problems(write, action, source, lenses)
     ])
   end
@@ -152,11 +155,11 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
     end)
   end
 
-  defp sets_problems(_write, action, _lenses)
+  defp sets_problems(_write, action, _source, _lenses)
        when not is_struct(action) or action.type != :update,
        do: []
 
-  defp sets_problems(write, action, lenses) do
+  defp sets_problems(write, action, source, lenses) do
     Enum.flat_map(write.sets, fn {attribute, value} ->
       lens = Map.fetch!(lenses, attribute)
 
@@ -169,10 +172,10 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
 
         {:ok, columns_and_values} ->
           for {column, column_value} <- columns_and_values,
-              !sets?(action, column, column_value) do
+              !sets?(action, source, column, column_value) do
             "`via: #{inspect(action.name)}` does not set #{inspect(column)} to " <>
               "#{inspect(column_value)} (from `sets: [#{inspect(attribute)}: " <>
-              "#{inspect(value)}]`). It sets: #{inspect(action_sets(action))}. A write's " <>
+              "#{inspect(value)}]`). It sets: #{inspect(action_sets(action, source))}. A write's " <>
               "declaration must be what the source action actually does."
           end
       end
@@ -190,36 +193,38 @@ defmodule AshStrangler.Facade.Verifiers.VerifyWrites do
       lens = Map.fetch!(lenses, attribute)
       columns = Enum.map(lens.writes, &elem(&1, 0))
 
-      for column <- columns, column not in accept do
+      for column <- columns, !input?(action, accept, column) do
         "`accepts: [#{inspect(attribute)}]` writes #{inspect(column)}, which " <>
-          "`via: #{inspect(action.name)}` does not accept (it accepts #{inspect(accept)}). " <>
+          "`via: #{inspect(action.name)}` neither accepts (it accepts #{inspect(accept)}) " <>
+          "nor copies from an argument with `set_attribute(#{inspect(column)}, arg(...))`. " <>
           "The source would drop the value and report success."
       end
     end)
   end
 
-  # What the source action sets, as {attribute, value} pairs — through
-  # `SetAttribute`, possibly wrapped for replay when the source carries events.
-  defp action_sets(action) do
-    Enum.flat_map(action.changes, &set_by/1)
+  defp input?(action, accept, column),
+    do: column in accept or Info.argument_for(action, column) != nil
+
+  # What the source action sets, as {attribute, value} pairs: its
+  # `set_attribute` changes (`Info.set_attributes/1`) and a state machine's
+  # `transition_state`, whose target is the machine's state attribute's value.
+  defp action_sets(action, source) do
+    Info.set_attributes(action) ++
+      for {@transition_state, opts} <- Info.changes(action),
+          is_list(opts),
+          target = opts[:target],
+          is_atom(target) and not is_nil(target) do
+        {state_attribute(source), target}
+      end
   end
 
-  defp set_by(%{change: {@replay_wrapper, opts}}) when is_list(opts),
-    do: real_change(opts[:change])
+  # The machine's state attribute: its `state_machine` option, `:state` unless
+  # the source says otherwise.
+  defp state_attribute(source),
+    do: Spark.Dsl.Extension.get_opt(source, [:state_machine], :state_attribute, :state)
 
-  defp set_by(%{change: change}), do: real_change(change)
-  defp set_by(_change), do: []
-
-  defp real_change({@set_attribute, opts}) when is_list(opts) do
-    if is_atom(opts[:attribute]) and Keyword.has_key?(opts, :value),
-      do: [{opts[:attribute], opts[:value]}],
-      else: []
-  end
-
-  defp real_change(_), do: []
-
-  defp sets?(action, column, value) do
-    {column, value} in action_sets(action)
+  defp sets?(action, source, column, value) do
+    {column, value} in action_sets(action, source)
   end
 
   # An action with no declared `accept` takes every writable attribute.

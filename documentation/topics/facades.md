@@ -114,10 +114,13 @@ Three limits are facts, not oversights:
 One write is one source action — counted, not assumed, by the tests. `sets:`
 values are not passed as action input: the compile-time check proves the
 source action itself sets the source attribute to that value (its own
-`set_attribute` change, or the same change wrapped for replay by `ash_events`),
-so the source's guards see the row as it is and its own change makes the
-change. `accepts:` values travel through the lens and must land in the
-action's `accept`.
+`set_attribute` change, or a state machine's `transition_state`, or either
+wrapped for replay by `ash_events`), so the source's guards see the row as it
+is and its own change makes the change. `accepts:` values travel through the
+lens and must reach the action as an input: in its `accept`, or as an
+argument the action copies into that column with
+`set_attribute(column, arg(name))`, in which case the value is passed as that
+argument.
 
 ## What the compiler refuses
 
