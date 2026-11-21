@@ -75,8 +75,8 @@ defmodule AshStrangler.EvalTest do
   import Ash.Expr
 
   alias AshStrangler.{Collapse, Eval, Lens}
-  alias AshStrangler.Test.EvalDifferential, as: Differential
   alias AshStrangler.EvalTest.{Facade, Source}
+  alias AshStrangler.Test.EvalDifferential, as: Differential
 
   @decode %{open: :new, done: :finished, cancelled: :dropped}
 
@@ -278,18 +278,28 @@ defmodule AshStrangler.EvalTest do
     defp facade_filter(expression), do: Ash.Filter.parse!(Facade, expression)
 
     defp source_rows do
-      for {{status, first, last, minutes}, n} <- Enum.with_index([
-            {:open, "Ada", "Lovelace", 0},
-            {:done, "Alan", "Turing", 1},
-            {:cancelled, "Grace", nil, 5},
-            {:done, nil, "Hopper", nil}
-          ]) do
-        struct!(Source, id: "00000000-0000-0000-0000-00000000000#{n}", status: status, first: first, last: last, minutes: minutes, flag: status == :done)
+      for {{status, first, last, minutes}, n} <-
+            Enum.with_index([
+              {:open, "Ada", "Lovelace", 0},
+              {:done, "Alan", "Turing", 1},
+              {:cancelled, "Grace", nil, 5},
+              {:done, nil, "Hopper", nil}
+            ]) do
+        struct!(Source,
+          id: "00000000-0000-0000-0000-00000000000#{n}",
+          status: status,
+          first: first,
+          last: last,
+          minutes: minutes,
+          flag: status == :done
+        )
       end
     end
 
     defp matching(filter) do
-      {:ok, rows} = Ash.Filter.Runtime.filter_matches(AshStrangler.EvalTest.Domain, source_rows(), filter)
+      {:ok, rows} =
+        Ash.Filter.Runtime.filter_matches(AshStrangler.EvalTest.Domain, source_rows(), filter)
+
       rows
     end
 
@@ -299,19 +309,25 @@ defmodule AshStrangler.EvalTest do
     end
 
     test "an invertible comparison is rewritten onto the source column" do
-      {:ok, filter} = AshStrangler.Translate.filter(lenses(), facade_filter(expr(state == :finished)), Source)
-      assert %Ash.Query.Operator.Eq{left: %Ash.Query.Ref{attribute: %{name: :status}}, right: :done} = filter
+      {:ok, filter} =
+        AshStrangler.Translate.filter(lenses(), facade_filter(expr(state == :finished)), Source)
+
+      assert %Ash.Query.Operator.Eq{
+               left: %Ash.Query.Ref{attribute: %{name: :status}},
+               right: :done
+             } = filter
     end
 
     test "a filter selects the rows the façade would show, for every kind of lens" do
       lenses = lenses()
 
       for {expression, front} <- [
-            {expr(state == :finished), & &1.state == :finished},
+            {expr(state == :finished), &(&1.state == :finished)},
             {expr(state in [:new, :dropped]), &(&1.state in [:new, :dropped])},
-            {expr(full_name == "Ada Lovelace"), & &1.full_name == "Ada Lovelace"},
+            {expr(full_name == "Ada Lovelace"), &(&1.full_name == "Ada Lovelace")},
             {expr(scaled > 7), &(is_integer(&1.scaled) and &1.scaled > 7)},
-            {expr(active and scaled > 7), &(&1.active == true and is_integer(&1.scaled) and &1.scaled > 7)},
+            {expr(active and scaled > 7),
+             &(&1.active == true and is_integer(&1.scaled) and &1.scaled > 7)},
             {expr(not (state == :finished)), &(&1.state != :finished)}
           ] do
         expected =
@@ -328,7 +344,11 @@ defmodule AshStrangler.EvalTest do
 
     test "a reference the lens has no forward for is refused, never dropped" do
       assert {:error, {:untranslatable, {"it has no forward lens", :title}}} =
-               AshStrangler.Translate.filter(Map.delete(lenses(), :title), facade_filter(expr(title == "x")), Source)
+               AshStrangler.Translate.filter(
+                 Map.delete(lenses(), :title),
+                 facade_filter(expr(title == "x")),
+                 Source
+               )
     end
 
     test "a sort by a rename names the source column, any other lens sorts by its expression" do

@@ -116,8 +116,11 @@ defmodule AshStrangler.Translate do
     expression = ash_expression!(lens.forward)
 
     case Ash.Filter.hydrate_refs(expression, %{resource: source, public?: false}) do
-      {:ok, hydrated} -> hydrated
-      {:error, error} -> refuse!(expression, "it does not hydrate against the source: #{inspect(error)}")
+      {:ok, hydrated} ->
+        hydrated
+
+      {:error, error} ->
+        refuse!(expression, "it does not hydrate against the source: #{inspect(error)}")
     end
   end
 
@@ -199,13 +202,21 @@ defmodule AshStrangler.Translate do
         pairs
         |> Enum.reverse()
         |> Enum.reduce(otherwise, fn {match, result}, rest ->
-          condition = %Ash.Query.Call{name: :==, args: [subject, match], operator?: true, relationship_path: []}
-          %Ash.Query.Call{name: :if, args: [condition, [do: result, else: rest]], operator?: false, relationship_path: []}
+          condition = call(:==, [subject, match], true)
+          call(:if, [condition, [do: result, else: rest]], false)
         end)
 
       %Ash.Query.Call{name: name} = call
-      when name in [:strangler_ext, :strangler_ext_state, :strangler_hold, :strangler_touch,
-                    :strangler_v8, :strangler_v8_part, :at_zone, :fragment] ->
+      when name in [
+             :strangler_ext,
+             :strangler_ext_state,
+             :strangler_hold,
+             :strangler_touch,
+             :strangler_v8,
+             :strangler_v8_part,
+             :at_zone,
+             :fragment
+           ] ->
         refuse!(call, "#{name} has no Ash expression")
 
       %Ash.Query.Call{name: :type, args: [_value, type | _]} = call when is_binary(type) ->
@@ -215,6 +226,9 @@ defmodule AshStrangler.Translate do
         other
     end)
   end
+
+  defp call(name, args, operator?),
+    do: %Ash.Query.Call{name: name, args: args, operator?: operator?, relationship_path: []}
 
   defp refuse!(node, why), do: throw({:untranslatable, {why, node}})
 end
