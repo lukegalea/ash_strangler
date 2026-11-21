@@ -49,7 +49,7 @@ defmodule AshStrangler.Facade.Write do
 
       with :ok <- tenant_required(facade, source, context),
            {:ok, source_row} <- source_row(facade, source, input, context),
-           {:ok, source_input} <- source_input(facade, input) do
+           {:ok, source_input} <- source_input(facade, source, input) do
         source_row
         |> Ash.Changeset.for_update(via(input), source_input, source_opts(context))
         |> Ash.update()
@@ -110,7 +110,7 @@ defmodule AshStrangler.Facade.Write do
     end
   end
 
-  defp source_input(facade, input) do
+  defp source_input(facade, source, input) do
     write =
       facade
       |> Info.writes()
@@ -120,10 +120,16 @@ defmodule AshStrangler.Facade.Write do
 
     accepted = accepted_input(write, input)
 
+    action = Ash.Resource.Info.action(source, write.via)
+
     with {:ok, accepted} <- through_lens(accepted, lenses) do
-      {:ok, Map.new(accepted)}
+      {:ok, Map.new(accepted, fn {column, value} -> {input_name(action, column), value} end)}
     end
   end
+
+  # A column the action takes as an argument (`set_attribute(column, arg(name))`)
+  # is written through that argument; any other is an accepted attribute.
+  defp input_name(action, column), do: Info.argument_for(action, column) || column
 
   defp accepted_input(write, input) do
     Enum.map(write.accepts, fn attribute ->

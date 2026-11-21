@@ -30,6 +30,9 @@ defmodule AshStrangler.Test.Facades do
     resource AshStrangler.Test.Facades.Document
     resource AshStrangler.Test.Facades.DocumentView
     resource AshStrangler.Test.Facades.UserContact
+    resource AshStrangler.Test.Facades.AnnotatedItem
+    resource AshStrangler.Test.Facades.Ticket
+    resource AshStrangler.Test.Facades.TicketView
   end
 end
 
@@ -122,6 +125,16 @@ defmodule AshStrangler.Test.Facades.Task do
 
     update :set_estimate do
       accept [:estimate_minutes]
+    end
+
+    # An argument copied into a column: the column is not in `accept`, the
+    # argument reaches it through `set_attribute`.
+    update :annotate do
+      accept []
+
+      argument :note, :string, allow_nil?: false
+
+      change set_attribute(:internal_notes, arg(:note))
     end
   end
 
@@ -399,5 +412,108 @@ defmodule AshStrangler.Test.Facades.UserContact do
     hide :archived_at, because: "Archival is decided by the source."
     hide :organization_id, because: "Organisation placement is decided one hop up."
     defer :created_by_id
+  end
+end
+
+defmodule AshStrangler.Test.Facades.AnnotatedItem do
+  @moduledoc """
+  A facade whose write names a column the source action takes as an argument:
+  `annotate` copies its `note` argument into `internal_notes` and accepts
+  nothing.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :org_id, :string, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.Task
+    read_action :read
+
+    map :id, from: :id
+    map :org_id, from: :org_id
+    map :note, from: :internal_notes
+
+    hide :name, because: "Not part of this vocabulary."
+    hide :status, because: "Not part of this vocabulary."
+    hide :estimate_minutes, because: "Not part of this vocabulary."
+    hide :legacy_ref, because: "Not part of this vocabulary."
+
+    write(:annotate, via: :annotate, accepts: [:note])
+  end
+end
+
+defmodule AshStrangler.Test.Facades.Ticket do
+  @moduledoc """
+  A source with a state machine: `close` moves it with `transition_state`,
+  which sets the state attribute to the transition's target.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Ets,
+    extensions: [AshStateMachine]
+
+  ets do
+    private? true
+  end
+
+  state_machine do
+    initial_states [:open]
+    default_initial_state :open
+
+    transitions do
+      transition :close, from: :open, to: :closed
+    end
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :title, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :create do
+      accept [:id, :title]
+    end
+
+    update :close do
+      accept []
+      change transition_state(:closed)
+    end
+  end
+end
+
+defmodule AshStrangler.Test.Facades.TicketView do
+  @moduledoc "The facade over the state-machine source: its `close` write sets `state` by value."
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :title, :string, public?: true
+
+    attribute :phase, :atom,
+      public?: true,
+      constraints: [one_of: [:new, :done]]
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.Ticket
+
+    map :id, from: :id
+    map :title, from: :title
+    decode :phase, from: :state, values: %{open: :new, closed: :done}
+
+    write(:close, via: :close, sets: [phase: :done])
   end
 end

@@ -191,6 +191,57 @@ defmodule AshStrangler.Facade.Info do
   @spec hops(module() | Spark.Dsl.t()) :: [Hop.t()]
   def hops(resource_or_dsl), do: Hop.chain(resource_or_dsl)
 
+  # Matched as atoms rather than module references: ash_events is an optional
+  # dependency, and matching a name is not a dependency on the module.
+  @replay_wrapper :"Elixir.AshEvents.Events.ReplayChangeWrapper"
+  @set_attribute :"Elixir.Ash.Resource.Change.SetAttribute"
+
+  @doc """
+  The changes of a source action as `{module, options}` pairs, a change wrapped
+  for replay (`AshEvents.Events.ReplayChangeWrapper`, when the source carries
+  events) shown as the change it wraps.
+  """
+  @spec changes(Ash.Resource.Actions.action()) :: [{module(), keyword()}]
+  def changes(action) do
+    Enum.flat_map(action.changes, fn
+      %{change: {@replay_wrapper, opts}} when is_list(opts) -> unwrap(opts[:change])
+      %{change: change} -> [change]
+      _ -> []
+    end)
+  end
+
+  # The wrapped change, as the wrapper keeps it: an `Ash.Resource.Change` struct
+  # (what `ash_events` stores) or the `{module, options}` pair itself.
+  defp unwrap(%{change: change}), do: [change]
+  defp unwrap({module, opts} = change) when is_atom(module) and is_list(opts), do: [change]
+  defp unwrap(_), do: []
+
+  @doc """
+  What a source action sets to a fixed value or copies from an argument, as
+  `{attribute, value}` pairs: its `set_attribute` changes. A copied argument is
+  the value `{:_arg, name}`.
+  """
+  @spec set_attributes(Ash.Resource.Actions.action()) :: [{atom(), term()}]
+  def set_attributes(action) do
+    for {@set_attribute, opts} <- changes(action),
+        is_list(opts) and is_atom(opts[:attribute]) and Keyword.has_key?(opts, :value) do
+      {opts[:attribute], opts[:value]}
+    end
+  end
+
+  @doc """
+  The argument a source action copies into `column` with
+  `set_attribute(column, arg(name))`, or `nil`. A facade `accepts:` attribute
+  whose column the action takes this way is written through that argument.
+  """
+  @spec argument_for(Ash.Resource.Actions.action(), atom()) :: atom() | nil
+  def argument_for(action, column) do
+    Enum.find_value(set_attributes(action), fn
+      {^column, {:_arg, name}} -> name
+      _ -> nil
+    end)
+  end
+
   @doc "The source attributes every lens of `lenses` reads, at the top level."
   @spec source_attributes([Lens.t()]) :: MapSet.t(atom())
   def source_attributes(lenses) do

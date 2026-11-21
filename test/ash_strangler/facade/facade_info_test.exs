@@ -210,4 +210,25 @@ defmodule AshStrangler.Facade.InfoTest do
              |> Enum.all?(fn {version, hop} -> version == hop.mapping_version end)
     end
   end
+
+  describe "reading a source action's changes" do
+    @set_note {Ash.Resource.Change.SetAttribute, [attribute: :notes, value: {:_arg, :note}]}
+    @wrapper :"Elixir.AshEvents.Events.ReplayChangeWrapper"
+
+    # `ash_events` wraps each change of an event-sourced source, keeping it as an
+    # `Ash.Resource.Change` struct; the wrapped pair itself is read too.
+    test "a change wrapped for replay reads as the change it wraps, in either shape" do
+      struct_wrapped = %{change: {@wrapper, [change: %{change: @set_note}]}}
+      pair_wrapped = %{change: {@wrapper, [change: @set_note]}}
+      plain = %{change: @set_note}
+
+      for change <- [struct_wrapped, pair_wrapped, plain] do
+        action = %{changes: [change]}
+        assert Info.changes(action) == [@set_note]
+        assert Info.set_attributes(action) == [notes: {:_arg, :note}]
+        assert Info.argument_for(action, :notes) == :note
+        assert Info.argument_for(action, :title) == nil
+      end
+    end
+  end
 end

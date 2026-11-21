@@ -70,8 +70,11 @@ defmodule AshStrangler.Facade.Dsl do
     One write: a generic action on the facade that runs ONE named source action,
     as the caller. `sets:` names facade attributes and the values they take (put
     through the lens at compile time and checked against the source action's own
-    `set_attribute` changes); `accepts:` names facade attributes whose argument
-    value is put through the lens. At least one of the two is required.
+    `set_attribute` changes, or a state machine's `transition_state`);
+    `accepts:` names facade attributes whose argument value is put through the
+    lens and handed to the source action as an accepted attribute or as the
+    argument the action copies into that column. At least one of the two is
+    required.
     """,
     examples: [
       ~S|write :finish, via: :complete, sets: [state: :finished]|,

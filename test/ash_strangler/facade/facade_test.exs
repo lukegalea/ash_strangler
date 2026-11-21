@@ -24,11 +24,14 @@ defmodule AshStrangler.FacadeTest do
   alias Ash.ForbiddenField
 
   alias AshStrangler.Test.Facades.{
+    AnnotatedItem,
     Credential,
     CredentialCard,
     Meeting,
     MeetingMinute,
     Task,
+    Ticket,
+    TicketView,
     WorkItem,
     WorkItemRow
   }
@@ -640,6 +643,46 @@ defmodule AshStrangler.FacadeTest do
         |> read!(authorize?: false)
 
       assert source.estimate_minutes == 45
+    end
+
+    test "an accepted value the source takes as an argument travels through that argument", %{
+      org: org,
+      actor: actor,
+      open: open
+    } do
+      {:ok, record} =
+        Ash.ActionInput.for_action(AnnotatedItem, :annotate, %{id: open.id, note: "call back"},
+          actor: actor,
+          tenant: org,
+          authorize?: true
+        )
+        |> Ash.run_action()
+
+      assert record.note == "call back"
+
+      [source] =
+        Task
+        |> Ash.Query.filter(expr(id == ^open.id))
+        |> read!(authorize?: false)
+
+      assert source.internal_notes == "call back"
+    end
+
+    test "a write over a state-machine source moves it through its transition" do
+      ticket =
+        Ticket
+        |> Ash.Changeset.for_create(:create, %{id: Ash.UUID.generate(), title: "Printer"})
+        |> Ash.create!()
+
+      assert ticket.state == :open
+
+      {:ok, record} =
+        TicketView
+        |> Ash.ActionInput.for_action(:close, %{id: ticket.id})
+        |> Ash.run_action()
+
+      assert record.phase == :done
+      assert Ash.get!(Ticket, ticket.id).state == :closed
     end
 
     test "a facade over a facade reads hop by hop", %{org: org, actor: actor} do

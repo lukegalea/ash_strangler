@@ -37,6 +37,14 @@ Requires Elixir 1.20 or later.
   classified by the same code that draws a strangled mapping. See the
   "Facades" guide.
 
+- **A facade `write` can name a state-machine transition and an argument-fed
+  column.** `sets:` is matched against a source action's `transition_state` as
+  well as its `set_attribute` changes (the target is the machine's state
+  attribute's value), and `accepts:` accepts a column the action copies from
+  an argument with `set_attribute(column, arg(name))`, passing the value as that
+  argument. A value or column the action does not reach is still refused at
+  compile time.
+
 ### Bug fixes
 
 - **A schema or table whose name contains a dot is found by the twin, not by splitting a string.**
