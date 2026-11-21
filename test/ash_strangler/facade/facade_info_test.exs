@@ -55,6 +55,28 @@ defmodule AshStrangler.Facade.InfoTest do
     end
   end
 
+  describe "the generated read" do
+    test "holds the read schema's defaults, as a read written by hand would" do
+      read = Ash.Resource.Info.primary_action!(WorkItem, :read)
+
+      assert read.manual == {AshStrangler.Facade.Read, []}
+      assert read.get? == false
+      assert read.multitenancy == :enforce
+
+      assert %Ash.Resource.Actions.Read.Pagination{
+               offset?: true,
+               keyset?: false,
+               countable: false
+             } = read.pagination
+
+      # Booleans a bare struct left nil, which code reading the action
+      # (`not read.get?`) raises on.
+      for key <- [:get?, :skip_global_validations?] do
+        assert is_boolean(Map.fetch!(read, key)), "#{key} is not a boolean"
+      end
+    end
+  end
+
   describe "the estate" do
     test "every source attribute is in exactly one list" do
       estate = Info.estate(WorkItem)
