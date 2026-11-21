@@ -34,9 +34,12 @@ defmodule AshStrangler.Facade.Read do
     tenant-less call — for a person and for a system actor alike. A `global?
     true` attribute-tenant source would otherwise read every tenant's rows.
   * **`as_of` is read-only where time exists.** Over a temporal source it is
-    forwarded, and the rows come back as of that instant. Over a source with
-    no time, a read that carries `as_of` is refused, never dropped: a caller
-    asking for history is asking a question this facade cannot answer.
+    forwarded, and the rows come back as of that instant. A facade has the
+    time of its own source, so a facade over a facade over a temporal source
+    forwards it hop by hop (`AshStrangler.Facade.Info.temporal?/1`). Over a
+    source with no time, a read that carries `as_of` is refused, never
+    dropped: a caller asking for history is asking a question this facade
+    cannot answer.
 
   ## What a read gives back
 
@@ -113,7 +116,7 @@ defmodule AshStrangler.Facade.Read do
   end
 
   defp refuse_as_of(source, as_of) do
-    if as_of && !Ash.Resource.Info.temporal?(source) do
+    if as_of && !Info.temporal?(source) do
       {:error,
        InvalidQuery.exception(
          field: :as_of,
@@ -200,7 +203,7 @@ defmodule AshStrangler.Facade.Read do
   end
 
   defp maybe_as_of(query, source, as_of) do
-    if as_of && Ash.Resource.Info.temporal?(source) do
+    if as_of && Info.temporal?(source) do
       Ash.Query.as_of(query, as_of)
     else
       query

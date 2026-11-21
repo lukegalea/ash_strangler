@@ -28,6 +28,19 @@ defmodule AshStrangler.Facade.Info do
   def source(resource_or_dsl),
     do: Spark.Dsl.Extension.get_opt(resource_or_dsl, [:facade], :source, nil)
 
+  @doc """
+  Whether reading `resource` has a time to read as of: a temporal resource, or a
+  facade whose source does, however many facades lie between.
+  """
+  @spec temporal?(module()) :: boolean()
+  def temporal?(resource) do
+    Ash.Resource.Info.temporal?(resource) ||
+      case source(resource) do
+        nil -> false
+        source -> temporal?(source)
+      end
+  end
+
   @spec read_action(module() | Spark.Dsl.t()) :: atom()
   def read_action(resource_or_dsl),
     do: Spark.Dsl.Extension.get_opt(resource_or_dsl, [:facade], :read_action, :read)

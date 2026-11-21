@@ -87,7 +87,9 @@ Three limits are facts, not oversights:
   read, and keyset cursors are not translated — the generated read declares
   offset pagination and refuses a count.
 - **`as_of` is read-only on a facade.** Over a temporal source it is
-  forwarded, and rows come back as of that instant. Over a source with no
+  forwarded, and rows come back as of that instant; a facade has the time of
+  its source, so it reaches a temporal resource through any number of
+  facades (`AshStrangler.Facade.Info.temporal?/1`). Over a source with no
   time, a read that carries `as_of` is refused, never dropped. It is refused
   on every write, before anything runs.
 - **No tenant, no read, no write.** A source with a multitenancy strategy refuses a

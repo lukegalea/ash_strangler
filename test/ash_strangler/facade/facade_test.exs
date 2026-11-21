@@ -28,6 +28,7 @@ defmodule AshStrangler.FacadeTest do
     Credential,
     CredentialCard,
     Meeting,
+    MeetingLine,
     MeetingMinute,
     Task,
     Ticket,
@@ -477,6 +478,48 @@ defmodule AshStrangler.FacadeTest do
         read!(MeetingMinute, authorize?: false) |> Enum.filter(&(&1.id == meeting.id))
 
       assert current.title == title <> "_changed"
+    end
+
+    test "a facade over a facade over a temporal source forwards it hop by hop" do
+      title = "meeting_#{System.unique_integer([:positive])}"
+      start = DateTime.add(DateTime.utc_now(), -10, :second)
+      change = DateTime.add(DateTime.utc_now(), -5, :second)
+
+      meeting =
+        Ash.create!(
+          Ash.Changeset.for_create(Meeting, :create, %{title: title}, as_of: start),
+          authorize?: false
+        )
+
+      Ash.update!(
+        Ash.Changeset.for_update(meeting, :update, %{title: title <> "_changed"}, as_of: change),
+        authorize?: false
+      )
+
+      assert [] =
+               read!(MeetingLine, as_of: DateTime.add(start, -5, :second), authorize?: false)
+               |> Enum.filter(&(&1.id == meeting.id))
+
+      [earlier] =
+        read!(MeetingLine, as_of: start, authorize?: false)
+        |> Enum.filter(&(&1.id == meeting.id))
+
+      assert earlier.heading == title
+
+      [later] =
+        read!(MeetingLine, as_of: change, authorize?: false)
+        |> Enum.filter(&(&1.id == meeting.id))
+
+      assert later.heading == title <> "_changed"
+    end
+
+    test "a facade over a facade over a source with no time still refuses as_of" do
+      assert {:error, %{errors: [error | _]}} =
+               Ash.Query.new(WorkItemRow)
+               |> Ash.Query.as_of(~U[2020-01-01 00:00:00Z])
+               |> Ash.read(authorize?: false, tenant: "any")
+
+      assert Exception.message(error) =~ "as_of"
     end
 
     test "as_of on a write is refused before anything runs" do
