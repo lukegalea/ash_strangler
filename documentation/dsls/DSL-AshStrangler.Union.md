@@ -17,6 +17,7 @@ One canonical relation, a view over legacy branches and an owned branch.
    * map
    * constant
    * tenant_of
+   * json_key
    * unmapped
    * extension
    * not_written_back
@@ -89,8 +90,9 @@ legacy name
 A legacy branch: rows that live in a twin's relation. Its `phase` is its
 own. In `:read_from_legacy` a write that would land on the branch is refused
 with `refused_because`. In `:dual_write` an update or delete of one of its
-rows is carried to the legacy table (renamed columns only), and an insert
-naming it lands in the legacy table when it declares `insert_through`.
+rows is carried to the legacy table (renamed columns and `json_key` columns
+only), and an insert naming it lands in the legacy table when it declares
+`insert_through`.
 In `:read_from_new` and `:decommissioned` the branch has left the view: its
 rows now live in the owned table.
 
@@ -100,6 +102,7 @@ rows now live in the owned table.
  * [map](#union-legacy-map)
  * [constant](#union-legacy-constant)
  * [tenant_of](#union-legacy-tenant_of)
+ * [json_key](#union-legacy-json_key)
  * [unmapped](#union-legacy-unmapped)
  * [extension](#union-legacy-extension)
  * [not_written_back](#union-legacy-not_written_back)
@@ -291,6 +294,57 @@ tenant_of :clinic, kind: {Clinic.Keys, :clinic}, from: :clinic_id
 
 Target: `AshStrangler.Union.TenantKey`
 
+### union.legacy.json_key
+```elixir
+json_key attribute
+```
+
+
+A column kept as one key of a jsonb column of the twin. `type: :integer` reads a JSON number
+with an integer value in range (`12.5`, `1e10` and `"12"` read NULL, never cast), `:text` a
+JSON string; `kind:` reads the integer as that one-part packed key. With `list?: true` the
+key holds an array, read in order: an element of another JSON type is dropped, a number the
+guard refuses is a NULL element, and anything but an array is the empty array. A
+`:dual_write` branch writes the key back: an insert through the branch puts the supplied keys
+in the new row's jsonb column, and an update sets only the keys whose column changed.
+
+
+
+
+### Examples
+```
+json_key :member, from: :metadata, key: "memberId", kind: {Library.Keys, :member}
+```
+
+```
+json_key :labels, from: :metadata, key: "labels", type: :text, list?: true
+```
+
+
+
+### Arguments
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`attribute`](#union-legacy-json_key-attribute){: #union-legacy-json_key-attribute .spark-required} | `atom` |  |  |
+### Options
+
+| Name | Type | Default | Docs |
+|------|------|---------|------|
+| [`from`](#union-legacy-json_key-from){: #union-legacy-json_key-from .spark-required} | `atom` |  | The twin's jsonb column. |
+| [`key`](#union-legacy-json_key-key){: #union-legacy-json_key-key .spark-required} | `String.t` |  | The object key that holds the value. |
+| [`type`](#union-legacy-json_key-type){: #union-legacy-json_key-type } | `:integer \| :text` | `:integer` | A JSON number with an integer value, or a JSON string. |
+| [`kind`](#union-legacy-json_key-kind){: #union-legacy-json_key-kind } | `{module, atom}` |  | `{Registry, :kind}`: the integer is the one part of this packed key. |
+| [`list?`](#union-legacy-json_key-list?){: #union-legacy-json_key-list? } | `boolean` | `false` | The key holds an array of such values. |
+
+
+
+
+
+### Introspection
+
+Target: `AshStrangler.Union.JsonKey`
+
 ### union.legacy.unmapped
 ```elixir
 unmapped attributes
@@ -443,9 +497,10 @@ At `:dual_write`, an insert naming this branch (`NEW."__branch" = '<branch>'`) l
 legacy table. The legacy table allocates its own key, so the trigger inserts the legacy row,
 then returns the view row of that key, and `RETURNING` carries the key and every default.
 The insert writes the branch's plain `map` columns (the columns a `:dual_write` update
-writes, minus the ones read from a legacy column that forms the key), upserts `extension`
-columns into the extension table, and refuses a supplied value for a column it cannot write
-(an expression, a constant, an unmapped column, a `not_written_back` column, the key).
+writes, minus the ones read from a legacy column that forms the key) and its `json_key`
+columns, upserts `extension` columns into the extension table, and refuses a supplied value
+for a column it cannot write (an expression, a constant, an unmapped column, a
+`not_written_back` column, the key).
 Without it, an insert naming the branch is refused and inserts land in the owned branch.
 
 
@@ -462,7 +517,7 @@ insert_through because: "the south system expects the rows it reads to exist", s
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`columns`](#union-legacy-insert_through-columns){: #union-legacy-insert_through-columns } | `list(atom)` | `[]` | Narrows the view columns the insert writes. Default: every plain `map :x, from: :column` column that is not in `not_written_back` and is not read from a legacy column that forms the key. Each named column must be one the insert can write. |
+| [`columns`](#union-legacy-insert_through-columns){: #union-legacy-insert_through-columns } | `list(atom)` | `[]` | Narrows the view columns the insert writes. Default: every plain `map :x, from: :column` and every `json_key` column that is not in `not_written_back` and is not read from a legacy column that forms the key. Each named column must be one the insert can write. |
 ### Options
 
 | Name | Type | Default | Docs |
@@ -567,9 +622,10 @@ At `:dual_write`, an insert naming this branch (`NEW."__branch" = '<branch>'`) l
 legacy table. The legacy table allocates its own key, so the trigger inserts the legacy row,
 then returns the view row of that key, and `RETURNING` carries the key and every default.
 The insert writes the branch's plain `map` columns (the columns a `:dual_write` update
-writes, minus the ones read from a legacy column that forms the key), upserts `extension`
-columns into the extension table, and refuses a supplied value for a column it cannot write
-(an expression, a constant, an unmapped column, a `not_written_back` column, the key).
+writes, minus the ones read from a legacy column that forms the key) and its `json_key`
+columns, upserts `extension` columns into the extension table, and refuses a supplied value
+for a column it cannot write (an expression, a constant, an unmapped column, a
+`not_written_back` column, the key).
 Without it, an insert naming the branch is refused and inserts land in the owned branch.
 
 
@@ -586,7 +642,7 @@ insert_through because: "the south system expects the rows it reads to exist", s
 
 | Name | Type | Default | Docs |
 |------|------|---------|------|
-| [`columns`](#union-owned-insert_through-columns){: #union-owned-insert_through-columns } | `list(atom)` | `[]` | Narrows the view columns the insert writes. Default: every plain `map :x, from: :column` column that is not in `not_written_back` and is not read from a legacy column that forms the key. Each named column must be one the insert can write. |
+| [`columns`](#union-owned-insert_through-columns){: #union-owned-insert_through-columns } | `list(atom)` | `[]` | Narrows the view columns the insert writes. Default: every plain `map :x, from: :column` and every `json_key` column that is not in `not_written_back` and is not read from a legacy column that forms the key. Each named column must be one the insert can write. |
 ### Options
 
 | Name | Type | Default | Docs |

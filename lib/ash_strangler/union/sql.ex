@@ -22,8 +22,9 @@ defmodule AshStrangler.Union.Sql do
   `AshStrangler.Error.BranchWriteRefused`.
   """
 
+  alias AshStrangler.KeyKinds
   alias AshStrangler.Sql.{Additive, Extension, Json, Printer, View}
-  alias AshStrangler.{KeyKinds, Twin}
+  alias AshStrangler.Twin
   alias AshStrangler.Union.{Constant, Info, InsertThrough, JsonKey, TenantKey, Unmapped}
   alias AshStrangler.Union.Extension, as: ExtensionEntry
   alias AshStrangler.Union.Map, as: MapEntry
