@@ -30,14 +30,16 @@ defmodule AshStrangler.Facade.Write do
      and guard errors are returned as the source raised them — a facade is not
      a place where a rule is restated.
   5. The updated source row goes back through the forward lens, exactly as a
-     read does. No second source action runs to produce the return value.
+     read does: the same mapping (`AshStrangler.Facade.Record`), with the
+     source calculations and aggregates the lenses read loaded first. No
+     second source action runs to produce the return value.
   """
 
   use Ash.Resource.Actions.Implementation
 
   alias Ash.Error.Changes.InvalidAttribute
   alias Ash.Error.Query.NotFound
-  alias AshStrangler.{Eval, Facade.Info}
+  alias AshStrangler.{Eval, Facade.Info, Facade.Record}
 
   @impl true
   def run(input, _opts, context) do
@@ -52,15 +54,20 @@ defmodule AshStrangler.Facade.Write do
     else
       facade = input.resource
       source = Info.source(facade)
+      lenses = Info.lenses(facade)
 
       with :ok <- tenant_required(facade, source, context),
            {:ok, source_row} <- source_row(facade, source, input, context),
            {:ok, source_input} <- source_input(facade, source, input, source_row) do
         source_row
         |> Ash.Changeset.for_update(via(input), source_input, source_opts(context))
+        # The record the write returns is the one a read returns, so the
+        # update loads the same source calculations and aggregates the lenses
+        # read (`AshStrangler.Facade.Record`).
+        |> Ash.Changeset.load(Record.load_fields(lenses, source))
         |> Ash.update()
         |> case do
-          {:ok, updated} -> {:ok, record(updated, facade, source)}
+          {:ok, updated} -> {:ok, Record.record(updated, facade, lenses, source)}
           {:error, error} -> {:error, error}
         end
       end
@@ -107,6 +114,7 @@ defmodule AshStrangler.Facade.Write do
       source
       |> Ash.Query.for_read(Info.read_action(facade), %{}, source_opts(context))
       |> Ash.Query.do_filter(Map.new(columns_and_values))
+      |> load_fields(facade, source)
       |> Ash.read(source_opts(context))
       |> case do
         {:ok, [row]} -> {:ok, row}
@@ -114,6 +122,12 @@ defmodule AshStrangler.Facade.Write do
         {:error, error} -> {:error, error}
       end
     end
+  end
+
+  # The prior the lens's reverse reads is built from this row, so the row
+  # carries the same source calculations and aggregates a read loads.
+  defp load_fields(query, facade, source) do
+    Enum.reduce(Record.load_fields(Info.lenses(facade), source), query, &Ash.Query.load(&2, &1))
   end
 
   defp source_input(facade, source, input, source_row) do
@@ -139,13 +153,7 @@ defmodule AshStrangler.Facade.Write do
   # on an insert, and a `touch()` compares against what the caller wrote.
   defp prior(source_row, facade, lenses) do
     values = Map.from_struct(source_row)
-
-    attributes =
-      Map.new(Ash.Resource.Info.attributes(facade), fn attribute ->
-        {attribute.name, Eval.forward(Map.fetch!(lenses, attribute.name), values, [])}
-      end)
-
-    %{attributes: attributes, columns: values}
+    %{attributes: Record.facade_values(values, facade, lenses), columns: values}
   end
 
   # A column the action takes as an argument (`set_attribute(column, arg(name))`)
@@ -185,25 +193,5 @@ defmodule AshStrangler.Facade.Write do
             )}}
       end
     end)
-  end
-
-  defp record(source_row, facade, source) do
-    values = Map.from_struct(source_row)
-    lenses = Info.lenses(facade)
-
-    facade_values =
-      Map.new(Ash.Resource.Info.attributes(facade), fn attribute ->
-        {attribute.name, Eval.forward(Map.fetch!(lenses, attribute.name), values, [])}
-      end)
-
-    facade
-    |> struct(facade_values)
-    |> Ash.Resource.put_metadata(:source, primary_key(source, values))
-  end
-
-  defp primary_key(source, values) do
-    source
-    |> Ash.Resource.Info.primary_key()
-    |> Map.new(&{&1, Map.fetch!(values, &1)})
   end
 end

@@ -250,10 +250,22 @@ defmodule AshStrangler.Test.Facades.Credential do
     create :create do
       accept [:id, :holder, :number]
     end
+
+    update :relabel do
+      accept [:holder]
+    end
+  end
+
+  calculations do
+    calculate :masked_line, :string, expr(holder <> " " <> number), public?: true
   end
 
   field_policies do
     field_policy :number do
+      authorize_if AshStrangler.Test.Facades.HasCredentialAccess
+    end
+
+    field_policy :masked_line do
       authorize_if AshStrangler.Test.Facades.HasCredentialAccess
     end
 
@@ -281,6 +293,7 @@ defmodule AshStrangler.Test.Facades.CredentialCard do
     attribute :holder, :string, public?: true
     attribute :number, :string, public?: true, sensitive?: true
     attribute :display, :string, public?: true, sensitive?: true
+    attribute :line, :string, public?: true
   end
 
   facade do
@@ -289,11 +302,14 @@ defmodule AshStrangler.Test.Facades.CredentialCard do
     map :id, from: :id
     map :holder, from: :holder
     map :number, from: :number
+    map :line, from: :masked_line
 
     concat :display,
       from: [:holder, :number],
       read_only?: true,
       because: "A display string cannot be split back into a holder and a number."
+
+    write(:set_holder, via: :relabel, accepts: [:holder])
   end
 end
 
@@ -574,6 +590,14 @@ defmodule AshStrangler.Test.Facades.Gauge do
     create :create do
       accept [:id, :title, :alias, :code, :span, :load]
     end
+
+    update :measure do
+      accept [:span]
+    end
+  end
+
+  calculations do
+    calculate :title_upper, :string, expr(title <> "!"), public?: true
   end
 end
 
@@ -594,6 +618,7 @@ defmodule AshStrangler.Test.Facades.GaugeView do
     attribute :width, :integer, public?: true
     attribute :height, :integer, public?: true
     attribute :code, :string, public?: true
+    attribute :shout, :string, public?: true
   end
 
   facade do
@@ -604,8 +629,11 @@ defmodule AshStrangler.Test.Facades.GaugeView do
     map :width, from: :span
     map :height, from: :load
     map :code, from: :alias
+    map :shout, from: :title_upper
 
     hide :code, because: "The gauge's code is not part of this vocabulary."
+
+    write(:set_width, via: :measure, accepts: [:width])
   end
 end
 

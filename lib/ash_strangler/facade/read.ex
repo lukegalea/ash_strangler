@@ -60,7 +60,7 @@ defmodule AshStrangler.Facade.Read do
   alias Ash.Error.Forbidden.ForbiddenField
   alias Ash.Error.Invalid.TenantRequired
   alias Ash.Error.Query.InvalidQuery
-  alias AshStrangler.{Eval, Facade.Info, Translate}
+  alias AshStrangler.{Facade.Info, Facade.Record, Translate}
 
   @impl true
   def read(query, _data_layer_query, _opts, context) do
@@ -85,8 +85,8 @@ defmodule AshStrangler.Facade.Read do
       |> maybe_as_of(source, query.as_of)
       |> Ash.read(source_opts(context, query.tenant))
       |> case do
-        {:ok, rows} -> {:ok, Enum.map(rows, &record(&1, facade, lenses, source))}
-        {:ok, rows, _extra} -> {:ok, Enum.map(rows, &record(&1, facade, lenses, source))}
+        {:ok, rows} -> {:ok, Enum.map(rows, &Record.record(&1, facade, lenses, source))}
+        {:ok, rows, _extra} -> {:ok, Enum.map(rows, &Record.record(&1, facade, lenses, source))}
         {:error, error} -> {:error, error}
       end
     end
@@ -189,17 +189,7 @@ defmodule AshStrangler.Facade.Read do
   # Attributes come with the read; a calculation or aggregate a lens reads has
   # to be asked for, or the source row has no value to put through the lens.
   defp load_read_fields(query, lenses, source) do
-    lenses
-    |> Map.values()
-    |> Info.source_attributes()
-    |> Enum.filter(fn name ->
-      case Ash.Resource.Info.field(source, name) do
-        %Ash.Resource.Calculation{} -> true
-        %Ash.Resource.Aggregate{} -> true
-        _ -> false
-      end
-    end)
-    |> Enum.reduce(query, &Ash.Query.load(&2, &1))
+    Enum.reduce(Record.load_fields(lenses, source), query, &Ash.Query.load(&2, &1))
   end
 
   defp maybe_as_of(query, source, as_of) do
@@ -208,25 +198,6 @@ defmodule AshStrangler.Facade.Read do
     else
       query
     end
-  end
-
-  defp record(source_row, facade, lenses, source) do
-    values = Map.from_struct(source_row)
-
-    facade_values =
-      Map.new(Ash.Resource.Info.attributes(facade), fn attribute ->
-        {attribute.name, Eval.forward(Map.fetch!(lenses, attribute.name), values, [])}
-      end)
-
-    facade
-    |> struct(facade_values)
-    |> Ash.Resource.put_metadata(:source, primary_key(source, values))
-  end
-
-  defp primary_key(source, values) do
-    source
-    |> Ash.Resource.Info.primary_key()
-    |> Map.new(&{&1, Map.fetch!(values, &1)})
   end
 
   # A read's sort asks for an order over values; a column the caller may not
