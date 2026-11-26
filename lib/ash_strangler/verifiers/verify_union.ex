@@ -516,6 +516,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     shared ++ same_key ++ beside
   end
 
+  defp shared_source_problems(_branch), do: []
+
   defp missing(twin, columns, what) do
     attrs = Twin.columns(twin)
 
