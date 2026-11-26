@@ -37,6 +37,16 @@ Requires Elixir 1.20 or later.
   classified by the same code that draws a strangled mapping. See the
   "Facades" guide.
 
+- **`AshStrangler.Facade.Explain`: where a facade value came from.** With the
+  optional `ash_provenance` dependency, `Explain.value/3` answers from a facade
+  record the caller already read: a `:was_derived_from` step for each source
+  attribute the value's lens reads (the facade's mapping version is the plan),
+  a `:was_generated_by` step for a value with no source attribute, and an
+  `:unreadable` gap, with no step and so no source identifier, for a value the
+  caller was refused. A read-only or non-invertible lens explains forward, with
+  its `because:` in the summary. It reads nothing, so it never widens what the
+  caller could see; the source values it names are the walk's to explain next.
+
 - **A facade `write` can name a state-machine transition and an argument-fed
   column.** `sets:` is matched against a source action's `transition_state` as
   well as its `set_attribute` changes (the target is the machine's state

@@ -101,6 +101,10 @@ defmodule AshStrangler.MixProject do
        branch: "temporal-as-of-support-0.7",
        only: [:dev, :test],
        optional: true},
+      # The plain-data contract `AshStrangler.Facade.Explain` answers on. Optional:
+      # a package that never asks where a facade value came from is not made to
+      # install it, and the module is not compiled without it.
+      {:ash_provenance, github: "lukegalea/ash_provenance", optional: true},
       # Optional in every environment, not only dev/test: the archive detection,
       # the reverse DELETE and the archive_related cascade call
       # AshArchival.Resource.Info, and declaring the dependency is what makes a
