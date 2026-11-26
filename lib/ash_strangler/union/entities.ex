@@ -100,6 +100,18 @@ defmodule AshStrangler.Union.TenantKey do
   end
 end
 
+defmodule AshStrangler.Union.JsonKey do
+  @moduledoc """
+  A column kept as one key of a jsonb column of the branch's twin: a value (`type: :integer` or
+  `:text`), the legacy integer of a one-part packed key (`kind:`), or, with `list?: true`, an
+  array of them. A `:dual_write` branch writes it back into the jsonb column: an insert through
+  the branch puts the supplied keys in the new row, and an update sets only the keys whose column
+  changed.
+  """
+  defstruct [:attribute, :from, :key, :kind, :__spark_metadata__, type: :integer, list?: false]
+  @type t :: %__MODULE__{}
+end
+
 defmodule AshStrangler.Union.NotWrittenBack do
   @moduledoc "Columns a `:dual_write` update does not carry to the legacy table."
   defstruct [:attributes, :because, :__spark_metadata__]

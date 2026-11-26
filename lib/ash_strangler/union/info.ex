@@ -11,7 +11,8 @@ defmodule AshStrangler.Union.Info do
   from on each branch:
 
     * `:column`: a bare column of the branch's twin;
-    * `:expression`: an expression over the twin's columns;
+    * `:expression`: an expression over the twin's columns (a `json_key` is one,
+      written back into its jsonb column at `:dual_write`);
     * `:constant`: a literal;
     * `:null`: an unmapped column;
     * `:extension`: a column stored in the union's extension table;
@@ -25,6 +26,7 @@ defmodule AshStrangler.Union.Info do
     Constant,
     Extension,
     InsertThrough,
+    JsonKey,
     Legacy,
     NotWrittenBack,
     Owned,
@@ -182,6 +184,10 @@ defmodule AshStrangler.Union.Info do
   def extension_columns(%Legacy{mappings: mappings}),
     do: for(%Extension{attributes: attributes} <- mappings, a <- attributes, do: a)
 
+  @doc "The columns a branch keeps as keys of a jsonb column of its twin (`json_key`)."
+  @spec json_keys(Legacy.t()) :: [JsonKey.t()]
+  def json_keys(%Legacy{mappings: mappings}), do: for(%JsonKey{} = key <- mappings, do: key)
+
   @doc "The reason a branch refuses deletes at `:dual_write`, or `nil`."
   @spec refuse_delete(Legacy.t()) :: String.t() | nil
   def refuse_delete(%Legacy{write_rules: rules}),
@@ -227,6 +233,8 @@ defmodule AshStrangler.Union.Info do
   end
 
   defp put_kind(%TenantKey{attribute: attribute}, acc), do: Map.put(acc, attribute, :expression)
+
+  defp put_kind(%JsonKey{attribute: attribute}, acc), do: Map.put(acc, attribute, :expression)
 
   defp put_kind(%Constant{attribute: attribute}, acc), do: Map.put(acc, attribute, :constant)
 

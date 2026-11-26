@@ -15,6 +15,7 @@ defmodule AshStrangler.Union.Dsl do
     Constant,
     Extension,
     InsertThrough,
+    JsonKey,
     Legacy,
     Map,
     NotWrittenBack,
@@ -132,6 +133,40 @@ defmodule AshStrangler.Union.Dsl do
     ]
   }
 
+  @json_key %Spark.Dsl.Entity{
+    name: :json_key,
+    describe: """
+    A column kept as one key of a jsonb column of the twin. `type: :integer` reads a JSON number
+    with an integer value in range (`12.5`, `1e10` and `"12"` read NULL, never cast), `:text` a
+    JSON string; `kind:` reads the integer as that one-part packed key. With `list?: true` the
+    key holds an array, read in order: an element of another JSON type is dropped, a number the
+    guard refuses is a NULL element, and anything but an array is the empty array. A
+    `:dual_write` branch writes the key back: an insert through the branch puts the supplied keys
+    in the new row's jsonb column, and an update sets only the keys whose column changed.
+    """,
+    examples: [
+      ~S|json_key :member, from: :metadata, key: "memberId", kind: {Library.Keys, :member}|,
+      ~S|json_key :labels, from: :metadata, key: "labels", type: :text, list?: true|
+    ],
+    target: JsonKey,
+    args: [:attribute],
+    schema: [
+      attribute: [type: :atom, required: true],
+      from: [type: :atom, required: true, doc: "The twin's jsonb column."],
+      key: [type: :string, required: true, doc: "The object key that holds the value."],
+      type: [
+        type: {:one_of, [:integer, :text]},
+        default: :integer,
+        doc: "A JSON number with an integer value, or a JSON string."
+      ],
+      kind: [
+        type: {:tuple, [:module, :atom]},
+        doc: "`{Registry, :kind}`: the integer is the one part of this packed key."
+      ],
+      list?: [type: :boolean, default: false, doc: "The key holds an array of such values."]
+    ]
+  }
+
   @unmapped %Spark.Dsl.Entity{
     name: :unmapped,
     describe: "Columns this branch has no source for. They read NULL; the reason is recorded.",
@@ -192,9 +227,10 @@ defmodule AshStrangler.Union.Dsl do
     legacy table. The legacy table allocates its own key, so the trigger inserts the legacy row,
     then returns the view row of that key, and `RETURNING` carries the key and every default.
     The insert writes the branch's plain `map` columns (the columns a `:dual_write` update
-    writes, minus the ones read from a legacy column that forms the key), upserts `extension`
-    columns into the extension table, and refuses a supplied value for a column it cannot write
-    (an expression, a constant, an unmapped column, a `not_written_back` column, the key).
+    writes, minus the ones read from a legacy column that forms the key) and its `json_key`
+    columns, upserts `extension` columns into the extension table, and refuses a supplied value
+    for a column it cannot write (an expression, a constant, an unmapped column, a
+    `not_written_back` column, the key).
     Without it, an insert naming the branch is refused and inserts land in the owned branch.
     """,
     examples: [
@@ -208,8 +244,8 @@ defmodule AshStrangler.Union.Dsl do
         default: [],
         doc: """
         Narrows the view columns the insert writes. Default: every plain `map :x, from: :column`
-        column that is not in `not_written_back` and is not read from a legacy column that forms
-        the key. Each named column must be one the insert can write.
+        and every `json_key` column that is not in `not_written_back` and is not read from a
+        legacy column that forms the key. Each named column must be one the insert can write.
         """
       ],
       set: [
@@ -254,7 +290,7 @@ defmodule AshStrangler.Union.Dsl do
     imports: [Ash.Expr, Combinators],
     entities: [
       keys: [@key],
-      mappings: [@map, @constant, @tenant_of, @unmapped, @extension],
+      mappings: [@map, @constant, @tenant_of, @json_key, @unmapped, @extension],
       write_rules: [@not_written_back, @refuse_delete, @insert_through]
     ],
     schema: [

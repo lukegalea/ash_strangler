@@ -10,9 +10,11 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     * column, branch and key names are unique, and no column is named like the
       key or `__branch`;
     * a branch's twin is a twin, and everything a branch reads is a column of it;
+    * a `json_key` reads a jsonb column of the twin, and the kind it packs a key of has one part;
     * a branch has exactly one `key`, a supported strategy over twin columns,
       and answers every column exactly once (`map`, `constant` or `unmapped`);
-    * on a `:dual_write` branch no two columns map from one legacy column;
+    * on a `:dual_write` branch no two columns map from one legacy column, no two `json_key`s
+      write one key, and no `map` reads a jsonb column whose keys a `json_key` writes;
     * two branches share a key namespace (their ids could collide) only when
       each names the other in `shares_key_with`; a declaration names another
       legacy branch of the union whose key is in the same namespace.
@@ -22,13 +24,15 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
   use Spark.Dsl.Verifier
 
-  alias AshStrangler.{Expr, Twin}
+  alias AshStrangler.{Expr, KeyKind, KeyKinds, Twin}
+  alias AshStrangler.Sql.Printer
 
   alias AshStrangler.Union.{
     Constant,
     Extension,
     Info,
     InsertThrough,
+    JsonKey,
     NotWrittenBack,
     RefuseDelete,
     TenantKey,
@@ -113,7 +117,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     if Code.ensure_compiled(branch.twin) == {:module, branch.twin} and Twin.twin?(branch.twin) do
       Enum.map(
         key_problems(branch, key) ++
-          mapping_problems(branch, columns) ++
+          mapping_problems(branch, columns) ++ json_key_problems(branch) ++
           write_rule_problems(branch, columns) ++
           insert_through_problems(branch, columns, key) ++
           shared_source_problems(branch) ++ definer_problems(branch, definer?),
@@ -154,6 +158,7 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
         %MapEntry{attribute: a} -> [a]
         %Constant{attribute: a} -> [a]
         %TenantKey{attribute: a} -> [a]
+        %JsonKey{attribute: a} -> [a]
         %Unmapped{attributes: as} -> as
         %Extension{attributes: as} -> as
       end)
@@ -168,6 +173,9 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
         %TenantKey{} = key ->
           missing(branch.twin, TenantKey.columns(key), "tenant_of")
+
+        %JsonKey{from: from} ->
+          missing(branch.twin, [from], "json_key")
 
         _ ->
           []
@@ -189,6 +197,52 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
       dups(answered, "mapping for column"),
       reads
     ])
+  end
+
+  # A json_key reads a jsonb column of the twin; a kind it names packs one integer part.
+  defp json_key_problems(branch) do
+    columns = Twin.columns(branch.twin)
+
+    for key <- Info.json_keys(branch),
+        at = "json_key #{inspect(key.attribute)}",
+        problem <-
+          [
+            if(key.from in columns and not jsonb?(branch.twin, key.from),
+              do: "#{at} reads #{inspect(key.from)}, which is not a jsonb column"
+            ),
+            kind_problem(at, key)
+          ],
+        problem != nil,
+        do: problem
+  end
+
+  defp kind_problem(_at, %JsonKey{kind: nil}), do: nil
+
+  defp kind_problem(at, %JsonKey{kind: {registry, name}, type: type}) do
+    kind = KeyKinds.registry?(registry) && KeyKinds.kind(registry, name)
+
+    cond do
+      not KeyKinds.registry?(registry) ->
+        "#{at}: #{inspect(registry)} is not a key-kind registry"
+
+      is_nil(kind) ->
+        "#{at}: #{inspect(registry)} declares no kind #{inspect(name)}"
+
+      length(KeyKind.widths(kind)) != 1 ->
+        "#{at}: kind #{inspect(name)} packs #{length(KeyKind.widths(kind))} parts, and a json_key holds one"
+
+      type == :text ->
+        "#{at}: a packed key's part is an integer, so `type: :text` cannot pack it"
+
+      true ->
+        nil
+    end
+  end
+
+  defp jsonb?(twin, column) do
+    Printer.pg_type!(Twin.type!(twin, column)) == "jsonb"
+  rescue
+    _ -> false
   end
 
   defp write_rule_problems(branch, columns) do
@@ -391,6 +445,9 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
           :error -> nil
         end
 
+      %JsonKey{attribute: ^attribute, from: from} ->
+        from
+
       _ ->
         nil
     end)
@@ -405,28 +462,59 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
 
   defp definer_problems(_branch, false), do: []
 
-  # A dual-write update SETs each legacy column once; two columns mapped from one cannot both be written.
+  # A dual-write update SETs each legacy column once; two columns mapped from one cannot both be
+  # written. A jsonb column a `json_key` writes takes no plain `map` writer, and each of its keys
+  # one `json_key`.
   defp shared_source_problems(%{phase: :dual_write, mappings: mappings} = branch) do
     not_written = Info.not_written_back(branch)
 
-    mappings
-    |> Enum.filter(
-      &(is_struct(&1, MapEntry) and is_atom(&1.from) and &1.attribute not in not_written)
-    )
-    |> Enum.group_by(& &1.from, & &1.attribute)
-    |> Enum.flat_map(fn
-      {from, [_, _ | _] = attributes} ->
-        [
-          "columns #{Enum.map_join(attributes, ", ", &inspect/1)} are all mapped from #{inspect(from)}, " <>
-            "which a :dual_write update cannot set twice: map all but one with `from: expr(#{from})`"
-        ]
+    plain =
+      Enum.filter(
+        mappings,
+        &(is_struct(&1, MapEntry) and is_atom(&1.from) and &1.attribute not in not_written)
+      )
 
-      _ ->
-        []
-    end)
+    json = Enum.reject(Info.json_keys(branch), &(&1.attribute in not_written))
+
+    shared =
+      plain
+      |> Enum.group_by(& &1.from, & &1.attribute)
+      |> Enum.flat_map(fn
+        {from, [_, _ | _] = attributes} ->
+          [
+            "columns #{Enum.map_join(attributes, ", ", &inspect/1)} are all mapped from #{inspect(from)}, " <>
+              "which a :dual_write update cannot set twice: map all but one with `from: expr(#{from})`"
+          ]
+
+        _ ->
+          []
+      end)
+
+    same_key =
+      json
+      |> Enum.group_by(&{&1.from, &1.key}, & &1.attribute)
+      |> Enum.flat_map(fn
+        {{from, key}, [_, _ | _] = attributes} ->
+          [
+            "columns #{Enum.map_join(attributes, ", ", &inspect/1)} all write key #{inspect(key)} of #{inspect(from)}, " <>
+              "which a :dual_write write cannot set twice: `not_written_back` all but one"
+          ]
+
+        _ ->
+          []
+      end)
+
+    beside =
+      for %MapEntry{attribute: attribute, from: from} <- plain,
+          writers = for(%JsonKey{from: ^from, attribute: a} <- json, do: a),
+          writers != [] do
+        "column #{inspect(attribute)} is mapped from #{inspect(from)}, whose keys json_key " <>
+          "#{Enum.map_join(writers, ", ", &inspect/1)} #{if match?([_], writers), do: "writes", else: "write"}: " <>
+          "a :dual_write update cannot set the column and its keys at once"
+      end
+
+    shared ++ same_key ++ beside
   end
-
-  defp shared_source_problems(_branch), do: []
 
   defp missing(twin, columns, what) do
     attrs = Twin.columns(twin)

@@ -22,9 +22,9 @@ defmodule AshStrangler.Union.Sql do
   `AshStrangler.Error.BranchWriteRefused`.
   """
 
-  alias AshStrangler.Sql.{Additive, Extension, Printer, View}
-  alias AshStrangler.Twin
-  alias AshStrangler.Union.{Constant, Info, InsertThrough, TenantKey, Unmapped}
+  alias AshStrangler.Sql.{Additive, Extension, Json, Printer, View}
+  alias AshStrangler.{KeyKinds, Twin}
+  alias AshStrangler.Union.{Constant, Info, InsertThrough, JsonKey, TenantKey, Unmapped}
   alias AshStrangler.Union.Extension, as: ExtensionEntry
   alias AshStrangler.Union.Map, as: MapEntry
 
@@ -356,6 +356,9 @@ defmodule AshStrangler.Union.Sql do
       %TenantKey{attribute: ^column} = key ->
         tenant_sql(key, frame)
 
+      %JsonKey{attribute: ^column} = key ->
+        json_read_sql(key, frame)
+
       %ExtensionEntry{attributes: attributes} ->
         if column in attributes, do: "strangler_ext.#{q(column)}"
 
@@ -601,25 +604,36 @@ defmodule AshStrangler.Union.Sql do
           (it.columns == [] or c.name in it.columns)
       end)
 
-    writable_names = Enum.map(writable, & &1.name)
+    # The json keys it writes, on the same terms: their jsonb column is the legacy column.
+    json =
+      Enum.filter(Info.json_keys(b), fn key ->
+        key.attribute not in skipped and key.from not in key_sources and
+          key.from not in set_columns and (it.columns == [] or key.attribute in it.columns)
+      end)
+
+    written = Enum.map(writable, & &1.name) ++ Enum.map(json, & &1.attribute)
 
     guards =
       "    IF NEW.#{q(canonical_key)} IS NOT NULL THEN\n      " <>
         refusal(b, :insert, "the key column #{canonical_key} is allocated by the legacy table") <>
         "\n    END IF;\n" <>
         Enum.map_join(Info.columns(union), "", fn c ->
-          if c.name in extension or c.name in writable_names,
+          if c.name in extension or c.name in written,
             do: "",
-            else: insert_guard(b, c, kinds, skipped, key_sources, set_columns)
-        end)
+            else: insert_guard(b, c, skipped, key_sources, set_columns)
+        end) <> null_element_guards(b, :insert, json)
+
+    json_columns = json_by_column(json)
 
     insert_columns =
       Enum.map(writable, &frame.({[], source_attr(b, &1.name)})) ++
-        Enum.map(it.set, fn {column, _} -> frame.({[], column}) end)
+        Enum.map(it.set, fn {column, _} -> frame.({[], column}) end) ++
+        Enum.map(json_columns, fn {from, _} -> frame.({[], from}) end)
 
     insert_values =
       Enum.map(writable, &"CAST(NEW.#{q(&1.name)} AS #{legacy_type(b, &1.name)})") ++
-        Enum.map(it.set, fn {_, value} -> Printer.literal(value) end)
+        Enum.map(it.set, fn {_, value} -> Printer.literal(value) end) ++
+        Enum.map(json_columns, fn {_, keys} -> json_object(keys, fn _key, value -> value end) end)
 
     insert =
       if insert_columns == [] do
@@ -642,16 +656,18 @@ defmodule AshStrangler.Union.Sql do
       "  END IF;\n"
   end
 
-  defp insert_guard(b, c, kinds, skipped, key_sources, set_columns) do
+  defp insert_guard(b, c, skipped, key_sources, set_columns) do
+    source = write_source(b, c.name)
+
     reason =
       cond do
         c.name in skipped ->
           "column #{c.name} is not written back on insert"
 
-        kinds[c.name] == :column and source_attr(b, c.name) in set_columns ->
+        source != nil and source in set_columns ->
           "column #{c.name} is set to a constant on this branch's inserts"
 
-        kinds[c.name] == :column and source_attr(b, c.name) in key_sources ->
+        source != nil and source in key_sources ->
           "column #{c.name} is read from a legacy column that forms the row's key"
 
         true ->
@@ -706,11 +722,13 @@ defmodule AshStrangler.Union.Sql do
 
     skipped = Info.not_written_back(b)
     extension = Info.extension_columns(b)
+    json_names = Enum.map(Info.json_keys(b), & &1.attribute)
+    json = Enum.reject(Info.json_keys(b), &(&1.attribute in skipped))
 
     {writable, read_only} =
       union
       |> Info.columns()
-      |> Enum.reject(&(&1.name in skipped or &1.name in extension))
+      |> Enum.reject(&(&1.name in skipped or &1.name in extension or &1.name in json_names))
       |> Enum.split_with(fn c ->
         kinds[c.name] == :column and simple?(b, c.name) and
           source_attr(b, c.name) not in key_sources
@@ -725,29 +743,26 @@ defmodule AshStrangler.Union.Sql do
 
         "    IF NEW.#{q(c.name)} IS DISTINCT FROM OLD.#{q(c.name)} THEN\n      " <>
           refusal(b, :update, reason) <> "\n    END IF;\n"
-      end)
+      end) <> null_element_guards(b, :update, json) <> object_guards(union, b, json)
+
+    sets =
+      Enum.map(writable, fn c ->
+        column = frame.({[], source_attr(b, c.name)})
+
+        # Only a column this write changed is assigned. The trigger's NEW and OLD are both
+        # the view scan, so a column the statement left alone carries a value that may
+        # predate a concurrent commit to the legacy row; assigning it back would revert
+        # that commit.
+        "#{column} = CASE WHEN NEW.#{q(c.name)} IS DISTINCT FROM OLD.#{q(c.name)} " <>
+          "THEN CAST(NEW.#{q(c.name)} AS #{legacy_type(b, c.name)}) ELSE #{column} END"
+      end) ++
+        Enum.map(json_by_column(json), fn {from, keys} -> json_set(frame.({[], from}), keys) end)
 
     write =
-      if writable == [] do
+      if sets == [] do
         ""
       else
-        sets =
-          Enum.map_join(
-            writable,
-            ", ",
-            fn c ->
-              column = frame.({[], source_attr(b, c.name)})
-
-              # Only a column this write changed is assigned. The trigger's NEW and OLD are both
-              # the view scan, so a column the statement left alone carries a value that may
-              # predate a concurrent commit to the legacy row; assigning it back would revert
-              # that commit.
-              "#{column} = CASE WHEN NEW.#{q(c.name)} IS DISTINCT FROM OLD.#{q(c.name)} " <>
-                "THEN CAST(NEW.#{q(c.name)} AS #{legacy_type(b, c.name)}) ELSE #{column} END"
-            end
-          )
-
-        "    UPDATE #{Twin.sql_relation(b.twin)} SET #{sets} WHERE #{legacy_match(union, b)};\n" <>
+        "    UPDATE #{Twin.sql_relation(b.twin)} SET #{Enum.join(sets, ", ")} WHERE #{legacy_match(union, b)};\n" <>
           "    IF NOT FOUND THEN RAISE EXCEPTION 'row % no longer exists in #{Twin.relation(b.twin)}', OLD.#{q(Info.key(union))}; END IF;\n"
       end
 
@@ -777,6 +792,121 @@ defmodule AshStrangler.Union.Sql do
       "        ON CONFLICT (#{key}) DO UPDATE SET #{sets};\n    END IF;\n"
   end
 
+  # --- columns kept as keys of a jsonb column -----------------------------------
+
+  # The key's value behind the guard of its type (`AshStrangler.Sql.Json`), packed when the key
+  # declares a kind. A list keeps the array's order: an element of another JSON type is dropped,
+  # one the guard refuses is a NULL element, and anything but an array is the empty array.
+  defp json_read_sql(%JsonKey{} = key, frame) do
+    value = "((#{frame.({[], key.from})})::jsonb -> #{Printer.literal(key.key)})"
+
+    if key.list? do
+      element = ~s("strangler_j"."v")
+      json_type = if key.type == :text, do: "string", else: "number"
+      empty = "'{}'::#{json_element_type(key)}[]"
+
+      "CASE WHEN jsonb_typeof(#{value}) = 'array' THEN (SELECT coalesce(array_agg(#{json_scalar(key, element)} " <>
+        ~s[ORDER BY "strangler_j"."o"), #{empty}) FROM jsonb_array_elements(#{value}) WITH ORDINALITY AS "strangler_j"("v", "o") ] <>
+        "WHERE jsonb_typeof(#{element}) = '#{json_type}') ELSE #{empty} END"
+    else
+      json_scalar(key, value)
+    end
+  end
+
+  defp json_scalar(%JsonKey{type: :text}, json), do: Json.text(json)
+  defp json_scalar(%JsonKey{kind: nil}, json), do: Json.integer(json)
+
+  defp json_scalar(%JsonKey{kind: {registry, kind}}, json) do
+    [width] = registry |> KeyKinds.kind!(kind) |> AshStrangler.KeyKind.widths()
+    KeyKinds.to_sql(registry, kind, [Json.integer(json, width)])
+  end
+
+  defp json_element_type(%JsonKey{kind: {_registry, _kind}}), do: "uuid"
+  defp json_element_type(%JsonKey{type: :text}), do: "text"
+  defp json_element_type(%JsonKey{}), do: "integer"
+
+  # The keys by jsonb column, each column once, in declaration order.
+  defp json_by_column(keys) do
+    for from <- Enum.uniq(Enum.map(keys, & &1.from)),
+        do: {from, Enum.filter(keys, &(&1.from == from))}
+  end
+
+  # The keys as one object, each value passed through `value`; a NULL value writes no key.
+  defp json_object(keys, value) do
+    pairs =
+      Enum.map_join(keys, ", ", fn key ->
+        "#{Printer.literal(key.key)}, #{value.(key, json_write_sql(key, "NEW.#{q(key.attribute)}"))}"
+      end)
+
+    "jsonb_strip_nulls(jsonb_build_object(#{pairs}))"
+  end
+
+  # An update of a jsonb column removes the keys whose column changed, then sets again those
+  # with a value, so every other key stays as stored, a concurrent commit to one included. A
+  # NULL column, or a JSON null, takes the keys as a new object.
+  defp json_set(column, keys) do
+    changed = Enum.map_join(keys, " OR ", &changed_sql(&1.attribute))
+
+    removed =
+      Enum.map_join(
+        keys,
+        ", ",
+        &"CASE WHEN #{changed_sql(&1.attribute)} THEN #{Printer.literal(&1.key)} END"
+      )
+
+    object = "CASE WHEN jsonb_typeof(#{column}) = 'object' THEN #{column} ELSE '{}'::jsonb END"
+    added = json_object(keys, &"CASE WHEN #{changed_sql(&1.attribute)} THEN #{&2} END")
+
+    "#{column} = CASE WHEN #{changed} THEN (#{object} - array_remove(ARRAY[#{removed}], NULL)) || #{added} " <>
+      "ELSE #{column} END"
+  end
+
+  # The column's value as the jsonb its key holds, NULL when the column is NULL. A packed key
+  # decodes to its legacy integer; any other uuid fails `not a key of this kind`.
+  defp json_write_sql(%JsonKey{list?: true} = key, value) do
+    element = ~s("strangler_u"."u")
+
+    "CASE WHEN #{value} IS NOT NULL THEN (SELECT coalesce(jsonb_agg(#{json_element(key, element)} " <>
+      ~s[ORDER BY "strangler_u"."o"), '[]'::jsonb) FROM unnest(#{value}) WITH ORDINALITY AS "strangler_u"("u", "o")) END]
+  end
+
+  defp json_write_sql(key, value), do: json_element(key, value)
+
+  defp json_element(%JsonKey{kind: {registry, kind}}, value),
+    do: "to_jsonb(#{KeyKinds.part_sql(registry, kind, 0, value)})"
+
+  defp json_element(%JsonKey{type: :text}, value), do: "to_jsonb(CAST(#{value} AS text))"
+  defp json_element(%JsonKey{}, value), do: "to_jsonb(CAST(#{value} AS integer))"
+
+  # A NULL element has no legacy value: a list holding one is refused, not written as `null`.
+  defp null_element_guards(b, operation, keys) do
+    for %JsonKey{list?: true, attribute: a} <- keys, into: "" do
+      changed = if operation == :update, do: "#{changed_sql(a)} AND ", else: ""
+
+      "    IF #{changed}array_position(NEW.#{q(a)}, NULL) IS NOT NULL THEN\n      " <>
+        refusal(b, operation, "column #{a} has a NULL element, which has no legacy value to write") <>
+        "\n    END IF;\n"
+    end
+  end
+
+  # Keys are written into a JSON object or a NULL column. Any other stored value is refused,
+  # never replaced.
+  defp object_guards(union, b, keys) do
+    for key <- keys, into: "" do
+      column = Printer.bare_frame(b.twin).({[], key.from})
+
+      "    IF #{changed_sql(key.attribute)} AND EXISTS (SELECT 1 FROM #{Twin.sql_relation(b.twin)} " <>
+        "WHERE #{legacy_match(union, b)} AND jsonb_typeof(#{column}) NOT IN ('object', 'null')) THEN\n      " <>
+        refusal(
+          b,
+          :update,
+          "the legacy column #{key.from} is not a JSON object, so #{key.attribute} cannot be written into it"
+        ) <> "\n    END IF;\n"
+    end
+  end
+
+  defp changed_sql(attribute), do: "NEW.#{q(attribute)} IS DISTINCT FROM OLD.#{q(attribute)}"
+
   defp delete_branch(_union, %{phase: :read_from_legacy} = b),
     do: "    #{refusal(b, :delete, b.refused_because)}\n"
 
@@ -803,6 +933,12 @@ defmodule AshStrangler.Union.Sql do
 
   # A `map from: :column` is writable; `from: expr(...)` that is a bare reference is too.
   defp simple?(b, column), do: source_attr(b, column) != nil
+
+  # The legacy column a write of `column` lands in: a plain map's, or its json key's jsonb column.
+  defp write_source(b, column) do
+    source_attr(b, column) ||
+      Enum.find_value(Info.json_keys(b), &(&1.attribute == column && &1.from))
+  end
 
   defp source_attr(b, column) do
     Enum.find_value(b.mappings, fn
