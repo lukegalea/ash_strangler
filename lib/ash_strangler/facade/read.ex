@@ -77,7 +77,7 @@ defmodule AshStrangler.Facade.Read do
       sorted = Enum.zip(query.sort, sort)
 
       source
-      |> Ash.Query.for_read(Info.read_action(facade))
+      |> Ash.Query.for_read(Info.read_action(facade), %{}, source_opts(context, query.tenant))
       |> apply_filter(filter)
       |> apply_sort(sorted, facade)
       |> apply_window(facade_query)

@@ -25,6 +25,8 @@ defmodule AshStrangler.FacadeTest do
 
   alias AshStrangler.Test.Facades.{
     AnnotatedItem,
+    Cabinet,
+    CabinetView,
     Credential,
     CredentialCard,
     Gauge,
@@ -388,6 +390,72 @@ defmodule AshStrangler.FacadeTest do
     defp facade_query(org, _actor), do: WorkItem |> Ash.Query.new() |> Ash.Query.set_tenant(org)
   end
 
+  # --- the source's preparations ----------------------------------------------
+
+  describe "the source's preparations see the caller" do
+    test "a facade read reaches a source read whose preparation narrows by the actor" do
+      _theirs = cabinet!(%{scope: "theirs", count: 1, note: "not yours"})
+      actor = %{scope: "mine"}
+
+      direct =
+        Cabinet
+        |> Ash.Query.for_read(:scoped, %{}, actor: actor)
+        |> Ash.read!(authorize?: false)
+
+      via =
+        CabinetView
+        |> Ash.Query.for_read(:read, %{}, actor: actor)
+        |> Ash.read!(authorize?: false)
+
+      assert direct == []
+      assert via == []
+    end
+
+    test "a facade write cannot reach a row the caller's source read does not reach" do
+      theirs = cabinet!(%{scope: "theirs", count: 1, note: "not yours"})
+      actor = %{scope: "mine"}
+
+      assert {:error, %{errors: [error | _]}} =
+               Ash.ActionInput.for_action(
+                 CabinetView,
+                 :set_note,
+                 %{
+                   id: theirs.id,
+                   note: "tampered"
+                 },
+                 actor: actor,
+                 authorize?: false
+               )
+               |> Ash.run_action()
+
+      assert %NotFound{} = error
+
+      assert Ash.get!(Cabinet, theirs.id, authorize?: false).note == "not yours"
+    end
+
+    test "the caller's own row reads and writes through the facade" do
+      mine = cabinet!(%{scope: "mine", count: 7, note: "mine"})
+      actor = %{scope: "mine"}
+
+      [row] =
+        CabinetView
+        |> Ash.Query.for_read(:read, %{}, actor: actor)
+        |> Ash.read!(authorize?: false)
+
+      assert row.id == mine.id
+
+      {:ok, record} =
+        Ash.ActionInput.for_action(CabinetView, :set_note, %{id: mine.id, note: "changed"},
+          actor: actor,
+          authorize?: false
+        )
+        |> Ash.run_action()
+
+      assert record.note == "changed"
+      assert Ash.get!(Cabinet, mine.id, authorize?: false).note == "changed"
+    end
+  end
+
   # --- forbidden fields --------------------------------------------------------
 
   describe "a hidden source column reads as a forbidden field" do
@@ -470,6 +538,13 @@ defmodule AshStrangler.FacadeTest do
   defp gauge!(attrs) do
     Ash.create!(
       Ash.Changeset.for_create(Gauge, :create, Map.put_new(attrs, :id, Ash.UUID.generate())),
+      authorize?: false
+    )
+  end
+
+  defp cabinet!(attrs) do
+    Ash.create!(
+      Ash.Changeset.for_create(Cabinet, :create, Map.put_new(attrs, :id, Ash.UUID.generate())),
       authorize?: false
     )
   end

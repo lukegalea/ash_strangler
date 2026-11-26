@@ -37,6 +37,8 @@ defmodule AshStrangler.Test.Facades do
     resource AshStrangler.Test.Facades.TicketView
     resource AshStrangler.Test.Facades.Gauge
     resource AshStrangler.Test.Facades.GaugeView
+    resource AshStrangler.Test.Facades.Cabinet
+    resource AshStrangler.Test.Facades.CabinetView
   end
 end
 
@@ -602,6 +604,86 @@ defmodule AshStrangler.Test.Facades.GaugeView do
     map :code, from: :alias
 
     hide :code, because: "The gauge's code is not part of this vocabulary."
+  end
+end
+
+defmodule AshStrangler.Test.Facades.ByScope do
+  @moduledoc "The Cabinet's `:scoped` read preparation: it narrows by the caller's scope."
+  use Ash.Resource.Preparation
+
+  require Ash.Query
+
+  @impl true
+  def prepare(query, _opts, context) do
+    case context.actor do
+      %{scope: wanted} -> Ash.Query.filter(query, scope == ^wanted)
+      _ -> query
+    end
+  end
+end
+
+defmodule AshStrangler.Test.Facades.Cabinet do
+  @moduledoc """
+  A source with a second read action, `:scoped`, whose preparation narrows by
+  the caller's `scope`: a caller whose scope names nothing reads nothing, and
+  a write through the facade must be held to the same reach.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Ets
+
+  ets do
+    private? true
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :scope, :string, public?: true
+    attribute :count, :integer, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    read :scoped do
+      prepare AshStrangler.Test.Facades.ByScope
+    end
+
+    create :create do
+      accept [:id, :scope, :count, :note]
+    end
+
+    update :recount do
+      accept [:count, :note]
+    end
+  end
+end
+
+defmodule AshStrangler.Test.Facades.CabinetView do
+  @moduledoc "The facade over the Cabinet: it reads through `:scoped`."
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :size, :integer, public?: true
+    attribute :note, :string, public?: true
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.Cabinet
+    read_action :scoped
+
+    map :id, from: :id
+    map :size, from: :count
+    map :note, from: :note
+
+    hide :scope, because: "The row's scope is the source's decision."
+
+    write(:set_note, via: :recount, accepts: [:note])
   end
 end
 

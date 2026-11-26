@@ -99,7 +99,7 @@ defmodule AshStrangler.Facade.Write do
     with {:ok, columns_and_values} <-
            Eval.put(lens, %{lens.attribute => input.arguments[hd(primary_key)]}) do
       source
-      |> Ash.Query.for_read(Info.read_action(facade))
+      |> Ash.Query.for_read(Info.read_action(facade), %{}, source_opts(context))
       |> Ash.Query.do_filter(Map.new(columns_and_values))
       |> Ash.read(source_opts(context))
       |> case do

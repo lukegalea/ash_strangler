@@ -65,6 +65,11 @@ Requires Elixir 1.20 or later.
   Postgres, or a comparison against a source column the facade hides. It is
   now taken only when the right side is a literal value; a comparison of two
   facade attributes goes through forward substitution on both sides.
+- **A facade builds the source query as the caller.** `Ash.Query.for_read/4`
+  now receives the same `actor`, `tenant` and `authorize?` as `Ash.read/2`,
+  on reads and on the write's primary-key read, so a source read action whose
+  preparation narrows by the actor (or reads the tenant) narrows through a
+  facade, and a write cannot update a row the caller cannot read.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is
