@@ -254,7 +254,7 @@ defmodule AshStrangler.EvalTest do
       assert Eval.forward(lenses()[:title], %{name: nil}) == nil
     end
 
-    test "a collapse's write holds the stored column on an update and falls back on an insert" do
+    test "a collapse's write falls back on an insert" do
       hold =
         Lens.over(Source, Facade, [
           %Collapse{
@@ -271,6 +271,39 @@ defmodule AshStrangler.EvalTest do
 
       assert {:ok, written} = Eval.put(hold, %{lifecycle: :open})
       assert Enum.sort(written) == [flag: false, status: :open]
+    end
+
+    test "a collapse's write holds the stored column on an update when given the prior" do
+      hold =
+        Lens.over(Source, Facade, [
+          %Collapse{
+            attribute: :lifecycle,
+            states: [
+              %Collapse.State{
+                value: :cancelled,
+                when: expr(status == :cancelled),
+                set: [status: :cancelled]
+              },
+              %Collapse.State{
+                value: :open,
+                when: :otherwise,
+                set: [status: :open, flag: false]
+              }
+            ]
+          }
+        ])[:lifecycle]
+
+      # The `:cancelled` state's `set:` omits `flag`, so it holds the stored
+      # value rather than falling back as an insert does.
+      assert {:ok, written} =
+               Eval.put(hold, %{lifecycle: :cancelled},
+                 prior: %{
+                   attributes: %{lifecycle: :cancelled},
+                   columns: %{"status" => :cancelled, "flag" => true}
+                 }
+               )
+
+      assert Enum.sort(written) == [flag: true, status: :cancelled]
     end
   end
 
