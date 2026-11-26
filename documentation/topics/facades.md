@@ -105,10 +105,13 @@ Three limits are facts, not oversights:
 2. The source row is read as the caller, by primary key. No row, no write — a
    row the caller cannot read is a row that is not there.
 3. The source action's input is built by putting values through the lens's
-   reverse direction: for `accepts:` the argument value. The write is an
-   update of the row step 2 read, so a collapse state whose `set:` omits a
-   column holds that column's stored value. A lens with no reverse refuses
-   with its `because:` text, before the source action runs.
+   reverse direction: for `accepts:` the argument value. Only the `accepts:`
+   arguments the caller supplied are sent — one omitted is not sent at all,
+   and the column it feeds keeps its stored value, while an argument
+   supplied as `nil` is written as a `nil`. The write is an update of the row
+   step 2 read, so a collapse state whose `set:` omits a column holds that
+   column's stored value. A lens with no reverse refuses with its `because:`
+   text, before the source action runs.
 4. The source update action (`via:`) runs with the caller's `actor`, `tenant`
    and `authorize?`. The source's own validations and guard errors are
    returned as the source raised them.

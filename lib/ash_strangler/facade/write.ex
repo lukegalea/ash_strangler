@@ -19,8 +19,11 @@ defmodule AshStrangler.Facade.Write do
   3. The source action's input is put through the lens's reverse direction —
      for `sets:` the declared value, for `accepts:` the argument. A lens with
      no reverse refuses with its `because:` text, before the source action.
-     The write is an update of the row step 2 read, so the reverse sees that
-     row as `:prior`: a collapse state whose `set:` omits a column holds the
+     Only the `accepts:` arguments the caller supplied are sent: one omitted
+     is not sent at all, and the column it feeds keeps its stored value,
+     while an argument supplied as `nil` is written as a `nil`. The write is
+     an update of the row step 2 read, so the reverse sees that row as
+     `:prior`: a collapse state whose `set:` omits a column holds the
      column's stored value, and falls back only where there is no row.
   4. The source update action runs with the source row, that input, and the
      caller's `actor`, `tenant` and `authorize?`. The source's own validation
@@ -149,10 +152,15 @@ defmodule AshStrangler.Facade.Write do
   # is written through that argument; any other is an accepted attribute.
   defp input_name(action, column), do: Info.argument_for(action, column) || column
 
+  # Only the accepted attributes the caller supplied are written: an argument
+  # the caller omitted is not sent to the source action at all, so the column
+  # it feeds keeps its stored value. Ash leaves an unsupplied argument out of
+  # `input.arguments` and keeps one supplied as `nil` in it, so an explicit
+  # `nil` is still written as a `nil`.
   defp accepted_input(write, input) do
-    Enum.map(write.accepts, fn attribute ->
-      {attribute, input.arguments[attribute]}
-    end)
+    write.accepts
+    |> Enum.filter(&Map.has_key?(input.arguments, &1))
+    |> Enum.map(fn attribute -> {attribute, input.arguments[attribute]} end)
   end
 
   # One facade attribute and value → the source columns the lens's reverse

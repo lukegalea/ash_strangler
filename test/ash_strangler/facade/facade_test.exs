@@ -907,4 +907,34 @@ defmodule AshStrangler.FacadeTest do
       assert source.shown == true
     end
   end
+
+  describe "an accepted argument the caller omits is not written" do
+    test "an omitted argument leaves the source column alone" do
+      flag = flag!(%{count: 5, label: "keep me"})
+
+      {:ok, _record} =
+        Ash.ActionInput.for_action(FlagView, :set_details, %{id: flag.id, count: 9},
+          authorize?: false
+        )
+        |> Ash.run_action()
+
+      source = Ash.get!(Flag, flag.id, authorize?: false)
+      assert {source.count, source.label} == {9, "keep me"}
+    end
+
+    test "an argument supplied as nil is still written as a nil" do
+      flag = flag!(%{count: 5, label: "keep me"})
+
+      {:ok, _record} =
+        Ash.ActionInput.for_action(FlagView, :set_details, %{
+          id: flag.id,
+          count: 9,
+          label: nil
+        })
+        |> Ash.run_action()
+
+      source = Ash.get!(Flag, flag.id, authorize?: false)
+      assert {source.count, source.label} == {9, nil}
+    end
+  end
 end

@@ -764,6 +764,7 @@ defmodule AshStrangler.Test.Facades.FlagView do
     map :label, from: :label
 
     write(:set_state, via: :set_flags, accepts: [:state])
+    write(:set_details, via: :set_details, accepts: [:count, :label])
   end
 end
 
