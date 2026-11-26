@@ -117,7 +117,8 @@ defmodule AshStrangler.Verifiers.VerifyUnion do
     if Code.ensure_compiled(branch.twin) == {:module, branch.twin} and Twin.twin?(branch.twin) do
       Enum.map(
         key_problems(branch, key) ++
-          mapping_problems(branch, columns) ++ json_key_problems(branch) ++
+          mapping_problems(branch, columns) ++
+          json_key_problems(branch) ++
           write_rule_problems(branch, columns) ++
           insert_through_problems(branch, columns, key) ++
           shared_source_problems(branch) ++ definer_problems(branch, definer?),

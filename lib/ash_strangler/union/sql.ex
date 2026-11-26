@@ -884,7 +884,11 @@ defmodule AshStrangler.Union.Sql do
       changed = if operation == :update, do: "#{changed_sql(a)} AND ", else: ""
 
       "    IF #{changed}array_position(NEW.#{q(a)}, NULL) IS NOT NULL THEN\n      " <>
-        refusal(b, operation, "column #{a} has a NULL element, which has no legacy value to write") <>
+        refusal(
+          b,
+          operation,
+          "column #{a} has a NULL element, which has no legacy value to write"
+        ) <>
         "\n    END IF;\n"
     end
   end
