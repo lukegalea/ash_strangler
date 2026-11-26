@@ -92,10 +92,12 @@ defmodule AshStrangler.Facade.Read do
     end
   end
 
-  # The caller's options, mirrored: passing `actor:` even as nil turns
-  # authorization on, and passing neither `actor` nor `authorize?` means the
-  # source read runs unchecked, exactly as it would if the caller had called
-  # the source directly.
+  # The caller's options, mirrored — the same options go to the source query's
+  # `for_read/4` and to `Ash.read/2`: passing `actor:` even as nil turns
+  # authorization on, and passing neither `actor` nor `authorize?` runs the
+  # source read by the authorization the facade's own domain resolved, which
+  # `VerifyAuthorization` holds to be at least as strict as the source's
+  # domain's.
   defp source_opts(context, tenant) do
     authorize? = context[:authorize?]
 

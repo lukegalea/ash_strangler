@@ -2,6 +2,32 @@
 #
 # SPDX-License-Identifier: MIT
 
+defmodule AshStrangler.Facade.VerifiersTest.LaxDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  authorization do
+    authorize :when_requested
+  end
+
+  resources do
+    allow_unregistered? true
+  end
+end
+
+defmodule AshStrangler.Facade.VerifiersTest.StrictDomain do
+  @moduledoc false
+  use Ash.Domain, validate_config_inclusion?: false
+
+  authorization do
+    authorize :always
+  end
+
+  resources do
+    allow_unregistered? true
+  end
+end
+
 defmodule AshStrangler.Facade.VerifiersTest do
   @moduledoc """
   Each case is phrased as the mistake being caught: a facade that compiles
@@ -501,9 +527,34 @@ defmodule AshStrangler.Facade.VerifiersTest do
     end
   end
 
+  describe "the domain's authorization" do
+    test "a `when_requested` facade over a `by_default` source is refused, naming both domains" do
+      message =
+        assert_rejected_by(
+          AshStrangler.Facade.Verifiers.VerifyAuthorization,
+          @baseline,
+          AshStrangler.Facade.VerifiersTest.LaxDomain
+        )
+
+      assert message =~ "AshStrangler.Facade.VerifiersTest.LaxDomain"
+      assert message =~ "AshStrangler.Test.Facades"
+      assert message =~ "when_requested"
+      assert message =~ "by_default"
+    end
+
+    test "equal settings compile" do
+      # The probe and its source, the Task fixture, share a domain.
+      verify_compiles(@baseline)
+    end
+
+    test "a stricter facade compiles" do
+      verify_compiles(@baseline, AshStrangler.Facade.VerifiersTest.StrictDomain)
+    end
+  end
+
   # --- harness -----------------------------------------------------------------
 
-  defp define(body) do
+  defp define(body, domain) do
     name = "AshStrangler.Facade.VerifiersTest.Probe#{System.unique_integer([:positive])}"
 
     # The definition succeeds even for an invalid facade; the verifier
@@ -514,7 +565,7 @@ defmodule AshStrangler.Facade.VerifiersTest do
         Code.eval_string("""
         defmodule #{name} do
           use Ash.Resource,
-            domain: AshStrangler.Test.Facades,
+            domain: #{inspect(domain)},
             validate_domain_inclusion?: false,
             data_layer: Ash.DataLayer.Simple,
             extensions: [AshStrangler.Facade],
@@ -543,8 +594,8 @@ defmodule AshStrangler.Facade.VerifiersTest do
         do: {verifier, Exception.message(error)}
   end
 
-  defp assert_rejected_by(verifier, body) do
-    dsl = define(body)
+  defp assert_rejected_by(verifier, body, domain \\ AshStrangler.Test.Facades) do
+    dsl = define(body, domain)
 
     case verifier.verify(dsl) do
       {:error, error} ->
@@ -560,8 +611,8 @@ defmodule AshStrangler.Facade.VerifiersTest do
     end
   end
 
-  defp verify_compiles(body) do
-    dsl = define(body)
+  defp verify_compiles(body, domain \\ AshStrangler.Test.Facades) do
+    dsl = define(body, domain)
 
     case rejections(dsl) do
       [] ->

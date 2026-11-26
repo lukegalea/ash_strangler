@@ -86,6 +86,13 @@ Requires Elixir 1.20 or later.
   place (`AshStrangler.Facade.Record`), used by both the read and the write,
   and a source calculation the caller may not read is an `%Ash.ForbiddenField{}`
   on the write's record, as on a read.
+- **A facade's domain may not authorize less than its source's.** A new
+  verifier refuses at compile time a facade whose domain resolves a laxer
+  `authorize` setting than its source's domain (`:when_requested` <
+  `:by_default` < `:always`): a facade reads and writes its source with the
+  authorization its own domain resolved, so the laxer setting would reach the
+  source unchecked where a direct call would have been authorized. A facade
+  over a facade compares with the source facade's domain.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is
