@@ -74,6 +74,10 @@ Requires Elixir 1.20 or later.
   now sees the row the write read as `:prior`, so a state whose `set:` omits a
   column keeps the column's stored value instead of writing the INSERT
   fallback over it.
+- **An omitted optional `accepts:` argument is not written.** Only the
+  accepted arguments the caller supplied are sent to the source action; one
+  omitted no longer arrives as an explicit `nil` that clears the column. An
+  argument supplied as `nil` is still written as a `nil`.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is
