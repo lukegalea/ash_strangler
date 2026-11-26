@@ -937,4 +937,48 @@ defmodule AshStrangler.FacadeTest do
       assert {source.count, source.label} == {9, nil}
     end
   end
+
+  describe "a write returns what a read returns" do
+    test "the write's record carries what the read's does, calculations included" do
+      gauge = gauge!(%{title: "quiet", span: 1, load: 1})
+
+      {:ok, written} =
+        Ash.ActionInput.for_action(GaugeView, :set_width, %{id: gauge.id, width: 9},
+          authorize?: false
+        )
+        |> Ash.run_action()
+
+      [read_back] =
+        GaugeView
+        |> Ash.Query.filter(expr(id == ^gauge.id))
+        |> read!(authorize?: false)
+
+      assert written.title == "quiet"
+      assert written.width == 9
+      # A lens reads a source calculation: the update loaded it, so the write
+      # answers it instead of failing after the fact.
+      assert written.shout == "quiet!"
+      assert written.shout == read_back.shout
+      assert written.__metadata__[:source] == read_back.__metadata__[:source]
+    end
+
+    test "a calculation the caller may not read is a forbidden field, never the value" do
+      holder = "holder_#{System.unique_integer([:positive])}"
+      credential!(holder, "555-9")
+
+      [card] =
+        CredentialCard
+        |> Ash.Query.filter(expr(holder == ^holder))
+        |> read!(actor: %{}, authorize?: true)
+
+      {:ok, written} =
+        Ash.ActionInput.for_action(CredentialCard, :set_holder, %{id: card.id, holder: "renamed"},
+          actor: %{},
+          authorize?: true
+        )
+        |> Ash.run_action()
+
+      assert %ForbiddenField{field: :line} = written.line
+    end
+  end
 end

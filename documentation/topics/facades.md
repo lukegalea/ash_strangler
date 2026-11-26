@@ -115,8 +115,10 @@ Three limits are facts, not oversights:
 4. The source update action (`via:`) runs with the caller's `actor`, `tenant`
    and `authorize?`. The source's own validations and guard errors are
    returned as the source raised them.
-5. The updated source row goes back through the forward lens. No second
-   source action runs to produce the return value.
+5. The updated source row goes back through the forward lens — the same
+   mapping a read uses, with the source calculations and aggregates the
+   lenses read loaded first. No second source action runs to produce the
+   return value.
 
 One write is one source action — counted, not assumed, by the tests. `sets:`
 values are not passed as action input: the compile-time check proves the

@@ -78,6 +78,14 @@ Requires Elixir 1.20 or later.
   accepted arguments the caller supplied are sent to the source action; one
   omitted no longer arrives as an explicit `nil` that clears the column. An
   argument supplied as `nil` is still written as a `nil`.
+- **A facade write returns what a read of the row returns.** The update, and
+  the write's own primary-key read, load the source calculations and
+  aggregates the lenses read, so a lens reading a calculation no longer raises
+  after the source update has committed — a retry no longer runs the source
+  action twice. The mapping from a source row to a facade record lives in one
+  place (`AshStrangler.Facade.Record`), used by both the read and the write,
+  and a source calculation the caller may not read is an `%Ash.ForbiddenField{}`
+  on the write's record, as on a read.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is
