@@ -580,6 +580,15 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   (`AshStrangler.Facade.Info.hops/1`): one `%Facade.Hop{}` per hop, with the
   hop's own mapping version, dataset and edges. No hop trusts the description
   of the one above it.
+- `AshStrangler.Facade.Explain.value/3` (with the optional `:ash_provenance`
+  dependency) says where a facade value came from: one `:was_derived_from`
+  step for each source attribute its lens reads, with the facade's mapping
+  version as the plan; a `:was_generated_by` step for a constant, a key or an
+  unmapped attribute; an `:unreadable` gap, and no step, for a value the
+  caller was refused. It reads nothing: pass it a record the caller read, and
+  walk its `antecedents` with the source's own explainer. A read-only lens is
+  not a gap: its `because:` is in the summary. The address type tokens are the
+  host's (`source_type:`).
 
 ## `mix ash.codegen` coverage
 

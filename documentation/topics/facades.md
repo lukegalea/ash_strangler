@@ -170,3 +170,33 @@ AshStrangler.Facade.Info.hops(MyApp.WorkItemRow)
 #  %Hop{kind: :facade, resource: MyApp.WorkItem, source: MyApp.Task, ...},
 #  %Hop{kind: :owned, resource: MyApp.Task, source: nil, ...}]
 ```
+
+## Where a value came from
+
+With the optional `:ash_provenance` dependency,
+`AshStrangler.Facade.Explain.value/3` answers where one facade value came from,
+on that package's contract. It takes a facade record the caller has already
+read, as the caller, and reads nothing itself, so what the caller may see is
+what the answer may name.
+
+```elixir
+record = MyApp.Domain.get_work_item!(id, actor: actor, tenant: tenant)
+
+%{steps: steps, gaps: gaps, antecedents: antecedents} =
+  AshStrangler.Facade.Explain.value(record, :title,
+    address: address_of_the_facade_value,
+    source_type: "task"
+  )
+```
+
+A value read through a lens has one `:was_derived_from` step for each source
+attribute the lens reads, naming that source value by address, and the
+facade's mapping version as the step's plan. A constant, a key or an unmapped
+attribute has one `:was_generated_by` step. A read-only or non-invertible lens
+is explained forward like any other, and its `because:` text is in the step's
+summary: the forward direction is known, so that is not a gap. A value the
+caller was refused is an `:unreadable` gap and no step, because a step would
+name the source row. The `antecedents` are the source value addresses: the
+walk that called `value/3` asks the source's own explainer about each one,
+and a facade over a facade is two such hops. The address type tokens belong
+to the host, which is why `source_type` is an argument.
