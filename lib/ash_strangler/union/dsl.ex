@@ -267,8 +267,9 @@ defmodule AshStrangler.Union.Dsl do
     A legacy branch: rows that live in a twin's relation. Its `phase` is its
     own. In `:read_from_legacy` a write that would land on the branch is refused
     with `refused_because`. In `:dual_write` an update or delete of one of its
-    rows is carried to the legacy table (renamed columns only), and an insert
-    naming it lands in the legacy table when it declares `insert_through`.
+    rows is carried to the legacy table (renamed columns and `json_key` columns
+    only), and an insert naming it lands in the legacy table when it declares
+    `insert_through`.
     In `:read_from_new` and `:decommissioned` the branch has left the view: its
     rows now live in the owned table.
     """,
