@@ -867,7 +867,7 @@ defmodule AshStrangler.Union.Sql do
     element = ~s("strangler_u"."u")
 
     "CASE WHEN #{value} IS NOT NULL THEN (SELECT coalesce(jsonb_agg(#{json_element(key, element)} " <>
-      ~s[ORDER BY "strangler_u"."o"), '[]'::jsonb) FROM unnest(#{value}) WITH ORDINALITY AS "strangler_u"("u", "o")) END]
+      ~s|ORDER BY "strangler_u"."o"), '[]'::jsonb) FROM unnest(#{value}) WITH ORDINALITY AS "strangler_u"("u", "o")) END|
   end
 
   defp json_write_sql(key, value), do: json_element(key, value)
