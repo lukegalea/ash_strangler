@@ -23,9 +23,13 @@ defmodule AshStrangler.Translate do
       comparison of an invertible, single-column lens with a literal (`==`,
       `!=`, `in`) is rewritten to compare the source column with the literal put
       through the lens. `state == :finished` becomes `status == :done` with no
-      `CASE`, so the source's index applies. It is not taken when the put of a
-      literal has no encoding (the forward substitution is then the answer), and
-      never for a lens whose reverse is not exact (`affine`, a cast, `concat`).
+      `CASE`, so the source's index applies. The right side must be a literal
+      value: a comparison whose other side is itself an expression — a
+      reference to another façade attribute, a call, a list holding either —
+      stays whole, and forward substitution translates both sides. It is not
+      taken when the put of a literal has no encoding (the forward substitution
+      is then the answer), and never for a lens whose reverse is not exact
+      (`affine`, a cast, `concat`).
 
   ## What is refused
 
@@ -143,15 +147,26 @@ defmodule AshStrangler.Translate do
     with %Lens{combinator: combinator, writes: [{column, _backward}]} = lens
          when combinator in @exact <- Map.get(lenses, field_name(attribute)),
          true <- Eval.evaluable?(lens),
+         true <- literal?(node.right),
          {:ok, values} <- encode(lens, column, node.right),
          {:ok, source_ref} <- source_ref(column, source) do
       {:halt, %{node | left: source_ref, right: values}}
     else
-      # Not rewritten: the walk goes on to the reference, which forward
-      # substitution replaces.
+      # Not rewritten: the walk goes on to the references, which forward
+      # substitution replaces — on both sides when the right side is itself an
+      # expression.
       _ -> node
     end
   end
+
+  # The backward rewrite compares the source column with a literal value put
+  # through the lens. A right side that is itself an expression — a reference
+  # to another facade attribute, a call, or a list or MapSet holding either —
+  # must not be encoded: a rename's put of a reference returns the reference
+  # unchanged, and rewriting then compares the source column with a facade
+  # reference it resolves by its own name.
+  defp literal?(%MapSet{} = values), do: not Ash.Expr.expr?(MapSet.to_list(values))
+  defp literal?(values), do: not Ash.Expr.expr?(values)
 
   defp encode(lens, column, %MapSet{} = values) do
     with {:ok, encoded} <- encode_all(lens, column, MapSet.to_list(values)),
