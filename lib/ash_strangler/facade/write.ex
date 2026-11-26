@@ -19,6 +19,9 @@ defmodule AshStrangler.Facade.Write do
   3. The source action's input is put through the lens's reverse direction —
      for `sets:` the declared value, for `accepts:` the argument. A lens with
      no reverse refuses with its `because:` text, before the source action.
+     The write is an update of the row step 2 read, so the reverse sees that
+     row as `:prior`: a collapse state whose `set:` omits a column holds the
+     column's stored value, and falls back only where there is no row.
   4. The source update action runs with the source row, that input, and the
      caller's `actor`, `tenant` and `authorize?`. The source's own validation
      and guard errors are returned as the source raised them — a facade is not
@@ -49,7 +52,7 @@ defmodule AshStrangler.Facade.Write do
 
       with :ok <- tenant_required(facade, source, context),
            {:ok, source_row} <- source_row(facade, source, input, context),
-           {:ok, source_input} <- source_input(facade, source, input) do
+           {:ok, source_input} <- source_input(facade, source, input, source_row) do
         source_row
         |> Ash.Changeset.for_update(via(input), source_input, source_opts(context))
         |> Ash.update()
@@ -110,7 +113,7 @@ defmodule AshStrangler.Facade.Write do
     end
   end
 
-  defp source_input(facade, source, input) do
+  defp source_input(facade, source, input, source_row) do
     write =
       facade
       |> Info.writes()
@@ -122,9 +125,24 @@ defmodule AshStrangler.Facade.Write do
 
     action = Ash.Resource.Info.action(source, write.via)
 
-    with {:ok, accepted} <- through_lens(accepted, lenses) do
+    with {:ok, accepted} <- through_lens(accepted, lenses, prior(source_row, facade, lenses)) do
       {:ok, Map.new(accepted, fn {column, value} -> {input_name(action, column), value} end)}
     end
+  end
+
+  # The write is an update of a row the facade has just read as the caller, so
+  # the lens's reverse sees that row as `:prior`: a column a state's `set:`
+  # omits holds its stored value (`strangler_hold`) instead of falling back as
+  # on an insert, and a `touch()` compares against what the caller wrote.
+  defp prior(source_row, facade, lenses) do
+    values = Map.from_struct(source_row)
+
+    attributes =
+      Map.new(Ash.Resource.Info.attributes(facade), fn attribute ->
+        {attribute.name, Eval.forward(Map.fetch!(lenses, attribute.name), values, [])}
+      end)
+
+    %{attributes: attributes, columns: values}
   end
 
   # A column the action takes as an argument (`set_attribute(column, arg(name))`)
@@ -144,9 +162,9 @@ defmodule AshStrangler.Facade.Write do
   # input: the source action's own change makes the change, after its guards
   # have seen the row as it is — a facade that pre-wrote the value would be
   # telling the source what its guard is allowed to see.
-  defp through_lens(entries, lenses) do
+  defp through_lens(entries, lenses, prior) do
     Enum.reduce_while(entries, {:ok, []}, fn {attribute, value}, {:ok, acc} ->
-      case Eval.put(Map.fetch!(lenses, attribute), %{attribute => value}) do
+      case Eval.put(Map.fetch!(lenses, attribute), %{attribute => value}, prior: prior) do
         {:ok, columns_and_values} ->
           {:cont, {:ok, acc ++ columns_and_values}}
 

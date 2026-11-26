@@ -29,6 +29,8 @@ defmodule AshStrangler.FacadeTest do
     CabinetView,
     Credential,
     CredentialCard,
+    Flag,
+    FlagView,
     Gauge,
     GaugeView,
     Meeting,
@@ -549,6 +551,13 @@ defmodule AshStrangler.FacadeTest do
     )
   end
 
+  defp flag!(attrs) do
+    Ash.create!(
+      Ash.Changeset.for_create(Flag, :create, Map.put_new(attrs, :id, Ash.UUID.generate())),
+      authorize?: false
+    )
+  end
+
   # --- as_of -------------------------------------------------------------------
 
   describe "as_of" do
@@ -861,6 +870,41 @@ defmodule AshStrangler.FacadeTest do
         |> Enum.map(& &1.label)
 
       assert Enum.sort(labels) == ["First", "Second"]
+    end
+  end
+
+  describe "a collapse write holds the row it read" do
+    test "a state whose set omits a column keeps the column's stored value" do
+      flag = flag!(%{kept: false, shown: true})
+
+      {:ok, record} =
+        Ash.ActionInput.for_action(FlagView, :set_state, %{id: flag.id, state: :kept},
+          authorize?: false
+        )
+        |> Ash.run_action()
+
+      assert record.state == :kept
+
+      source = Ash.get!(Flag, flag.id, authorize?: false)
+      assert source.kept == true
+      # The `:kept` state's `set:` omits the other column: it holds.
+      assert source.shown == true
+    end
+
+    test "a state whose set names both columns writes both" do
+      flag = flag!(%{kept: true, shown: false})
+
+      {:ok, record} =
+        Ash.ActionInput.for_action(FlagView, :set_state, %{id: flag.id, state: :shown},
+          authorize?: false
+        )
+        |> Ash.run_action()
+
+      assert record.state == :shown
+
+      source = Ash.get!(Flag, flag.id, authorize?: false)
+      assert source.kept == false
+      assert source.shown == true
     end
   end
 end

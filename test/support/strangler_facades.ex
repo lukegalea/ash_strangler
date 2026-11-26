@@ -39,6 +39,8 @@ defmodule AshStrangler.Test.Facades do
     resource AshStrangler.Test.Facades.GaugeView
     resource AshStrangler.Test.Facades.Cabinet
     resource AshStrangler.Test.Facades.CabinetView
+    resource AshStrangler.Test.Facades.Flag
+    resource AshStrangler.Test.Facades.FlagView
   end
 end
 
@@ -684,6 +686,84 @@ defmodule AshStrangler.Test.Facades.CabinetView do
     hide :scope, because: "The row's scope is the source's decision."
 
     write(:set_note, via: :recount, accepts: [:note])
+  end
+end
+
+defmodule AshStrangler.Test.Facades.Flag do
+  @moduledoc """
+  A source with two boolean columns that a facade collapses into one `state`
+  attribute, plus the columns a second write sets directly.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Ets
+
+  ets do
+    private? true
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :kept, :boolean, public?: true, default: false
+    attribute :shown, :boolean, public?: true, default: false
+    attribute :count, :integer, public?: true
+    attribute :label, :string, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :create do
+      accept [:id, :kept, :shown, :count, :label]
+    end
+
+    update :set_flags do
+      accept [:kept, :shown]
+    end
+
+    update :set_details do
+      accept [:count, :label]
+    end
+  end
+end
+
+defmodule AshStrangler.Test.Facades.FlagView do
+  @moduledoc """
+  The facade over the Flag: `state` collapses the two booleans, so writing a
+  state whose `set:` omits a column holds that column's stored value.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+
+    attribute :state, :atom,
+      public?: true,
+      constraints: [one_of: [:fresh, :kept, :shown]]
+
+    attribute :count, :integer, public?: true
+    attribute :label, :string, public?: true
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.Flag
+
+    map :id, from: :id
+
+    collapse :state do
+      hit_policy :first
+      state :kept, when: expr(kept), set: [kept: true]
+      state :shown, when: expr(shown), set: [kept: false, shown: true]
+      state :fresh, when: :otherwise, set: [kept: false, shown: false]
+    end
+
+    map :count, from: :count
+    map :label, from: :label
+
+    write(:set_state, via: :set_flags, accepts: [:state])
   end
 end
 

@@ -70,6 +70,10 @@ Requires Elixir 1.20 or later.
   on reads and on the write's primary-key read, so a source read action whose
   preparation narrows by the actor (or reads the tenant) narrows through a
   facade, and a write cannot update a row the caller cannot read.
+- **A collapse write holds a held column on an update.** The lens's reverse
+  now sees the row the write read as `:prior`, so a state whose `set:` omits a
+  column keeps the column's stored value instead of writing the INSERT
+  fallback over it.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is
