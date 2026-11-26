@@ -49,7 +49,6 @@ defmodule AshStrangler.Facade.ExplainTest do
   end
 
   defp read_one!(facade, id, opts) do
-
     facade
     |> Ash.Query.filter_input(%{id: id})
     |> Ash.read!(opts)
