@@ -12,11 +12,8 @@ defmodule AshStrangler.Derived.Sql do
 
   alias AshStrangler.Derived.{Info, Source}
   alias AshStrangler.KeyKinds
-  alias AshStrangler.Sql.{Printer, View}
+  alias AshStrangler.Sql.{Json, Printer, View}
   alias AshStrangler.Twin
-
-  @int_min -2_147_483_648
-  @int_max 2_147_483_647
 
   @doc "Every statement for `derived`, in dependency order."
   @spec statements(module() | Spark.Dsl.t()) :: [
@@ -199,18 +196,9 @@ defmodule AshStrangler.Derived.Sql do
         Enum.map_join(path, ",", &~s("#{String.replace(&1, ~w(\\ "), fn c -> "\\" <> c end)}")) <>
         "}"
 
-  # CASE, never AND: PostgreSQL does not promise to stop at the first false
-  # operand, and the cast raises for a value that is not a number.
-  defp value(%Source{type: :integer}) do
-    x = ~s("__j"."__x")
-
-    "CASE WHEN jsonb_typeof(#{x}) = 'number' THEN " <>
-      "CASE WHEN (#{x})::numeric = trunc((#{x})::numeric) AND (#{x})::numeric BETWEEN #{@int_min} AND #{@int_max} " <>
-      "THEN ((#{x})::numeric)::integer END END"
-  end
-
-  defp value(%Source{type: :text}),
-    do: ~s[CASE WHEN jsonb_typeof("__j"."__x") = 'string' THEN "__j"."__x" #>> '{}' END]
+  # The element behind the guard of its type (`AshStrangler.Sql.Json`).
+  defp value(%Source{type: :integer}), do: Json.integer(~s("__j"."__x"))
+  defp value(%Source{type: :text}), do: Json.text(~s("__j"."__x"))
 
   defp q(name), do: ~s("#{name}")
 end

@@ -510,6 +510,13 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   pg_catalog` (twins need a schema). `AshStrangler.Migration.render_move/2` moves an installed union
   (extension tables, replaced view and functions, no owned table, no trigger) and refuses a changed
   view column list.
+- A column kept as one key of a jsonb column is a `json_key :col, from: :jsonb_col, key: "objectKey"`
+  (`type: :integer` or `:text`, `kind: {Registry, :kind}` for a one-part packed key, `list?: true`
+  for an array of them), never a hand-written `expr(fragment(...))`. It reads behind the `element`
+  guards. On a `:dual_write` branch an insert through the branch writes the supplied keys, and an
+  update rewrites only the keys whose column changed, keeping every other key. A packed value that
+  is not a key of its kind fails `not a key of this kind`; a NULL list element, and a stored value
+  that is not a JSON object, are refused (`BranchWriteRefused`).
 - A branch shows every row of its twin unless it has a `filter expr(...)` over the twin's columns;
   rows the filter excludes belong to no branch.
 - Host checks read `AshStrangler.Union.Info` (`lens_kinds/2`, `phase/2`), not the
@@ -517,7 +524,8 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
 - Put a union in an estate's `resources` and check E8 holds its phases to the
   carry rule: nothing at `:read_from_new` with a `deferred` or `legacy_only`
   column, or a column only another module maps. Two union columns never map from
-  one legacy column on a `:dual_write` branch. See `documentation/topics/unions.md`.
+  one legacy column on a `:dual_write` branch, except `json_key`s that write
+  different keys of it. See `documentation/topics/unions.md`.
 
 ## Derived rows, tenants and obligations
 

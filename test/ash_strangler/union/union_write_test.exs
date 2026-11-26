@@ -6,9 +6,9 @@ defmodule AshStrangler.UnionWriteTest do
   @moduledoc """
   `:dual_write` writes through a union view where the declared columns do not
   line up one to one with the legacy columns: a declared type that differs from
-  the legacy type, a column read from the legacy column that forms the key, and
-  an insert routed into the legacy table with `insert_through`. DDL runs inside
-  the sandbox transaction.
+  the legacy type, a column read from the legacy column that forms the key, an
+  insert routed into the legacy table with `insert_through`, and columns kept as
+  keys of a jsonb column (`json_key`). DDL runs inside the sandbox transaction.
   """
 
   use AshStrangler.DataCase, async: false
@@ -620,6 +620,160 @@ defmodule AshStrangler.UnionWriteTest do
 
       assert AshStrangler.Migration.render_move("MoveTest", [union]) =~
                "documentation/topics/phases.md"
+    end
+  end
+
+  # --- columns kept as keys of a jsonb column -------------------------------------
+
+  @keys AshStrangler.Test.Library.Keys
+
+  defp member(n), do: AshStrangler.KeyKinds.encode(@keys, :member, [n])
+
+  defp json_install!(opts) do
+    install!(
+      """
+      column :display, :string
+      column :member, :uuid
+      column :member_ids, "uuid[]"
+      column :label, :string
+      column :count, :integer
+      column :shout, :string
+      """,
+      """
+      map :display, from: :name
+      json_key :member, from: :metadata, key: "memberId", kind: {#{inspect(@keys)}, :member}
+      json_key :member_ids, from: :metadata, key: "memberIds", kind: {#{inspect(@keys)}, :member}, list?: true
+      json_key :label, from: :metadata, key: "label", type: :text
+      json_key :count, from: :metadata, key: "count"
+      map :shout, from: expr(name <> "!")
+      """,
+      Keyword.merge(
+        [
+          table: @identity_table <> ", metadata jsonb",
+          attributes: @id_name_attributes <> "attribute :metadata, :map, public?: true",
+          branch: ~S|insert_through because: "the legacy system reads what it writes"|
+        ],
+        opts
+      )
+    )
+  end
+
+  defp metadata!(table), do: List.flatten(q!("SELECT metadata FROM #{table} ORDER BY id"))
+
+  describe "json_key" do
+    test "reads one key of a jsonb column behind the guards: a value, a packed key, a list of them" do
+      {view, table, union} = json_install!(seed: nil)
+
+      q!("""
+      INSERT INTO #{table} (id, name, metadata) VALUES
+        (1, 'a', '{"memberId": 7, "memberIds": [1, 2.5, "x", 3], "label": "ada", "count": 4}'),
+        (2, 'b', '{"memberId": 12.5, "memberIds": 5, "label": 9, "count": 1e10}'),
+        (3, 'c', '{"memberId": "7", "label": null}'),
+        (4, 'd', NULL)
+      """)
+
+      {m7, m1, m3} = {member(7), member(1), member(3)}
+
+      # A fraction or a number past the part's range reads NULL, and is a NULL element in a list;
+      # a list drops what is not a number; anything but an array is the empty list.
+      assert [
+               ["a", ^m7, [^m1, nil, ^m3], "ada", 4],
+               ["b", nil, [], nil, nil],
+               ["c", nil, [], nil, nil],
+               ["d", nil, [], nil, nil]
+             ] =
+               q!(
+                 "SELECT display, member::text, member_ids::text[], label, count FROM #{view} ORDER BY display"
+               )
+
+      # For a host verifier, the column is an expression over the twin's columns.
+      assert AshStrangler.Union.Info.lens_kinds(union, :north)[:member] == :expression
+    end
+
+    test "an insert through the branch writes the supplied keys into the new row's jsonb column" do
+      {view, table, _} = json_install!(seed: nil)
+      {m7, m1, m2} = {member(7), member(1), member(2)}
+
+      assert [["north", "ada", ^m7, [^m1, ^m2], "x", nil]] =
+               q!("""
+               INSERT INTO #{view} (__branch, display, member, member_ids, label)
+               VALUES ('north', 'ada', '#{m7}', ARRAY['#{m1}', '#{m2}']::uuid[], 'x')
+               RETURNING __branch, display, member::text, member_ids::text[], label, count
+               """)
+
+      # The NULL column writes no key.
+      assert [%{"memberId" => 7, "memberIds" => [1, 2], "label" => "x"} = metadata] =
+               metadata!(table)
+
+      refute Map.has_key?(metadata, "count")
+    end
+
+    test "an update sets only the keys whose column changed, and keeps every other key" do
+      {view, table, _} =
+        json_install!(seed: ~S|1, 'ada', '{"memberId": 7, "label": "a", "other": "kept"}'|)
+
+      q!("UPDATE #{view} SET member = '#{member(9)}'")
+      assert [%{"memberId" => 9, "label" => "a", "other" => "kept"}] = metadata!(table)
+
+      # A legacy commit to another key lands between this statement's scan and its trigger.
+      q!("""
+      WITH bump AS (UPDATE #{table} SET metadata = metadata || '{"label": "b"}' RETURNING id)
+      UPDATE #{view} SET member_ids = ARRAY['#{member(1)}']::uuid[] FROM bump
+      """)
+
+      assert [%{"memberId" => 9, "memberIds" => [1], "label" => "b", "other" => "kept"}] =
+               metadata!(table)
+
+      # NULL removes the key.
+      q!("UPDATE #{view} SET label = NULL, member = NULL")
+      assert [%{"memberIds" => [1], "other" => "kept"} = metadata] = metadata!(table)
+      refute Map.has_key?(metadata, "label") or Map.has_key?(metadata, "memberId")
+    end
+
+    test "a value that does not decode, a NULL element and an undeclared expression are refused" do
+      {view, table, _} = json_install!(seed: ~S|1, 'ada', '{"memberId": 7}'|)
+
+      assert_raise Postgrex.Error, ~r/not a key of this kind/, fn ->
+        q!("UPDATE #{view} SET member = gen_random_uuid()")
+      end
+
+      null_element = "column member_ids has a NULL element, which has no legacy value to write"
+
+      input =
+        refused!(fn ->
+          q!("UPDATE #{view} SET member_ids = ARRAY['#{member(1)}', NULL]::uuid[]")
+        end)
+
+      assert %{"operation" => "update", "reason" => ^null_element} = input
+
+      input =
+        refused!(fn ->
+          q!(
+            "INSERT INTO #{view} (__branch, display, member_ids) VALUES ('north', 'bo', ARRAY[NULL]::uuid[])"
+          )
+        end)
+
+      assert %{"operation" => "insert", "reason" => ^null_element} = input
+
+      assert refused!(fn -> q!("UPDATE #{view} SET shout = 'x'") end)["reason"] ==
+               "column shout has no legacy column to write on this branch"
+
+      assert refused!(fn ->
+               q!("INSERT INTO #{view} (__branch, display, shout) VALUES ('north', 'bo', 'x')")
+             end)["reason"] == "column shout has no legacy column to write on this branch"
+
+      assert [%{"memberId" => 7}] = metadata!(table)
+    end
+
+    test "a stored value that is not a JSON object refuses an update of its keys" do
+      {view, table, _} = json_install!(seed: ~S|1, 'ada', '[1]'|)
+
+      assert refused!(fn -> q!("UPDATE #{view} SET member = '#{member(1)}'") end)["reason"] ==
+               "the legacy column metadata is not a JSON object, so member cannot be written into it"
+
+      # A write of another column still lands, and the stored value stays.
+      q!("UPDATE #{view} SET display = 'Ada'")
+      assert [["Ada", [1]]] = q!("SELECT name, metadata FROM #{table}")
     end
   end
 end

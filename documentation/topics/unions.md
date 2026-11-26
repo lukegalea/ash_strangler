@@ -120,6 +120,42 @@ which a write cannot address. It reads the view, so it measures the branches sti
 Tenant inversion needs nothing more: each branch's arm comes from its own `tenant_of` kind, so
 a tenant id of one kind yields only the arms of the branches whose tenant is that kind.
 
+## A column kept in a jsonb column
+
+A legacy table sometimes keeps a value as one key of a jsonb column: the nurse who saw a visit
+in `metadata.nurseId`, the rooms it used in `metadata.roomIds`. `json_key` maps a column to one
+key:
+
+```elixir
+legacy :south do
+  ...
+  json_key :nurse, from: :metadata, key: "nurseId", kind: {Clinic.Keys, :nurse}
+  json_key :rooms, from: :metadata, key: "roomIds", kind: {Clinic.Keys, :room}, list?: true
+  json_key :label, from: :metadata, key: "label", type: :text
+end
+```
+
+It reads behind the guards an `element` source uses (`AshStrangler.Sql.Json`): `type: :integer`
+(the default) takes a JSON number with an integer value in range, `:text` a JSON string, and
+anything else reads NULL, never cast (`12.5`, `1e10`, `"12"`). `kind:` packs the integer as a key
+of a one-part kind, whose width sets the range. With `list?: true` the key holds an array, read in
+order: an element of another JSON type is dropped, a number the guard refuses is a NULL element
+(it still counts), and anything but an array is the empty array.
+
+At `:dual_write` the branch writes the key back:
+
+- an insert through the branch (`insert_through`) puts the supplied keys in the new row's jsonb
+  column, as one object; a NULL column writes no key;
+- an update sets only the keys whose column changed, on the stored object, so every other key
+  stays, a concurrent commit to one included; a NULL removes the key. A stored value that is
+  neither NULL nor a JSON object refuses the update, naming the column.
+
+A packed key decodes to its legacy integer, and a uuid that is not a key of the kind fails with
+`not a key of this kind`. A NULL list element has no legacy value to write, so it is refused. On
+a `:dual_write` branch the compiler holds each key to one `json_key`, and refuses a plain `map`
+of a jsonb column whose keys a `json_key` writes. `lens_kinds/2` reports the column as an
+`:expression`.
+
 ## What is generated
 
 In order: the owned table (`"<view>_owned"` unless `owned` names one), a key
@@ -151,10 +187,11 @@ use the legacy index" below.
 
 Insert lands in the owned branch by default, and the trigger returns the row it
 stored, so `RETURNING` carries the key and every default. In `:dual_write`, an
-update writes the columns the branch renames (`map :x, from: :column`) and
-refuses a changed column that has no legacy column behind it (an expression, a
-constant or an unmapped column), and one read from a legacy column that forms the
-key. Each value is cast to the legacy column's own type. Only a column whose value differs from the
+update writes the columns the branch renames (`map :x, from: :column`) and the keys
+of its `json_key` columns, and refuses a changed column that has no legacy column
+behind it (an expression, a constant or an unmapped column), and one read from a
+legacy column that forms the key. Each value is cast to the legacy column's own
+type. Only a column whose value differs from the
 view row the statement scanned is assigned (`col = CASE WHEN NEW.x IS DISTINCT FROM OLD.x THEN ... ELSE col END`),
 so a legacy commit that lands between the scan and the trigger is kept for every column the statement did not
 change; an extension upsert likewise overwrites only its changed columns. Writing a column back to the value it
@@ -168,7 +205,8 @@ the branch is at `:dual_write` and declares `insert_through`. Naming the branch
 is the host's per-row choice; nothing else changes. The legacy table allocates
 its own key (whatever default its schema carries — the route writes no key
 column), the trigger inserts the legacy row with the branch's plain `map`
-columns and the `set:` constants, upserts `extension` columns into the extension
+columns, its `json_key` columns and the `set:` constants, upserts `extension` columns
+into the extension
 table under the key the new row derives, and returns the view row of that key:
 `RETURNING` carries the key and every default, with `__branch` naming the legacy
 branch. A supplied value for a column the insert cannot write — an expression, a
@@ -205,7 +243,8 @@ legacy table cannot take it as is:
   schema-qualified, so each twin must declare a schema, and `uuid_generate_v5` is qualified with
   `functions_schema` (default `"public"`).
 
-jsonb write-back and writes of derived rows are not part of unions.
+Writes of derived rows are not part of unions. A `json_key` column is written back as one key of
+its jsonb column (see "A column kept in a jsonb column" above).
 
 `AshStrangler.Migration.render_move/2` renders the migration for a union that is already installed:
 extension tables (`IF NOT EXISTS`), `CREATE OR REPLACE VIEW` and `CREATE OR REPLACE FUNCTION`, and

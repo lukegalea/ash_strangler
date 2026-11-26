@@ -252,6 +252,7 @@ defmodule AshStrangler.Estate.Tenancy do
 
   defp describe(%Union.Map{}), do: "a `map`"
   defp describe(%Union.Constant{}), do: "a `constant`"
+  defp describe(%Union.JsonKey{}), do: "a `json_key`"
   defp describe(%Union.Unmapped{}), do: "`unmapped`"
 
   defp problem(module, %{name: name}, noun, column, message),
