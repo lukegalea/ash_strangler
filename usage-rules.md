@@ -559,7 +559,10 @@ the owned table, key indexes, view and `INSTEAD OF` triggers.
   declares no rule about who may see or change anything: adding a `policy`, a
   `field_policy`, `secured_fields`, `extra_grants` or a create/update/destroy
   action does not compile, because the source's own are the only ones there
-  are. See the "Facades" guide.
+  are. The one rule it states is a floor: the facade's domain may not
+  authorize less strictly than the source's domain, because the authorization
+  the facade's domain resolves is what reaches the source. See the "Facades"
+  guide.
 - `sensitive?` is inherited on a facade, never set: a facade attribute is
   sensitive exactly when something its lens reads is sensitive on the source,
   and a difference in either direction fails the compile. Declaring

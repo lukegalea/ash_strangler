@@ -72,6 +72,7 @@ defmodule AshStrangler.Facade do
       AshStrangler.Facade.Verifiers.VerifySensitive,
       AshStrangler.Facade.Verifiers.VerifyWrites,
       AshStrangler.Facade.Verifiers.VerifyEstate,
+      AshStrangler.Facade.Verifiers.VerifyAuthorization,
       AshStrangler.Facade.Verifiers.VerifyObligations
     ]
 end

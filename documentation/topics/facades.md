@@ -12,7 +12,10 @@ rows of one **source** resource. It reads by calling the source's read action
 *as the caller*, and each write runs one named source action *as the caller*.
 It declares no rule about who may see or change anything — the source's
 policies and field policies decide, because every fact keeps one record, on
-the source.
+the source. The one rule it does state is a floor on authorization: the
+facade's domain may not resolve a laxer `authorize` setting than the source's
+domain, because the authorization the facade's domain resolves is what
+reaches the source.
 
 Where a strangled resource moves rows out of a legacy relation, a facade moves
 *words*: the same rows, named the way one consumer already speaks. A task
@@ -153,6 +156,13 @@ The verifiers under `AshStrangler.Facade.Verifiers`:
   `hide ... because:`, or `defer`. An unplaced attribute fails with its name;
   a `hide`/`defer` naming nothing, or a `hide` of an attribute a lens reads,
   fails too (`AshStrangler.Facade.Info.estate/1` reads the same result);
+- the facade's **domain authorizes at least as strictly as its source's**:
+  a facade reads and writes its source with the authorization its own domain
+  resolved, so a facade in a domain that resolves `authorize :when_requested`
+  over a source whose domain resolves `:by_default` is refused — through it,
+  a call that asks for no authorization would reach the source unchecked
+  where a direct call would not. A facade over a facade compares with the
+  source facade's domain;
 - `AshStrangler.Obligations.over/3` findings of severity **error** fail
   compilation, exactly as they do for a strangled mapping.
 
