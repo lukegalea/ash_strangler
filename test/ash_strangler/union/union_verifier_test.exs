@@ -428,4 +428,72 @@ defmodule AshStrangler.UnionVerifierTest do
                )
     end
   end
+
+  # A branch over a twin with jsonb columns (`metadata`, `details`).
+  @visits ~S"""
+    legacy :visits do
+      twin AshStrangler.Test.ClinicDerived.Legacy.Visits
+      phase :dual_write
+      refused_because "visits writes"
+      key :id, strategy: {:uuid_v5, namespace: "6b1e0c1e-7a54-5d8e-9b1a-3f6f1c9d2a10"}
+      map :nurse, from: :lead_nurse
+    end
+  """
+
+  @member ~S|json_key :member, from: :metadata, key: "memberId", kind: {AshStrangler.Test.Library.Keys, :member}|
+
+  defp json_union(mappings, columns \\ "column :member, :uuid") do
+    Enum.join(
+      ["column :nurse, :string", columns, inside(@visits, mappings), "owned :native"],
+      "\n"
+    )
+  end
+
+  describe "json_key" do
+    test "keys of a jsonb column, read and written back, are accepted" do
+      columns = "column :member, :uuid\ncolumn :label, :string"
+
+      mappings =
+        @member <> "\n" <> ~S|json_key :label, from: :metadata, key: "label", type: :text|
+
+      assert :ok = VerifyUnion.verify(probe(json_union(mappings, columns)).spark_dsl_config())
+    end
+
+    test "a json_key over a column the twin lacks, or over one that is not jsonb" do
+      assert rejection(json_union(String.replace(@member, ":metadata", ":ghost"))) =~
+               "json_key reads :ghost, which AshStrangler.Test.ClinicDerived.Legacy.Visits does not have"
+
+      assert rejection(json_union(String.replace(@member, ":metadata", ":clinic_id"))) =~
+               "json_key :member reads :clinic_id, which is not a jsonb column"
+    end
+
+    test "a kind the registry lacks, a kind of two parts, and text packed as a key" do
+      assert rejection(json_union(String.replace(@member, ":member}", ":nope}"))) =~
+               "json_key :member: AshStrangler.Test.Library.Keys declares no kind :nope"
+
+      assert rejection(json_union(String.replace(@member, ":member}", ":copy}"))) =~
+               "json_key :member: kind :copy packs 2 parts, and a json_key holds one"
+
+      assert rejection(json_union(@member <> ", type: :text")) =~
+               "json_key :member: a packed key's part is an integer, so `type: :text` cannot pack it"
+    end
+
+    test "on a :dual_write branch, one writer per key, and none beside a map of the column" do
+      columns = "column :member, :uuid\ncolumn :again, :uuid"
+      twice = @member <> "\n" <> String.replace(@member, "json_key :member", "json_key :again")
+
+      assert rejection(json_union(twice, columns)) =~
+               ~s|columns :member, :again all write key "memberId" of :metadata|
+
+      beside = @member <> "\nmap :raw, from: :metadata"
+
+      assert rejection(json_union(beside, "column :member, :uuid\ncolumn :raw, :string")) =~
+               "column :raw is mapped from :metadata, whose keys json_key :member writes"
+
+      read_only =
+        String.replace(json_union(twice, columns), "phase :dual_write", "phase :read_from_legacy")
+
+      assert :ok = VerifyUnion.verify(probe(read_only).spark_dsl_config())
+    end
+  end
 end
