@@ -57,6 +57,14 @@ Requires Elixir 1.20 or later.
 
 ### Bug fixes
 
+- **A facade comparison of two of its attributes compares their source
+  values.** The backward rewrite was taken whenever the left side was an exact
+  lens, even when the right side was itself an expression: a rename's put
+  returns a reference unchanged, so a facade attribute reached the source
+  filter untranslated and was resolved by name there — wrong rows, a crash on
+  Postgres, or a comparison against a source column the facade hides. It is
+  now taken only when the right side is a literal value; a comparison of two
+  facade attributes goes through forward substitution on both sides.
 - **A facade's generated `:read` carries the read schema's defaults.** It was
   built as a bare struct, so `get?` and other defaulted options were `nil`, and
   code that reads the action (`not action.get?`) raised `ArgumentError`. It is

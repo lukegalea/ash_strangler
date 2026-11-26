@@ -27,6 +27,8 @@ defmodule AshStrangler.FacadeTest do
     AnnotatedItem,
     Credential,
     CredentialCard,
+    Gauge,
+    GaugeView,
     Meeting,
     MeetingLine,
     MeetingMinute,
@@ -276,6 +278,47 @@ defmodule AshStrangler.FacadeTest do
       assert titles == ["First"]
     end
 
+    test "a comparison of two attributes compares their source columns" do
+      equal = gauge!(%{title: "equal", span: 3, load: 3})
+      _unequal = gauge!(%{title: "unequal", span: 3, load: 4})
+
+      ids =
+        GaugeView
+        |> Ash.Query.filter(expr(width == height))
+        |> read!(authorize?: false)
+        |> Enum.map(& &1.id)
+
+      assert ids == [equal.id]
+    end
+
+    test "a facade attribute named like a hidden source column compares through its own lens" do
+      # `code` is a facade attribute mapped from `alias`; the source column
+      # `code` is hidden. The row whose hidden column equals its title must
+      # not come back.
+      trap = gauge!(%{title: "same", alias: nil, code: "same", span: 1, load: 1})
+      hit = gauge!(%{title: "echo", alias: "echo", code: "other", span: 1, load: 1})
+
+      ids =
+        GaugeView
+        |> Ash.Query.filter(expr(title == code))
+        |> read!(authorize?: false)
+        |> Enum.map(& &1.id)
+
+      refute trap.id in ids
+      assert hit.id in ids
+    end
+
+    test "a comparison of two attributes translates both sides onto the source" do
+      query = Ash.Query.new(GaugeView) |> Ash.Query.filter(expr(width == height))
+      lenses = AshStrangler.Facade.Info.lenses(GaugeView)
+
+      {:ok, translated} = AshStrangler.Translate.filter(lenses, query.filter, Gauge)
+
+      refs = Ash.Filter.list_refs(translated)
+      assert refs != []
+      refute Enum.any?(refs, &(&1.resource == GaugeView))
+    end
+
     test "a relationship path or exists is refused, not ignored", %{org: org, actor: actor} do
       # Refused at the facade query: the path names nothing, so the filter is
       # never built — and a filter that cannot be built is never silently
@@ -420,6 +463,13 @@ defmodule AshStrangler.FacadeTest do
         holder: holder,
         number: number
       }),
+      authorize?: false
+    )
+  end
+
+  defp gauge!(attrs) do
+    Ash.create!(
+      Ash.Changeset.for_create(Gauge, :create, Map.put_new(attrs, :id, Ash.UUID.generate())),
       authorize?: false
     )
   end

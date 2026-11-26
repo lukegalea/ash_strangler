@@ -35,6 +35,8 @@ defmodule AshStrangler.Test.Facades do
     resource AshStrangler.Test.Facades.TaggedItem
     resource AshStrangler.Test.Facades.Ticket
     resource AshStrangler.Test.Facades.TicketView
+    resource AshStrangler.Test.Facades.Gauge
+    resource AshStrangler.Test.Facades.GaugeView
   end
 end
 
@@ -537,6 +539,69 @@ defmodule AshStrangler.Test.Facades.TicketView do
     decode :phase, from: :state, values: %{open: :new, closed: :done}
 
     write(:close, via: :close, sets: [phase: :done])
+  end
+end
+
+defmodule AshStrangler.Test.Facades.Gauge do
+  @moduledoc """
+  A source for the comparison probes: two measured columns a facade renames,
+  a `code` column the facade hides, and an `alias` column.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Ets
+
+  ets do
+    private? true
+  end
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :title, :string, public?: true
+    attribute :alias, :string, public?: true
+    attribute :code, :string, public?: true
+    attribute :span, :integer, public?: true
+    attribute :load, :integer, public?: true
+  end
+
+  actions do
+    defaults [:read]
+
+    create :create do
+      accept [:id, :title, :alias, :code, :span, :load]
+    end
+  end
+end
+
+defmodule AshStrangler.Test.Facades.GaugeView do
+  @moduledoc """
+  The facade over the Gauge: `width` and `height` rename two different source
+  columns, and `code` is a facade attribute mapped from `alias`, named like
+  the source column the facade hides.
+  """
+  use Ash.Resource,
+    domain: AshStrangler.Test.Facades,
+    data_layer: Ash.DataLayer.Simple,
+    extensions: [AshStrangler.Facade]
+
+  attributes do
+    attribute :id, :uuid, primary_key?: true, allow_nil?: false, public?: true
+    attribute :title, :string, public?: true
+    attribute :width, :integer, public?: true
+    attribute :height, :integer, public?: true
+    attribute :code, :string, public?: true
+  end
+
+  facade do
+    source AshStrangler.Test.Facades.Gauge
+
+    map :id, from: :id
+    map :title, from: :title
+    map :width, from: :span
+    map :height, from: :load
+    map :code, from: :alias
+
+    hide :code, because: "The gauge's code is not part of this vocabulary."
   end
 end
 
