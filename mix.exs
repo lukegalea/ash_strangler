@@ -124,6 +124,11 @@ defmodule AshStrangler.MixProject do
       # Required by Spark.Formatter, which formats the DSL blocks.
       {:sourceror, "~> 1.7", only: [:dev, :test]},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      # Dev-and-test-only: the laws judge (`mix ash_agent.laws`), run by
+      # scripts/iron-laws.sh in CI. runtime: false keeps it out of consumers'
+      # dependency graphs.
+      {:ash_agent_tools,
+       github: "lukegalea/ash_agent_tools", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       # The Ash CI workflow runs `mix igniter.upgrade` on dependabot pull

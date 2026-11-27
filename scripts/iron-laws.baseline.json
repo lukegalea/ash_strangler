@@ -1,0 +1,68 @@
+[
+  {
+    "law": "05",
+    "file": "lib/ash_strangler/dsl/combinators.ex",
+    "text": "For SQL with no combinator:    from: expr(fragment(#{inspect(value)}))",
+    "reason": "Reviewed 2026-11-26, false positive: the text is a generated-code example or an error message that mentions fragment(...), not an interpolated Ecto query."
+  },
+  {
+    "law": "05",
+    "file": "lib/ash_strangler/eval.ex",
+    "text": "do: unsupported!(\"fragment(#{inspect(template)})\")",
+    "reason": "Reviewed 2026-11-26, false positive: the text is a generated-code example or an error message that mentions fragment(...), not an interpolated Ecto query."
+  },
+  {
+    "law": "05",
+    "file": "lib/ash_strangler/sql/printer.ex",
+    "text": "from: expr(fragment(\"#{name}(?)\", some_column))",
+    "reason": "Reviewed 2026-11-26, false positive: the text is a generated-code example or an error message that mentions fragment(...), not an interpolated Ecto query."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/dsl/combinators.ex",
+    "text": "For a plain column:            from: #{inspect(String.to_atom(value))}",
+    "reason": "Reviewed 2026-11-26: the call sits in an error message built while the host's own DSL compiles, from the host's literal."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/listener.ex",
+    "text": "defp operation(op) when op in ~w(insert update delete), do: {:ok, String.to_atom(op)}",
+    "reason": "Reviewed 2026-11-26: the guard allows only the three verbs insert, update and delete before the atom is made."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/twin/generator.ex",
+    "text": "defp atomize_name(%{name: name} = column), do: %{column | name: String.to_atom(name)}",
+    "reason": "Reviewed 2026-11-26: codegen time only, over a bounded read of one database catalog. Introspection hands names over as strings so that mix ash_strangler.check never makes an atom."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/twin/generator.ex",
+    "text": "do: \"source: #{inspect(String.to_atom(column.column))}\"",
+    "reason": "Reviewed 2026-11-26: codegen time only, over a bounded read of one database catalog. Introspection hands names over as strings so that mix ash_strangler.check never makes an atom."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/twin/generator.ex",
+    "text": "do: %{name: String.to_atom(name), keys: keys}",
+    "reason": "Reviewed 2026-11-26: codegen time only, over a bounded read of one database catalog. Introspection hands names over as strings so that mix ash_strangler.check never makes an atom."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/twin/generator.ex",
+    "text": "name -> String.to_atom(name)",
+    "reason": "Reviewed 2026-11-26: codegen time only, over a bounded read of one database catalog. Introspection hands names over as strings so that mix ash_strangler.check never makes an atom."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/twin/generator.ex",
+    "text": "stripped -> String.to_atom(stripped)",
+    "reason": "Reviewed 2026-11-26: codegen time only, over a bounded read of one database catalog. Introspection hands names over as strings so that mix ash_strangler.check never makes an atom."
+  },
+  {
+    "law": "10",
+    "file": "lib/ash_strangler/verifiers/verify_not_redundant.ex",
+    "text": "entry.__struct__ |> Module.split() |> List.last() |> Macro.underscore() |> String.to_atom()",
+    "reason": "Reviewed 2026-11-26: the name comes from the module name of a DSL entry struct at compile time, never from runtime input."
+  }
+]
